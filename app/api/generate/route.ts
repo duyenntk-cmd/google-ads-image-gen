@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
 import { AD_SIZES } from "@/lib/adSizes";
 import JSZip from "jszip";
+import path from "path";
+import fs from "fs";
 
 export const maxDuration = 60;
 
@@ -18,26 +20,18 @@ const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
   office: { primary_color:"#1E3A5F", secondary_color:"#2563EB", accent_color:"#3B82F6", headline:"Work Smarter with Your Team",subheadline:"Documents, Sheets & More",   cta_text:"Start Free Trial", background_style:"light" },
 };
 
-// Cache font
+// Load fonts from bundled files
 let fontBase64Cache: string | null = null;
 let fontBoldBase64Cache: string | null = null;
 
-async function fetchFontBase64(bold = false): Promise<string> {
+function getFontBase64(bold = false): string {
   if (bold && fontBoldBase64Cache) return fontBoldBase64Cache;
   if (!bold && fontBase64Cache) return fontBase64Cache;
 
-  const weight = bold ? 700 : 400;
-  // Use Inter font from Google Fonts API
-  const cssUrl = `https://fonts.googleapis.com/css2?family=Inter:wght@${weight}&display=swap`;
-  const css = await fetch(cssUrl, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text());
-  
-  // Extract woff2 URL from CSS
-  const match = css.match(/url\((https:\/\/fonts\.gstatic\.com[^)]+)\)/);
-  if (!match) throw new Error("Could not find font URL");
-  
-  const fontBuffer = await fetch(match[1]).then(r => r.arrayBuffer());
-  const b64 = Buffer.from(fontBuffer).toString("base64");
-  
+  const filename = bold ? "inter-bold.woff2" : "inter-regular.woff2";
+  const fontPath = path.join(process.cwd(), "public", "fonts", filename);
+  const b64 = fs.readFileSync(fontPath).toString("base64");
+
   if (bold) fontBoldBase64Cache = b64;
   else fontBase64Cache = b64;
   return b64;
@@ -167,11 +161,9 @@ export async function POST(req: NextRequest) {
     const niche = rawBrief.niche || "tool";
     const brief: Brief = { ...NICHE_DEFAULTS[niche] || NICHE_DEFAULTS.tool, ...rawBrief };
 
-    // Fetch fonts once
-    const [fontB64, fontBoldB64] = await Promise.all([
-      fetchFontBase64(false),
-      fetchFontBase64(true),
-    ]);
+    // Load fonts from bundled files
+    const fontB64 = getFontBase64(false);
+    const fontBoldB64 = getFontBase64(true);
 
     const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
     const bgDataUrl = frames[bestIdx] ? `data:image/jpeg;base64,${frames[bestIdx].base64}` : null;
