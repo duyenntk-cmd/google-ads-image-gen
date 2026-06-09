@@ -49,6 +49,15 @@ function lighten(hex: string, f = 1.3): string {
   return "#" + rgb.map(c => Math.min(255, Math.round(c * f)).toString(16).padStart(2,"0")).join("");
 }
 
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 function wrapText(text: string, charsPerLine: number, maxLines: number): string[] {
   const words = text.split(" ");
   const lines: string[] = [];
@@ -68,10 +77,10 @@ function buildSVG(w: number, h: number, brief: Brief, bgDataUrl: string | null, 
   const secondary = brief.secondary_color || "#7B2FBE";
   const accent = brief.accent_color || "#FF6B35";
   const accentLight = lighten(accent);
-  const headline = (brief.headline || "Your App").slice(0, 52);
-  const sub = (brief.subheadline || "").slice(0, 60);
-  const cta = brief.cta_text || "Try Free";
-  const appName = brief.app_name || "";
+  const headline = escapeXml((brief.headline || "Your App").slice(0, 52));
+  const sub = escapeXml((brief.subheadline || "").slice(0, 60));
+  const cta = escapeXml(brief.cta_text || "Try Free");
+  const appName = escapeXml(brief.app_name || "");
   const showBadges = !!(brief.app_store_url || brief.play_store_url);
 
   const pad = Math.max(8, Math.round(Math.min(w, h) * 0.05));
