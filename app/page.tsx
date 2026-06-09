@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback } from "react";
 import { extractFramesFromVideo, fileToBase64, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
+import { generateAllBanners } from "@/lib/canvasGen";
 
 interface Brief {
   app_name: string; headline: string; subheadline: string; cta_text: string;
@@ -60,12 +61,30 @@ export default function Home() {
   const handleGenerate = async () => {
     setStep("generating"); setError("");
     try {
-      let iconBase64 = "";
-      if (iconFile) iconBase64 = await fileToBase64(iconFile);
-      const res = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ brief, frames, iconBase64 }) });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      setPreviews(data.previews); setZipBase64(data.zipBase64); setStep("preview");
+      const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
+      const bgDataUrl = frames[bestIdx]?.dataUrl || null;
+
+      // Generate all banners client-side using Canvas
+      const generated = await generateAllBanners(brief, bgDataUrl);
+      setPreviews(generated);
+
+      // Build zip client-side
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      const top5 = zip.folder("top5")!;
+      const all = zip.folder("all_sizes")!;
+      for (const b of generated) {
+        const base64 = b.dataUrl.split(",")[1];
+        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        if (b.isTop5) top5.file(`${b.key}.png`, bytes);
+        all.file(`${b.key}.png`, bytes);
+      }
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const reader = new FileReader();
+      reader.onload = () => setZipBase64((reader.result as string).split(",")[1]);
+      reader.readAsDataURL(blob);
+
+      setStep("preview");
     } catch(e) { setError(String(e)); setStep("brief"); }
   };
 
