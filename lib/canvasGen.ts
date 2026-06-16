@@ -37,18 +37,7 @@ function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
 }
 
 async function ensureFontsLoaded(): Promise<string> {
-  // Try loading Inter via FontFace API
-  try {
-    const regular = new FontFace("InterAds", "url(https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZthiJ-Ek-_EeA.woff2)", { weight: "400" });
-    const bold    = new FontFace("InterAds", "url(https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuFuYAZthiJ-Ek-_EeA.woff2)", { weight: "700" });
-    await Promise.all([regular.load(), bold.load()]);
-    document.fonts.add(regular);
-    document.fonts.add(bold);
-    return "InterAds";
-  } catch {
-    // Fallback: use system font
-    return "Arial";
-  }
+  return "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif";
 }
 
 async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement | null, fontFamily: string): Promise<string> {
