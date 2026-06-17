@@ -189,55 +189,89 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
     ctx.fillText(cta, ctaX + ctaW / 2, h / 2);
     ctx.textAlign = "left";
   } else {
-    if (!isTiny && appName) {
+    // Calculate content height to stack elements without overlap
+    const maxTW = w - pad * 2;
+    ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
+    const words = headline.split(" ");
+    let line = "", hlLines: string[] = [];
+    for (const word of words) {
+      const test = line ? line + " " + word : word;
+      if (ctx.measureText(test).width > maxTW && line) { hlLines.push(line); line = word; } else line = test;
+    }
+    if (line) hlLines.push(line);
+    const maxLines = isTall ? 3 : 2;
+    hlLines = hlLines.slice(0, maxLines);
+
+    const showSub = !isTiny && sub && h > 150;
+    const showBadge = (brief.app_store_url || brief.play_store_url) && h > 200 && !isTiny;
+    const showAppName = !isTiny && !!appName;
+
+    // Measure total content block height
+    const hlBlockH = hlLines.length * hlSize * 1.3;
+    const subBlockH = showSub ? subSize * 1.5 + 8 : 0;
+    const badgeBlockH = showBadge ? 28 : 0;
+    const ctaBlockH = ctaH + 8;
+    const gap = Math.max(6, h * 0.02);
+    const totalH = hlBlockH + (showSub ? gap + subBlockH : 0) + (showBadge ? gap + badgeBlockH : 0) + gap + ctaBlockH;
+
+    // Start Y: center the block vertically, leaving room for app name pill at top
+    const topReserve = showAppName ? pad + nameSize * 1.6 + gap : pad;
+    const startY = Math.max(topReserve, (h - totalH) / 2);
+
+    // Draw app name pill
+    if (showAppName) {
       drawAppNamePill(pad, pad + nameSize * 0.8);
     }
-    const hlY = isTall ? h * 0.56 : h * 0.54;
+
+    // Draw headline
     ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
     ctx.letterSpacing = "0.5px";
     ctx.fillStyle = "white"; setShadow();
-    const maxTW = w - pad * 2;
-    const words = headline.split(" ");
-    let line = "", lines: string[] = [];
-    for (const word of words) {
-      const test = line ? line + " " + word : word;
-      if (ctx.measureText(test).width > maxTW && line) { lines.push(line); line = word; } else line = test;
-    }
-    if (line) lines.push(line);
-    lines.slice(0, isTall ? 3 : 2).forEach((l, i) => ctx.fillText(l, pad, hlY + i * hlSize * 1.25));
+    hlLines.forEach((l, i) => ctx.fillText(l, pad, startY + hlSize * 0.5 + i * hlSize * 1.3));
     ctx.letterSpacing = "0px";
 
-    if (!isTiny && sub && h > 150) {
-      const subY = isTall ? h * 0.72 : h * 0.73;
-      // Visual separator line before subheadline
-      const lineY = subY - subSize * 1.2;
+    let cursorY = startY + hlBlockH;
+
+    // Draw subheadline
+    if (showSub) {
+      cursorY += gap;
+      const lineY = cursorY + subSize * 0.3;
       ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(pad, lineY); ctx.lineTo(pad + Math.min(40, w * 0.15), lineY); ctx.stroke();
+      cursorY += subSize * 0.8;
       ctx.font = `400 ${subSize}px "${fontFamily}", Arial, sans-serif`;
       ctx.fillStyle = "#D4D4D8"; setShadow();
-      ctx.fillText(sub, pad, subY);
+      // Truncate subheadline to fit width
+      let subText = sub;
+      while (ctx.measureText(subText).width > maxTW && subText.length > 0) subText = subText.slice(0, -1);
+      ctx.fillText(subText, pad, cursorY);
+      cursorY += subSize * 0.7;
     }
     clrShadow();
 
-    if ((brief.app_store_url || brief.play_store_url) && h > 200 && !isTiny) {
-      const badgeY = isTall ? h * 0.80 : h * 0.82;
+    // Draw store badges
+    if (showBadge) {
+      cursorY += gap;
       let bx = pad;
       const drawBadge = (l1: string, l2: string) => {
         ctx.fillStyle = "rgba(0,0,0,0.75)";
-        drawRoundRect(ctx, bx, badgeY, 100, 22, 4); ctx.fill();
+        drawRoundRect(ctx, bx, cursorY, 100, 22, 4); ctx.fill();
         ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.lineWidth = 1;
-        drawRoundRect(ctx, bx, badgeY, 100, 22, 4); ctx.stroke();
+        drawRoundRect(ctx, bx, cursorY, 100, 22, 4); ctx.stroke();
         ctx.font = `400 7px "${fontFamily}", Arial`; ctx.fillStyle = "#aaa"; ctx.textAlign = "center";
-        ctx.fillText(l1, bx + 50, badgeY + 8);
+        ctx.fillText(l1, bx + 50, cursorY + 8);
         ctx.font = `700 9px "${fontFamily}", Arial`; ctx.fillStyle = "white";
-        ctx.fillText(l2, bx + 50, badgeY + 17);
+        ctx.fillText(l2, bx + 50, cursorY + 17);
         ctx.textAlign = "left"; bx += 108;
       };
       if (brief.app_store_url) drawBadge("Download on the", "App Store");
       if (brief.play_store_url) drawBadge("GET IT ON", "Google Play");
+      cursorY += 22;
     }
 
-    const ctaCy = isTall ? h * 0.90 : h * 0.91;
+    // Draw CTA button
+    cursorY += gap;
+    const ctaCy = Math.min(cursorY + ctaH / 2, h - pad - ctaH / 2);
     drawCtaButton(w / 2 - ctaW / 2, ctaCy, ctaW, ctaH, ctaR);
     ctx.font = `700 ${ctaSize}px "${fontFamily}", Arial, sans-serif`;
     ctx.fillStyle = "white"; ctx.textAlign = "center";
