@@ -66,7 +66,8 @@ export default function Home() {
       const bgDataUrl = frames[bestIdx]?.dataUrl || null;
 
       // Generate all banners client-side using Canvas
-      const generated = await generateAllBanners(brief, bgDataUrl);
+      const allFrameDataUrls = frames.map(f => f.dataUrl);
+      const generated = await generateAllBanners(brief, bgDataUrl, allFrameDataUrls);
       setPreviews(generated);
 
       // Build zip client-side

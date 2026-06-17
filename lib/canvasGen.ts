@@ -57,6 +57,21 @@ async function ensureFontsLoaded(): Promise<string> {
   return fontName;
 }
 
+// Variant tweaks: shift colors slightly for visual variety
+function variantBrief(brief: Brief, variantIndex: number): Brief {
+  if (variantIndex === 0) return brief;
+  const shifts = [
+    {},
+    { primary_color: brief.secondary_color, secondary_color: brief.primary_color },
+    { primary_color: brief.accent_color, secondary_color: brief.primary_color, accent_color: brief.secondary_color },
+    { primary_color: "#0F0F1A", secondary_color: brief.primary_color },
+    { primary_color: brief.primary_color, secondary_color: brief.accent_color, accent_color: brief.secondary_color },
+    { primary_color: "#1A0A2E", secondary_color: brief.secondary_color },
+    { primary_color: brief.secondary_color, secondary_color: brief.accent_color, accent_color: brief.primary_color },
+  ];
+  return { ...brief, ...(shifts[variantIndex % shifts.length] || {}) };
+}
+
 async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement | null, fontFamily: string): Promise<string> {
   const { width: w, height: h } = size;
   const canvas = document.createElement("canvas");
@@ -288,18 +303,33 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
   return canvas.toDataURL("image/png");
 }
 
-export async function generateAllBanners(brief: Brief, bgDataUrl: string | null): Promise<GeneratedBanner[]> {
-  // Load font first
+export async function generateAllBanners(brief: Brief, bgDataUrl: string | null, allFrameDataUrls?: string[]): Promise<GeneratedBanner[]> {
   const fontFamily = await ensureFontsLoaded();
 
-  let bgImg: HTMLImageElement | null = null;
-  if (bgDataUrl) {
-    try { bgImg = await loadImage(bgDataUrl); } catch { /* ignore */ }
+  // Load all frame images for variety
+  const frameImgs: (HTMLImageElement | null)[] = [];
+  if (allFrameDataUrls && allFrameDataUrls.length > 0) {
+    for (const url of allFrameDataUrls) {
+      try { frameImgs.push(await loadImage(url)); } catch { frameImgs.push(null); }
+    }
+  } else if (bgDataUrl) {
+    try { frameImgs.push(await loadImage(bgDataUrl)); } catch { frameImgs.push(null); }
   }
 
   const results: GeneratedBanner[] = [];
+  // Track variant index per group
+  const groupCount: Record<string, number> = {};
+
   for (const size of AD_SIZES) {
-    const dataUrl = await renderBanner(size, brief, bgImg, fontFamily);
+    const g = size.group;
+    const vi = groupCount[g] ?? 0;
+    groupCount[g] = vi + 1;
+
+    // Pick a different frame for each variant
+    const frameImg = frameImgs.length > 0 ? (frameImgs[vi % frameImgs.length] ?? frameImgs[0]) : null;
+    const vBrief = variantBrief(brief, vi);
+
+    const dataUrl = await renderBanner(size, vBrief, frameImg, fontFamily);
     results.push({ key: size.key, width: size.width, height: size.height, label: size.label, isTop5: size.isTop5, dataUrl });
   }
   return results;
