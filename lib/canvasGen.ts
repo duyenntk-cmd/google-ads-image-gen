@@ -55,7 +55,7 @@ async function ensureFontsLoaded(): Promise<string> {
     // fallback to system fonts
   }
   return fontName;
-
+}
 
 async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement | null, fontFamily: string): Promise<string> {
   const { width: w, height: h } = size;
