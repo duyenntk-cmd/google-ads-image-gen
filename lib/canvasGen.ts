@@ -37,6 +37,25 @@ function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
 }
 
 async function ensureFontsLoaded(): Promise<string> {
+  const fontName = "Inter";
+  try {
+    const fontDefs = [
+      { weight: "400", url: "https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hiJ-Ek-_EeA.woff2" },
+      { weight: "700", url: "https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuFuYAZ9hiJ-Ek-_EeA.woff2" },
+    ];
+    await Promise.all(
+      fontDefs.map(async ({ weight, url }) => {
+        const font = new FontFace(fontName, `url(${url}) format('woff2')`, { weight, style: "normal" });
+        const loaded = await font.load();
+        document.fonts.add(loaded);
+      })
+    );
+    await document.fonts.ready;
+  } catch {
+    // fallback to system fonts
+  }
+  return fontName;
+}async function ensureFontsLoaded(): Promise<string> {
   return "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif";
 }
 
