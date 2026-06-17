@@ -78,227 +78,204 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
 
-  const primary    = brief.primary_color    || "#1A1A2E";
-  const secondary  = brief.secondary_color  || "#7B2FBE";
-  const accent     = brief.accent_color     || "#FF6B35";
-  const headline   = (brief.headline        || "Your App").slice(0, 52);
-  const sub        = (brief.subheadline     || "").slice(0, 60);
-  const cta        = brief.cta_text         || "Try Free";
-  const appName    = brief.app_name         || "";
-  const isWide     = w > h * 3;
-  const isTall     = !isWide && h > w * 1.5;
-  const isTiny     = h <= 60;
-  const pad        = Math.max(8, Math.round(Math.min(w, h) * 0.05));
+  const primary  = brief.primary_color  || "#0A0A14";
+  const accent   = brief.accent_color   || "#FF6B35";
+  const headline = (brief.headline      || "Your App").slice(0, 52);
+  const cta      = brief.cta_text       || "Try Free";
+  const appName  = brief.app_name       || "";
+  const isWide   = w > h * 2.5;
+  const isTiny   = h <= 90;
+  const pad      = Math.max(12, Math.round(Math.min(w, h) * 0.05));
 
-  // Gradient BG
-  const grad = ctx.createLinearGradient(0, 0, isWide ? w : 0, isWide ? 0 : h);
-  grad.addColorStop(0, primary);
-  grad.addColorStop(1, secondary);
-  ctx.fillStyle = grad;
+  // === LAYER 1: Dark fallback bg ===
+  ctx.fillStyle = primary;
   ctx.fillRect(0, 0, w, h);
 
-  // BG image
+  // === LAYER 2: Video frame full-bleed ===
   if (bgImg) {
     const scale = Math.max(w / bgImg.width, h / bgImg.height);
     const sw = bgImg.width * scale, sh = bgImg.height * scale;
-    ctx.globalAlpha = 0.42;
+    ctx.globalAlpha = 1;
     ctx.drawImage(bgImg, (w - sw) / 2, (h - sh) / 2, sw, sh);
-    ctx.globalAlpha = 1;
   }
 
-  // Decorative circles (depth effect)
+  // === LAYER 3: Gradient scrim (bottom for portrait/square, right side for wide) ===
   if (!isTiny) {
-    const circles = [
-      { x: w * 0.85, y: h * 0.15, r: Math.min(w, h) * 0.45, color: accent, alpha: 0.10 },
-      { x: w * 0.1,  y: h * 0.75, r: Math.min(w, h) * 0.35, color: secondary, alpha: 0.12 },
-      { x: w * 0.55, y: h * 0.5,  r: Math.min(w, h) * 0.25, color: primary, alpha: 0.08 },
-    ];
-    for (const c of circles) {
-      ctx.globalAlpha = c.alpha;
-      ctx.fillStyle = c.color;
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-      ctx.fill();
+    if (isWide) {
+      // Wide: scrim on right half
+      const scrim = ctx.createLinearGradient(w * 0.35, 0, w, 0);
+      scrim.addColorStop(0, "rgba(0,0,0,0)");
+      scrim.addColorStop(0.4, "rgba(0,0,0,0.65)");
+      scrim.addColorStop(1, "rgba(0,0,0,0.88)");
+      ctx.fillStyle = scrim;
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      // Portrait/Square: scrim on bottom 55%
+      const scrim = ctx.createLinearGradient(0, h * 0.3, 0, h);
+      scrim.addColorStop(0, "rgba(0,0,0,0)");
+      scrim.addColorStop(0.35, "rgba(0,0,0,0.55)");
+      scrim.addColorStop(1, "rgba(0,0,0,0.92)");
+      ctx.fillStyle = scrim;
+      ctx.fillRect(0, 0, w, h);
     }
-    ctx.globalAlpha = 1;
+  } else {
+    // Tiny banner: full dark overlay
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, w, h);
   }
 
-  // Overlay
-  const ov = ctx.createLinearGradient(0, 0, 0, h);
-  ov.addColorStop(0, "rgba(0,0,0,0)");
-  ov.addColorStop(0.45, primary + "99");
-  ov.addColorStop(1, primary + "f0");
-  ctx.fillStyle = ov;
-  ctx.fillRect(0, 0, w, h);
-
-  const setShadow = () => { ctx.shadowColor = "rgba(0,0,0,0.95)"; ctx.shadowBlur = 8; ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 2; };
   const clrShadow = () => { ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
 
-  const hlSize   = isWide ? Math.max(9, Math.round(h / 3.2))    : isTall ? Math.max(13, Math.round(w * 0.095)) : Math.max(10, Math.round(h * 0.105));
-  const subSize  = Math.max(8,  Math.round(hlSize * 0.65));
-  const nameSize = Math.max(9,  Math.round(hlSize * 0.7));
-  const ctaSize  = Math.max(9,  Math.min(18, Math.round(hlSize * 0.85)));
-  const ctaW     = Math.min(Math.round(w * (isWide ? 0.18 : 0.65)), 180);
-  const ctaH     = Math.max(22, Math.min(38, Math.round(h * (isTall ? 0.07 : 0.14))));
-  const ctaR     = ctaH / 2.5;
+  // === TEXT SIZES ===
+  const hlSize  = isWide ? Math.max(10, Math.round(h * 0.28)) : isTiny ? Math.max(10, Math.round(h * 0.35)) : Math.max(18, Math.round(w * 0.08));
+  const subSize = Math.max(10, Math.round(hlSize * 0.55));
+  const nameSize = Math.max(9, Math.round(hlSize * 0.52));
+  const ctaSize = Math.max(10, Math.min(22, Math.round(hlSize * 0.7)));
+  const ctaH    = Math.max(28, Math.min(52, Math.round(hlSize * 1.1)));
+  const ctaW    = isWide ? Math.min(200, Math.round(w * 0.2)) : Math.min(Math.round(w * 0.7), 280);
+  const ctaR    = ctaH / 2;
 
   ctx.textBaseline = "middle";
 
-  // Helper: draw CTA button with gradient + glassmorphism
-  const drawCtaButton = (cx: number, cy: number, bw: number, bh: number, br: number) => {
-    // Gradient fill
-    const ctaGrad = ctx.createLinearGradient(cx, cy - bh / 2, cx + bw, cy + bh / 2);
-    ctaGrad.addColorStop(0, accent);
-    // Lighten accent by ~30%
-    const accentLighter = accent + "cc";
-    ctaGrad.addColorStop(1, accentLighter);
-    ctx.fillStyle = ctaGrad;
-    drawRoundRect(ctx, cx, cy - bh / 2, bw, bh, br); ctx.fill();
-    // White border (20% opacity)
-    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+  // === DRAW CTA BUTTON ===
+  const drawCta = (cx: number, cy: number) => {
+    // Pill button with accent color
+    ctx.fillStyle = accent;
+    drawRoundRect(ctx, cx - ctaW / 2, cy - ctaH / 2, ctaW, ctaH, ctaR);
+    ctx.fill();
+    // White shimmer top edge
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 1.5;
-    drawRoundRect(ctx, cx, cy - bh / 2, bw, bh, br); ctx.stroke();
-    // Inner glow shadow
-    ctx.shadowColor = accent + "88";
-    ctx.shadowBlur = 10;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 4;
-    drawRoundRect(ctx, cx, cy - bh / 2, bw, bh, br); ctx.fill();
-    clrShadow();
+    drawRoundRect(ctx, cx - ctaW / 2, cy - ctaH / 2, ctaW, ctaH, ctaR);
+    ctx.stroke();
+    // CTA text
+    ctx.font = `700 ${ctaSize}px "${fontFamily}", Arial, sans-serif`;
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 4;
+    ctx.fillText(cta, cx, cy);
+    ctx.textAlign = "left"; clrShadow();
   };
 
-  // Helper: draw app name pill
-  const drawAppNamePill = (x: number, y: number) => {
-    ctx.font = `700 ${nameSize}px "${fontFamily}", Arial, sans-serif`;
+  // === DRAW APP NAME TAG ===
+  const drawAppTag = (x: number, y: number) => {
+    ctx.font = `600 ${nameSize}px "${fontFamily}", Arial, sans-serif`;
     const tw = ctx.measureText(appName).width;
-    const pillPad = nameSize * 0.5;
-    const pillW = tw + pillPad * 2;
-    const pillH = nameSize * 1.6;
-    const pillR = pillH / 2;
-    ctx.fillStyle = "rgba(255,255,255,0.10)";
-    drawRoundRect(ctx, x, y - pillH / 2, pillW, pillH, pillR); ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1;
-    drawRoundRect(ctx, x, y - pillH / 2, pillW, pillH, pillR); ctx.stroke();
-    ctx.fillStyle = "white"; setShadow();
-    ctx.fillText(appName, x + pillPad, y);
+    const ph = nameSize * 1.7, pw = tw + nameSize, pr = ph / 2;
+    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1;
+    drawRoundRect(ctx, x, y - ph / 2, pw, ph, pr);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "white";
+    ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 4;
+    ctx.fillText(appName, x + nameSize * 0.5, y);
     clrShadow();
-    return pillW;
+    return pw;
+  };
+
+  // === WRAP HEADLINE ===
+  const wrapText = (text: string, maxW: number, maxLines: number): string[] => {
+    ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
+    const words = text.split(" ");
+    let line = "", lines: string[] = [];
+    for (const word of words) {
+      const test = line ? line + " " + word : word;
+      if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = word; } else line = test;
+    }
+    if (line) lines.push(line);
+    return lines.slice(0, maxLines);
   };
 
   if (isWide) {
+    // Wide: text on right side
+    const textX = Math.round(w * 0.52);
+    const textMaxW = w - textX - pad;
+    const midY = h / 2;
+
+    const hlLines = wrapText(headline, textMaxW, 2);
+    const hlBlockH = hlLines.length * hlSize * 1.2;
+    const totalH = hlBlockH + 12 + ctaH;
+    const startY = midY - totalH / 2;
+
+    // App name tag top-left
+    if (appName) drawAppTag(pad, pad + nameSize);
+
+    // Headline
+    ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
+    ctx.fillStyle = "white";
+    ctx.shadowColor = "rgba(0,0,0,0.8)"; ctx.shadowBlur = 10;
+    hlLines.forEach((l, i) => ctx.fillText(l, textX, startY + hlSize * 0.6 + i * hlSize * 1.2));
+    clrShadow();
+
+    // CTA
+    drawCta(textX + ctaW / 2, startY + hlBlockH + 12 + ctaH / 2);
+
+  } else if (isTiny) {
+    // Tiny banner: app name | headline | CTA in a row
     let tx = pad;
     if (appName) {
-      const pillW = drawAppNamePill(tx, h / 2);
-      tx += pillW + 16;
+      ctx.font = `700 ${nameSize}px "${fontFamily}", Arial, sans-serif`;
+      ctx.fillStyle = "white";
+      ctx.shadowColor = "rgba(0,0,0,0.9)"; ctx.shadowBlur = 4;
+      ctx.fillText(appName, tx, h / 2);
+      tx += ctx.measureText(appName).width + 10;
+      clrShadow();
     }
     ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
-    ctx.letterSpacing = "0.5px";
-    ctx.fillStyle = "white"; setShadow();
-    ctx.fillText(headline.slice(0, 50), tx, h / 2);
-    ctx.letterSpacing = "0px";
+    ctx.fillStyle = "white";
+    ctx.shadowColor = "rgba(0,0,0,0.9)"; ctx.shadowBlur = 4;
+    // Truncate headline to fit
+    let hl = headline;
+    while (hl.length > 0 && ctx.measureText(hl).width > w - tx - ctaW - pad * 2) hl = hl.slice(0, -1);
+    ctx.fillText(hl, tx, h / 2);
     clrShadow();
-    const ctaX = w - ctaW - pad;
-    drawCtaButton(ctaX, h / 2, ctaW, ctaH, ctaR);
-    ctx.font = `700 ${ctaSize}px "${fontFamily}", Arial, sans-serif`;
-    ctx.fillStyle = "white"; ctx.textAlign = "center";
-    ctx.fillText(cta, ctaX + ctaW / 2, h / 2);
-    ctx.textAlign = "left";
+    drawCta(w - ctaW / 2 - pad, h / 2);
+
   } else {
-    // Calculate content height to stack elements without overlap
+    // Portrait / Square: content anchored to bottom
     const maxTW = w - pad * 2;
+    const hlLines = wrapText(headline, maxTW, 3);
+    const hlBlockH = hlLines.length * hlSize * 1.15;
+    const gap = Math.round(h * 0.025);
+    const showSub = brief.subheadline && h > 400;
+    const subBlockH = showSub ? subSize * 1.4 : 0;
+    const totalH = hlBlockH + (showSub ? gap + subBlockH : 0) + gap * 2 + ctaH;
+    const bottomPad = Math.round(h * 0.06);
+    const startY = h - bottomPad - totalH;
+
+    // App name tag — top left
+    if (appName && h > 200) drawAppTag(pad, pad + nameSize);
+
+    // Headline
     ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
-    const words = headline.split(" ");
-    let line = "", hlLines: string[] = [];
-    for (const word of words) {
-      const test = line ? line + " " + word : word;
-      if (ctx.measureText(test).width > maxTW && line) { hlLines.push(line); line = word; } else line = test;
-    }
-    if (line) hlLines.push(line);
-    const maxLines = isTall ? 3 : 2;
-    hlLines = hlLines.slice(0, maxLines);
-
-    const showSub = !isTiny && sub && h > 150;
-    const showBadge = (brief.app_store_url || brief.play_store_url) && h > 200 && !isTiny;
-    const showAppName = !isTiny && !!appName;
-
-    // Measure total content block height
-    const hlBlockH = hlLines.length * hlSize * 1.3;
-    const subBlockH = showSub ? subSize * 1.5 + 8 : 0;
-    const badgeBlockH = showBadge ? 28 : 0;
-    const ctaBlockH = ctaH + 8;
-    const gap = Math.max(6, h * 0.02);
-    const totalH = hlBlockH + (showSub ? gap + subBlockH : 0) + (showBadge ? gap + badgeBlockH : 0) + gap + ctaBlockH;
-
-    // Start Y: center the block vertically, leaving room for app name pill at top
-    const topReserve = showAppName ? pad + nameSize * 1.6 + gap : pad;
-    const startY = Math.max(topReserve, (h - totalH) / 2);
-
-    // Draw app name pill
-    if (showAppName) {
-      drawAppNamePill(pad, pad + nameSize * 0.8);
-    }
-
-    // Draw headline
-    ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
-    ctx.letterSpacing = "0.5px";
-    ctx.fillStyle = "white"; setShadow();
-    hlLines.forEach((l, i) => ctx.fillText(l, pad, startY + hlSize * 0.5 + i * hlSize * 1.3));
-    ctx.letterSpacing = "0px";
-
-    let cursorY = startY + hlBlockH;
-
-    // Draw subheadline
-    if (showSub) {
-      cursorY += gap;
-      const lineY = cursorY + subSize * 0.3;
-      ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(pad, lineY); ctx.lineTo(pad + Math.min(40, w * 0.15), lineY); ctx.stroke();
-      cursorY += subSize * 0.8;
-      ctx.font = `400 ${subSize}px "${fontFamily}", Arial, sans-serif`;
-      ctx.fillStyle = "#D4D4D8"; setShadow();
-      // Truncate subheadline to fit width
-      let subText = sub;
-      while (ctx.measureText(subText).width > maxTW && subText.length > 0) subText = subText.slice(0, -1);
-      ctx.fillText(subText, pad, cursorY);
-      cursorY += subSize * 0.7;
-    }
+    ctx.fillStyle = "white";
+    ctx.shadowColor = "rgba(0,0,0,0.85)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 2;
+    hlLines.forEach((l, i) => ctx.fillText(l, pad, startY + hlSize * 0.6 + i * hlSize * 1.15));
     clrShadow();
 
-    // Draw store badges
-    if (showBadge) {
-      cursorY += gap;
-      let bx = pad;
-      const drawBadge = (l1: string, l2: string) => {
-        ctx.fillStyle = "rgba(0,0,0,0.75)";
-        drawRoundRect(ctx, bx, cursorY, 100, 22, 4); ctx.fill();
-        ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.lineWidth = 1;
-        drawRoundRect(ctx, bx, cursorY, 100, 22, 4); ctx.stroke();
-        ctx.font = `400 7px "${fontFamily}", Arial`; ctx.fillStyle = "#aaa"; ctx.textAlign = "center";
-        ctx.fillText(l1, bx + 50, cursorY + 8);
-        ctx.font = `700 9px "${fontFamily}", Arial`; ctx.fillStyle = "white";
-        ctx.fillText(l2, bx + 50, cursorY + 17);
-        ctx.textAlign = "left"; bx += 108;
-      };
-      if (brief.app_store_url) drawBadge("Download on the", "App Store");
-      if (brief.play_store_url) drawBadge("GET IT ON", "Google Play");
-      cursorY += 22;
+    let curY = startY + hlBlockH;
+
+    // Subheadline
+    if (showSub) {
+      curY += gap;
+      ctx.font = `400 ${subSize}px "${fontFamily}", Arial, sans-serif`;
+      ctx.fillStyle = "rgba(255,255,255,0.80)";
+      ctx.shadowColor = "rgba(0,0,0,0.7)"; ctx.shadowBlur = 6;
+      let subText = brief.subheadline!;
+      while (subText.length > 0 && ctx.measureText(subText).width > maxTW) subText = subText.slice(0, -1);
+      ctx.fillText(subText, pad, curY + subSize * 0.6);
+      clrShadow();
+      curY += subBlockH;
     }
 
-    // Draw CTA button
-    cursorY += gap;
-    const ctaCy = Math.min(cursorY + ctaH / 2, h - pad - ctaH / 2);
-    drawCtaButton(w / 2 - ctaW / 2, ctaCy, ctaW, ctaH, ctaR);
-    ctx.font = `700 ${ctaSize}px "${fontFamily}", Arial, sans-serif`;
-    ctx.fillStyle = "white"; ctx.textAlign = "center";
-    ctx.fillText(cta, w / 2, ctaCy);
-    ctx.textAlign = "left";
+    // CTA
+    curY += gap * 2;
+    drawCta(w / 2, curY + ctaH / 2);
   }
 
-  // Border: outer stroke + inner glow
-  ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.lineWidth = 1;
+  // Subtle border
+  ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
-  ctx.strokeStyle = "rgba(255,255,255,0.20)"; ctx.lineWidth = 2;
-  ctx.strokeRect(1.5, 1.5, w - 3, h - 3);
 
   return canvas.toDataURL("image/png");
 }
