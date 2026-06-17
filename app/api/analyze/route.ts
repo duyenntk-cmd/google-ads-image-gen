@@ -7,7 +7,7 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
-    const { frames, niche } = await req.json();
+    const { frames, niche, userPrompt } = await req.json();
 
     // Pick 4 representative frames (spread across the set)
     const indices = frames.length <= 4
@@ -47,7 +47,7 @@ Analyze the visual style and return ONLY a JSON object with no markdown, no expl
   "cta_text": "CTA button text (2-4 words, e.g. Try Free, Edit Now)",
   "best_frame_index": 0,
   "mood": "bold|minimal|professional|playful"
-}`,
+}${userPrompt ? `\nAdditional context from user: ${userPrompt}` : ""}`,
             },
           ],
         },

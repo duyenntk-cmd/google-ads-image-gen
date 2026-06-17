@@ -91,6 +91,23 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
     ctx.globalAlpha = 1;
   }
 
+  // Decorative circles (depth effect)
+  if (!isTiny) {
+    const circles = [
+      { x: w * 0.85, y: h * 0.15, r: Math.min(w, h) * 0.45, color: accent, alpha: 0.10 },
+      { x: w * 0.1,  y: h * 0.75, r: Math.min(w, h) * 0.35, color: secondary, alpha: 0.12 },
+      { x: w * 0.55, y: h * 0.5,  r: Math.min(w, h) * 0.25, color: primary, alpha: 0.08 },
+    ];
+    for (const c of circles) {
+      ctx.globalAlpha = c.alpha;
+      ctx.fillStyle = c.color;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // Overlay
   const ov = ctx.createLinearGradient(0, 0, 0, h);
   ov.addColorStop(0, "rgba(0,0,0,0)");
@@ -99,7 +116,7 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
   ctx.fillStyle = ov;
   ctx.fillRect(0, 0, w, h);
 
-  const setShadow = () => { ctx.shadowColor = "rgba(0,0,0,0.95)"; ctx.shadowBlur = 6; ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 1; };
+  const setShadow = () => { ctx.shadowColor = "rgba(0,0,0,0.95)"; ctx.shadowBlur = 8; ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 2; };
   const clrShadow = () => { ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
 
   const hlSize   = isWide ? Math.max(9, Math.round(h / 3.2))    : isTall ? Math.max(13, Math.round(w * 0.095)) : Math.max(10, Math.round(h * 0.105));
@@ -112,33 +129,72 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
 
   ctx.textBaseline = "middle";
 
+  // Helper: draw CTA button with gradient + glassmorphism
+  const drawCtaButton = (cx: number, cy: number, bw: number, bh: number, br: number) => {
+    // Gradient fill
+    const ctaGrad = ctx.createLinearGradient(cx, cy - bh / 2, cx + bw, cy + bh / 2);
+    ctaGrad.addColorStop(0, accent);
+    // Lighten accent by ~30%
+    const accentLighter = accent + "cc";
+    ctaGrad.addColorStop(1, accentLighter);
+    ctx.fillStyle = ctaGrad;
+    drawRoundRect(ctx, cx, cy - bh / 2, bw, bh, br); ctx.fill();
+    // White border (20% opacity)
+    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+    ctx.lineWidth = 1.5;
+    drawRoundRect(ctx, cx, cy - bh / 2, bw, bh, br); ctx.stroke();
+    // Inner glow shadow
+    ctx.shadowColor = accent + "88";
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 4;
+    drawRoundRect(ctx, cx, cy - bh / 2, bw, bh, br); ctx.fill();
+    clrShadow();
+  };
+
+  // Helper: draw app name pill
+  const drawAppNamePill = (x: number, y: number) => {
+    ctx.font = `700 ${nameSize}px "${fontFamily}", Arial, sans-serif`;
+    const tw = ctx.measureText(appName).width;
+    const pillPad = nameSize * 0.5;
+    const pillW = tw + pillPad * 2;
+    const pillH = nameSize * 1.6;
+    const pillR = pillH / 2;
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    drawRoundRect(ctx, x, y - pillH / 2, pillW, pillH, pillR); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1;
+    drawRoundRect(ctx, x, y - pillH / 2, pillW, pillH, pillR); ctx.stroke();
+    ctx.fillStyle = "white"; setShadow();
+    ctx.fillText(appName, x + pillPad, y);
+    clrShadow();
+    return pillW;
+  };
+
   if (isWide) {
     let tx = pad;
     if (appName) {
-      ctx.font = `700 ${nameSize}px "${fontFamily}", Arial, sans-serif`;
-      ctx.fillStyle = "white"; setShadow();
-      ctx.fillText(appName, tx, h / 2);
-      tx += ctx.measureText(appName).width + 20;
+      const pillW = drawAppNamePill(tx, h / 2);
+      tx += pillW + 16;
     }
     ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
+    ctx.letterSpacing = "0.5px";
     ctx.fillStyle = "white"; setShadow();
     ctx.fillText(headline.slice(0, 50), tx, h / 2);
+    ctx.letterSpacing = "0px";
     clrShadow();
     const ctaX = w - ctaW - pad;
-    ctx.fillStyle = accent;
-    drawRoundRect(ctx, ctaX, (h - ctaH) / 2, ctaW, ctaH, ctaR); ctx.fill();
+    drawCtaButton(ctaX, h / 2, ctaW, ctaH, ctaR);
     ctx.font = `700 ${ctaSize}px "${fontFamily}", Arial, sans-serif`;
     ctx.fillStyle = "white"; ctx.textAlign = "center";
     ctx.fillText(cta, ctaX + ctaW / 2, h / 2);
     ctx.textAlign = "left";
   } else {
     if (!isTiny && appName) {
-      ctx.font = `700 ${nameSize}px "${fontFamily}", Arial, sans-serif`;
-      ctx.fillStyle = "white"; setShadow();
-      ctx.fillText(appName, pad, pad + nameSize / 2);
+      drawAppNamePill(pad, pad + nameSize * 0.8);
     }
     const hlY = isTall ? h * 0.56 : h * 0.54;
     ctx.font = `700 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
+    ctx.letterSpacing = "0.5px";
     ctx.fillStyle = "white"; setShadow();
     const maxTW = w - pad * 2;
     const words = headline.split(" ");
@@ -149,11 +205,17 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
     }
     if (line) lines.push(line);
     lines.slice(0, isTall ? 3 : 2).forEach((l, i) => ctx.fillText(l, pad, hlY + i * hlSize * 1.25));
+    ctx.letterSpacing = "0px";
 
     if (!isTiny && sub && h > 150) {
+      const subY = isTall ? h * 0.72 : h * 0.73;
+      // Visual separator line before subheadline
+      const lineY = subY - subSize * 1.2;
+      ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(pad, lineY); ctx.lineTo(pad + Math.min(40, w * 0.15), lineY); ctx.stroke();
       ctx.font = `400 ${subSize}px "${fontFamily}", Arial, sans-serif`;
       ctx.fillStyle = "#D4D4D8"; setShadow();
-      ctx.fillText(sub, pad, isTall ? h * 0.72 : h * 0.73);
+      ctx.fillText(sub, pad, subY);
     }
     clrShadow();
 
@@ -176,16 +238,18 @@ async function renderBanner(size: AdSize, brief: Brief, bgImg: HTMLImageElement 
     }
 
     const ctaCy = isTall ? h * 0.90 : h * 0.91;
-    ctx.fillStyle = accent;
-    drawRoundRect(ctx, w / 2 - ctaW / 2, ctaCy - ctaH / 2, ctaW, ctaH, ctaR); ctx.fill();
+    drawCtaButton(w / 2 - ctaW / 2, ctaCy, ctaW, ctaH, ctaR);
     ctx.font = `700 ${ctaSize}px "${fontFamily}", Arial, sans-serif`;
     ctx.fillStyle = "white"; ctx.textAlign = "center";
     ctx.fillText(cta, w / 2, ctaCy);
     ctx.textAlign = "left";
   }
 
+  // Border: outer stroke + inner glow
   ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+  ctx.strokeStyle = "rgba(255,255,255,0.20)"; ctx.lineWidth = 2;
+  ctx.strokeRect(1.5, 1.5, w - 3, h - 3);
 
   return canvas.toDataURL("image/png");
 }

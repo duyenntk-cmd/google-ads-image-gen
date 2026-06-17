@@ -23,6 +23,7 @@ const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
 export default function Home() {
   const [step, setStep] = useState<Step>("upload");
   const [niche, setNiche] = useState<"photo"|"tool"|"office">("photo");
+  const [userPrompt, setUserPrompt] = useState("");
   const [videoFile, setVideoFile] = useState<File|null>(null);
   const [iconFile, setIconFile] = useState<File|null>(null);
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
@@ -49,7 +50,7 @@ export default function Home() {
     if (!frames.length) return;
     setStep("analyzing"); setError("");
     try {
-      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ frames, niche }) });
+      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ frames, niche, userPrompt }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       const defaults = NICHE_DEFAULTS[niche] || {};
@@ -136,6 +137,18 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* User Prompt */}
+            <div>
+              <label className="block text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-3">Mô tả thêm <span className="text-[#475569] font-normal normal-case">(tuỳ chọn)</span></label>
+              <textarea
+                value={userPrompt}
+                onChange={e => setUserPrompt(e.target.value)}
+                placeholder="Mô tả thêm về app của bạn... (ví dụ: app chỉnh ảnh cho giới trẻ, tone năng động, target 18-25 tuổi)"
+                rows={3}
+                className="w-full bg-[#111118] border border-[#1E1E2E] rounded-xl px-4 py-3 text-sm text-[#94A3B8] placeholder-[#334155] focus:outline-none focus:border-violet-500/50 transition-colors resize-none"
+              />
             </div>
 
             {/* Video upload */}
