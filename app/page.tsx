@@ -42,7 +42,9 @@ export default function Home() {
   const [niche, setNiche] = useState<"photo"|"tool"|"office">("photo");
   const [language, setLanguage] = useState("English");
   const [userPrompt, setUserPrompt] = useState("");
+  const [inputMode, setInputMode] = useState<"video"|"image">("video");
   const [videoFile, setVideoFile] = useState<File|null>(null);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [iconFile, setIconFile] = useState<File|null>(null);
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [extractProgress, setExtractProgress] = useState(0);
@@ -53,6 +55,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"top5"|"all">("top5");
   const [selectedPreview, setSelectedPreview] = useState<Preview|null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const iconInputRef = useRef<HTMLInputElement>(null);
 
   const [bgColor, setBgColor] = useState("#F8FAFC");
@@ -88,6 +91,24 @@ export default function Home() {
       const extracted = await extractFramesFromVideo(file, 8);
       setFrames(extracted); setExtractProgress(100);
     } catch { setError("Không thể đọc video. Thử file mp4 khác."); setExtractProgress(0); }
+  }, []);
+
+  const handleImagesChange = useCallback(async (files: FileList) => {
+    const arr = Array.from(files).slice(0, 8);
+    setImageFiles(arr); setError(""); setExtractProgress(10);
+    try {
+      const extracted: ExtractedFrame[] = await Promise.all(arr.map((f, i) => new Promise<ExtractedFrame>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const base64 = dataUrl.split(",")[1];
+          resolve({ index: i, timestamp: i, dataUrl, base64 });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(f);
+      })));
+      setFrames(extracted); setExtractProgress(100);
+    } catch { setError("Không thể đọc ảnh. Thử file khác."); setExtractProgress(0); }
   }, []);
 
   const handleAnalyze = async () => {
@@ -133,7 +154,7 @@ export default function Home() {
   const handleDownloadAll = () => { const a=document.createElement("a"); a.href=`data:application/zip;base64,${zipBase64}`; a.download=`google-ads-${brief.app_name||"banners"}.zip`; a.click(); };
   const handleDownloadSingle = (p: Preview) => { const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); };
   const displayedPreviews = activeTab==="top5" ? previews.filter(p=>p.isTop5) : previews;
-  const resetAll = () => { setStep("upload"); setPreviews([]); setFrames([]); setVideoFile(null); setIconFile(null); setError(""); setExtractProgress(0); };
+  const resetAll = () => { setStep("upload"); setPreviews([]); setFrames([]); setVideoFile(null); setImageFiles([]); setIconFile(null); setError(""); setExtractProgress(0); };
 
   const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text };
   const labelStyle = { color: t.textMuted };
@@ -235,40 +256,79 @@ export default function Home() {
               />
             </div>
 
-            {/* Video upload */}
+            {/* Input mode tabs + upload */}
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>
-                Video ads <span className="text-violet-400">*</span>
-              </label>
-              <div onClick={()=>videoInputRef.current?.click()}
-                className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${videoFile?"border-violet-500/50 bg-violet-500/5":""}`}
-                style={videoFile ? {} : {borderColor: t.border}}
-                onMouseEnter={e => { if (!videoFile) (e.currentTarget as HTMLDivElement).style.backgroundColor = t.uploadHover; }}
-                onMouseLeave={e => { if (!videoFile) (e.currentTarget as HTMLDivElement).style.backgroundColor = ""; }}>
-                {videoFile ? (
-                  <div className="space-y-2">
-                    <div className="text-2xl">🎬</div>
-                    <div className="text-sm font-medium" style={{color: t.text}}>{videoFile.name}</div>
-                    <div className="text-xs" style={{color: t.textMuted}}>{(videoFile.size/1024/1024).toFixed(1)} MB</div>
-                    {extractProgress>0&&extractProgress<100&&(
-                      <div className="mt-3">
-                        <div className="h-1 rounded-full overflow-hidden" style={{backgroundColor: t.border}}>
-                          <div className="h-full bg-violet-500 transition-all duration-300" style={{width:`${extractProgress}%`}}/>
-                        </div>
-                        <div className="text-xs mt-1" style={{color: t.textMuted}}>Đang extract frames...</div>
-                      </div>
-                    )}
-                    {extractProgress===100&&<div className="text-xs text-emerald-500">✓ Extracted {frames.length} frames</div>}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="text-3xl opacity-40">🎬</div>
-                    <div className="text-sm" style={{color: t.textMuted}}>Click để upload video ads</div>
-                    <div className="text-xs" style={{color: t.textMuted, opacity: 0.7}}>MP4, MOV, AVI, WebM</div>
-                  </div>
-                )}
-                <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={e=>e.target.files?.[0]&&handleVideoChange(e.target.files[0])}/>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>
+                  Nguồn ảnh <span className="text-violet-400">*</span>
+                </label>
+                <div className="flex gap-1 rounded-lg p-0.5" style={{backgroundColor: t.tabBg}}>
+                  {([["video","🎬 Video"],["image","🖼️ Ảnh tĩnh"]] as const).map(([mode, label])=>(
+                    <button key={mode} onClick={()=>{setInputMode(mode);setFrames([]);setVideoFile(null);setImageFiles([]);setExtractProgress(0);}}
+                      className="px-3 py-1 rounded-md text-xs font-medium transition-all"
+                      style={inputMode===mode?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {inputMode === "video" ? (
+                <div onClick={()=>videoInputRef.current?.click()}
+                  className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${videoFile?"border-violet-500/50 bg-violet-500/5":""}`}
+                  style={videoFile ? {} : {borderColor: t.border}}
+                  onMouseEnter={e => { if (!videoFile) (e.currentTarget as HTMLDivElement).style.backgroundColor = t.uploadHover; }}
+                  onMouseLeave={e => { if (!videoFile) (e.currentTarget as HTMLDivElement).style.backgroundColor = ""; }}>
+                  {videoFile ? (
+                    <div className="space-y-2">
+                      <div className="text-2xl">🎬</div>
+                      <div className="text-sm font-medium" style={{color: t.text}}>{videoFile.name}</div>
+                      <div className="text-xs" style={{color: t.textMuted}}>{(videoFile.size/1024/1024).toFixed(1)} MB</div>
+                      {extractProgress>0&&extractProgress<100&&(
+                        <div className="mt-3">
+                          <div className="h-1 rounded-full overflow-hidden" style={{backgroundColor: t.border}}>
+                            <div className="h-full bg-violet-500 transition-all duration-300" style={{width:`${extractProgress}%`}}/>
+                          </div>
+                          <div className="text-xs mt-1" style={{color: t.textMuted}}>Đang extract frames...</div>
+                        </div>
+                      )}
+                      {extractProgress===100&&<div className="text-xs text-emerald-500">✓ Extracted {frames.length} frames</div>}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-3xl opacity-40">🎬</div>
+                      <div className="text-sm" style={{color: t.textMuted}}>Click để upload video ads</div>
+                      <div className="text-xs" style={{color: t.textMuted, opacity: 0.7}}>MP4, MOV, AVI, WebM</div>
+                    </div>
+                  )}
+                  <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={e=>e.target.files?.[0]&&handleVideoChange(e.target.files[0])}/>
+                </div>
+              ) : (
+                <div onClick={()=>imageInputRef.current?.click()}
+                  className={`relative border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${imageFiles.length?"border-violet-500/50 bg-violet-500/5":""}`}
+                  style={imageFiles.length ? {} : {borderColor: t.border}}
+                  onMouseEnter={e => { if (!imageFiles.length) (e.currentTarget as HTMLDivElement).style.backgroundColor = t.uploadHover; }}
+                  onMouseLeave={e => { if (!imageFiles.length) (e.currentTarget as HTMLDivElement).style.backgroundColor = ""; }}>
+                  {imageFiles.length ? (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-2 justify-center">
+                        {frames.map((f,i)=>(
+                          <img key={i} src={f.dataUrl} alt={`img${i}`} className="w-16 h-16 object-cover rounded-lg border" style={{borderColor:t.border}}/>
+                        ))}
+                      </div>
+                      <div className="text-xs text-emerald-500">✓ {imageFiles.length} ảnh đã tải lên</div>
+                      <div className="text-xs" style={{color: t.textMuted}}>Click để thay đổi</div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-3xl opacity-40">🖼️</div>
+                      <div className="text-sm" style={{color: t.textMuted}}>Click để upload 1–8 ảnh</div>
+                      <div className="text-xs" style={{color: t.textMuted, opacity: 0.7}}>PNG, JPG, WebP — mỗi ảnh sẽ là 1 background variant</div>
+                    </div>
+                  )}
+                  <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e=>e.target.files&&e.target.files.length>0&&handleImagesChange(e.target.files)}/>
+                </div>
+              )}
             </div>
 
             {/* Icon + Store links */}
@@ -302,7 +362,7 @@ export default function Home() {
             </div>
 
             {error&&<p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-4 py-3">{error}</p>}
-            <button onClick={handleAnalyze} disabled={!videoFile||frames.length===0||step==="analyzing"}
+            <button onClick={handleAnalyze} disabled={frames.length===0||step==="analyzing"}
               className="w-full py-3.5 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white">
               {step==="analyzing"?<span className="flex items-center justify-center gap-2"><span className="animate-spin">⏳</span> Đang phân tích video...</span>:"Phân tích video →"}
             </button>
