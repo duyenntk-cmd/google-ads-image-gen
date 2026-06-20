@@ -111,11 +111,31 @@ export default function Home() {
     } catch { setError("Không thể đọc ảnh. Thử file khác."); setExtractProgress(0); }
   }, []);
 
+  const compressFrame = (dataUrl: string, maxSize = 512, quality = 0.5): Promise<string> =>
+    new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+        c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/jpeg", quality).split(",")[1]);
+      };
+      img.src = dataUrl;
+    });
+
   const handleAnalyze = async () => {
     if (!frames.length) return;
     setStep("analyzing"); setError("");
     try {
-      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ frames, niche, userPrompt, language }) });
+      // Pick 4 representative frames, compress each to ~512px JPEG
+      const indices = frames.length <= 4
+        ? frames.map((_: unknown, i: number) => i)
+        : [0, Math.floor(frames.length * 0.33), Math.floor(frames.length * 0.66), frames.length - 1];
+      const selectedFrames = await Promise.all(
+        indices.map(async (i: number) => ({ base64: await compressFrame(frames[i].dataUrl) }))
+      );
+      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ selectedFrames, niche, userPrompt, language }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       const defaults = NICHE_DEFAULTS[niche] || {};
