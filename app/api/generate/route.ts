@@ -7,20 +7,16 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
-    const { frames, niche, userPrompt, language } = await req.json();
+    // selectedFrames: pre-picked array of {base64} sent by client (max 4)
+    const { selectedFrames, niche, userPrompt, language } = await req.json();
     const lang = language || "English";
 
-    // Pick 4 representative frames (spread across the set)
-    const indices = frames.length <= 4
-      ? frames.map((_: unknown, i: number) => i)
-      : [0, Math.floor(frames.length * 0.33), Math.floor(frames.length * 0.66), frames.length - 1];
-
-    const imageBlocks = indices.map((i: number) => ({
+    const imageBlocks = (selectedFrames as { base64: string }[]).map(f => ({
       type: "image" as const,
       source: {
         type: "base64" as const,
         media_type: "image/jpeg" as const,
-        data: frames[i].base64,
+        data: f.base64,
       },
     }));
 
