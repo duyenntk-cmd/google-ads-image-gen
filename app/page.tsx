@@ -237,12 +237,26 @@ export default function Home() {
               className="w-5 h-5 rounded-full cursor-pointer border-0 p-0 opacity-60 hover:opacity-100" title="Tuỳ chỉnh màu"/>
           </div>
           {step !== "upload" && (
-            <button onClick={resetAll} className="text-xs px-3 py-1.5 rounded-md border transition-colors"
-              style={{color: t.textMuted, borderColor: t.border}}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = t.text; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = t.textMuted; }}>
-              ← Bắt đầu lại
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => {
+                if (step === "preview") setStep("brief");
+                else if (step === "brief") setStep("upload");
+                else if (step === "analyzing") setStep("upload");
+              }}
+                className="text-xs px-3 py-1.5 rounded-md border transition-colors"
+                style={{color: t.textMuted, borderColor: t.border}}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = t.text; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = t.textMuted; }}>
+                ← Back
+              </button>
+              <button onClick={resetAll}
+                className="text-xs px-3 py-1.5 rounded-md border transition-colors"
+                style={{color: t.textMuted, borderColor: t.border}}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = t.text; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = t.textMuted; }}>
+                🏠 Home
+              </button>
+            </div>
           )}
         </div>
       </header>
