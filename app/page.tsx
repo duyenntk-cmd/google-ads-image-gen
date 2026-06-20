@@ -23,6 +23,7 @@ const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
 export default function Home() {
   const [step, setStep] = useState<Step>("upload");
   const [niche, setNiche] = useState<"photo"|"tool"|"office">("photo");
+  const [language, setLanguage] = useState("English");
   const [userPrompt, setUserPrompt] = useState("");
   const [videoFile, setVideoFile] = useState<File|null>(null);
   const [iconFile, setIconFile] = useState<File|null>(null);
@@ -50,7 +51,7 @@ export default function Home() {
     if (!frames.length) return;
     setStep("analyzing"); setError("");
     try {
-      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ frames, niche, userPrompt }) });
+      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ frames, niche, userPrompt, language }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       const defaults = NICHE_DEFAULTS[niche] || {};
@@ -127,7 +128,8 @@ export default function Home() {
               <p className="text-[#64748B] text-sm">Upload video ads → tự động gen 11 banner PNG cho Google Display Network</p>
             </div>
 
-            {/* Niche */}
+            {/* Niche + Language */}
+            <div className="grid grid-cols-2 gap-6">
             <div>
               <label className="block text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-3">Ngành app</label>
               <div className="grid grid-cols-3 gap-3">
@@ -138,6 +140,35 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Language */}
+            <div>
+              <label className="block text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-3">Ngôn ngữ text</label>
+              <div className="grid grid-cols-1 gap-1.5 max-h-[220px] overflow-y-auto pr-1">
+                {[
+                  { code: "English",    label: "🇺🇸 English" },
+                  { code: "Vietnamese", label: "🇻🇳 Tiếng Việt" },
+                  { code: "Indonesian", label: "🇮🇩 Bahasa Indonesia" },
+                  { code: "Thai",       label: "🇹🇭 ภาษาไทย" },
+                  { code: "Korean",     label: "🇰🇷 한국어" },
+                  { code: "Japanese",   label: "🇯🇵 日本語" },
+                  { code: "Chinese Simplified", label: "🇨🇳 中文简体" },
+                  { code: "Arabic",     label: "🇸🇦 العربية" },
+                  { code: "Spanish",    label: "🇪🇸 Español" },
+                  { code: "Portuguese", label: "🇵🇹 Português" },
+                  { code: "Russian",    label: "🇷🇺 Русский" },
+                  { code: "French",     label: "🇫🇷 Français" },
+                  { code: "German",     label: "🇩🇪 Deutsch" },
+                  { code: "Hindi",      label: "🇮🇳 हिन्दी" },
+                ].map(l => (
+                  <button key={l.code} onClick={() => setLanguage(l.code)}
+                    className={`py-2 px-3 rounded-lg border text-xs font-medium transition-all text-left ${language === l.code ? "border-violet-500 bg-violet-500/10 text-violet-300" : "border-[#1E1E2E] text-[#64748B] hover:border-[#334155] hover:text-[#94A3B8]"}`}>
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             </div>
 
             {/* User Prompt */}
