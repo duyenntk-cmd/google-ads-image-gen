@@ -7,19 +7,24 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
-    const { frames, niche, userPrompt } = await req.json();
+    const { frames, selectedFrames, niche, userPrompt, language } = await req.json();
+    const lang = language || "English";
 
-    // Pick 4 representative frames (spread across the set)
-    const indices = frames.length <= 4
-      ? frames.map((_: unknown, i: number) => i)
-      : [0, Math.floor(frames.length * 0.33), Math.floor(frames.length * 0.66), frames.length - 1];
+    // Support both old format (frames[]) and new format (selectedFrames[])
+    let framesToUse: { base64: string }[] = selectedFrames || [];
+    if (!framesToUse.length && frames && frames.length) {
+      const indices = frames.length <= 4
+        ? frames.map((_: unknown, i: number) => i)
+        : [0, Math.floor(frames.length * 0.33), Math.floor(frames.length * 0.66), frames.length - 1];
+      framesToUse = indices.map((i: number) => ({ base64: frames[i].base64 }));
+    }
 
-    const imageBlocks = indices.map((i: number) => ({
+    const imageBlocks = framesToUse.map(f => ({
       type: "image" as const,
       source: {
         type: "base64" as const,
         media_type: "image/jpeg" as const,
-        data: frames[i].base64,
+        data: f.base64,
       },
     }));
 
@@ -42,12 +47,14 @@ Analyze the visual style and return ONLY a JSON object with no markdown, no expl
   "secondary_color": "#hex secondary color",
   "accent_color": "#hex button/CTA color (bright, contrasting)",
   "background_style": "dark|light|gradient",
-  "headline": "short punchy headline (max 8 words) matching the app's benefit",
-  "subheadline": "supporting text (max 12 words)",
-  "cta_text": "CTA button text (2-4 words, e.g. Try Free, Edit Now)",
+  "headline": "short punchy headline (max 8 words) matching the app's benefit — write in ${lang}",
+  "subheadline": "supporting text (max 12 words) — write in ${lang}",
+  "cta_text": "CTA button text (2-4 words) — write in ${lang}",
   "best_frame_index": 0,
   "mood": "bold|minimal|professional|playful"
-}${userPrompt ? `\nAdditional context from user: ${userPrompt}` : ""}`,
+}
+
+IMPORTANT: headline, subheadline, and cta_text must be written in ${lang}.${userPrompt ? `\nAdditional context from user: ${userPrompt}` : ""}`,
             },
           ],
         },
