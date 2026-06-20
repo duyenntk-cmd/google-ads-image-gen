@@ -96,8 +96,20 @@ export default function Home() {
   const displayedPreviews = activeTab==="top5" ? previews.filter(p=>p.isTop5) : previews;
   const resetAll = () => { setStep("upload"); setPreviews([]); setFrames([]); setVideoFile(null); setIconFile(null); setError(""); setExtractProgress(0); };
 
+  const [bgColor, setBgColor] = useState("#F8FAFC");
+  const PRESETS = [
+    { color: "#0A0A0F", label: "Dark" },
+    { color: "#0F172A", label: "Navy" },
+    { color: "#1A0A2E", label: "Purple" },
+    { color: "#0A1628", label: "Ocean" },
+    { color: "#ffffff", label: "Light" },
+    { color: "#F8FAFC", label: "Gray" },
+  ];
+  const hexToLuma = (hex: string) => { const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16); return 0.299*r + 0.587*g + 0.114*b; };
+  const isDark = hexToLuma(bgColor) < 128;
+
   return (
-    <div className="min-h-screen bg-[#0A0A0F] text-[#F1F5F9]" style={{fontFamily:"Inter,-apple-system,sans-serif"}}>
+    <div className="min-h-screen text-[#F1F5F9]" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: isDark ? "#F1F5F9" : "#0F172A"}}>
       {/* Header */}
       <header className="border-b border-[#1E1E2E] px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -109,7 +121,20 @@ export default function Home() {
             <div className="text-xs text-[#64748B]">App Mobile — Photo / Tool / Office</div>
           </div>
         </div>
-        {step !== "upload" && <button onClick={resetAll} className="text-xs text-[#64748B] hover:text-white transition-colors px-3 py-1.5 rounded-md border border-[#1E1E2E] hover:border-[#334155]">← Bắt đầu lại</button>}
+        <div className="flex items-center gap-3">
+          {/* Background color picker */}
+          <div className="flex items-center gap-1.5">
+            {PRESETS.map(p => (
+              <button key={p.color} onClick={() => setBgColor(p.color)} title={p.label}
+                className={`w-5 h-5 rounded-full border-2 transition-all ${bgColor === p.color ? "border-violet-400 scale-110" : "border-transparent opacity-60 hover:opacity-100"}`}
+                style={{backgroundColor: p.color, boxShadow: p.color === "#ffffff" || p.color === "#F8FAFC" ? "inset 0 0 0 1px rgba(0,0,0,0.15)" : undefined}}/>
+            ))}
+            <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
+              className="w-5 h-5 rounded-full cursor-pointer border-0 p-0 opacity-60 hover:opacity-100"
+              title="Tuỳ chỉnh màu"/>
+          </div>
+          {step !== "upload" && <button onClick={resetAll} className="text-xs text-[#64748B] hover:text-white transition-colors px-3 py-1.5 rounded-md border border-[#1E1E2E] hover:border-[#334155]">← Bắt đầu lại</button>}
+        </div>
       </header>
 
       {/* Progress */}
