@@ -72,6 +72,7 @@ export default function Home() {
   const [previews, setPreviews] = useState<Preview[]>([]);
   const [zipBase64, setZipBase64] = useState("");
   const [error, setError] = useState("");
+  const [inpainting, setInpainting] = useState(false);
   const [activeTab, setActiveTab] = useState<"top5"|"all">("top5");
   const [selectedPreview, setSelectedPreview] = useState<Preview|null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -129,6 +130,22 @@ export default function Home() {
       setFrames(extracted); setExtractProgress(100);
     } catch { setError("Không thể đọc ảnh. Thử file khác."); setExtractProgress(0); }
   }, []);
+
+  const handleInpaint = async () => {
+    const idx = brief.best_frame_index;
+    if (!frames[idx]) return;
+    setInpainting(true); setError("");
+    try {
+      const res = await fetch("/api/inpaint", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ imageBase64: frames[idx].dataUrl, language, country }) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      // Replace the selected frame with the cleaned image
+      const newFrames = frames.map((f, i) => i === idx ? { ...f, dataUrl: data.base64, base64: data.base64.split(",")[1] } : f);
+      setFrames(newFrames);
+    } catch(e) { setError(String(e)); }
+    setInpainting(false);
+  };
 
   const compressFrame = (dataUrl: string, maxSize = 512, quality = 0.5): Promise<string> =>
     new Promise(resolve => {
@@ -407,9 +424,17 @@ export default function Home() {
 
             {/* Frame selector */}
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>
-                Frame background ({brief.best_frame_index+1}/{frames.length})
-              </label>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>
+                  Frame background ({brief.best_frame_index+1}/{frames.length})
+                </label>
+                <button onClick={handleInpaint} disabled={inpainting}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all disabled:opacity-40"
+                  style={{borderColor:"rgba(139,92,246,0.5)", color:"#a78bfa", backgroundColor:"rgba(139,92,246,0.08)"}}
+                  title="Dùng AI xóa text gốc trong ảnh (OpenAI)">
+                  {inpainting ? <><span className="animate-spin">⏳</span> Đang xử lý...</> : <>✨ Xóa text gốc (AI)</>}
+                </button>
+              </div>
               <div className="flex gap-2 overflow-x-auto pb-2">
                 {frames.map((f,i)=>(
                   <button key={i} onClick={()=>setBrief(p=>({...p,best_frame_index:i}))}
@@ -419,6 +444,7 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+              <p className="text-xs mt-2" style={{color: t.textMuted}}>Chọn frame → click "Xóa text gốc" để AI xóa text trong ảnh đó (~$0.04)</p>
             </div>
 
             {/* Text fields */}
