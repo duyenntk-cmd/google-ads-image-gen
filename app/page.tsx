@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { extractFramesFromVideo, fileToBase64, ExtractedFrame } from "@/lib/videoUtils";
+import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
 import { generateAllBanners } from "@/lib/canvasGen";
 
@@ -30,18 +30,38 @@ const LANGUAGES = [
   { code: "Chinese Simplified", label: "🇨🇳 中文简体" },
   { code: "Arabic",             label: "🇸🇦 العربية" },
   { code: "Spanish",            label: "🇪🇸 Español" },
-  { code: "Portuguese",         label: "🇵🇹 Português" },
+  { code: "Portuguese",         label: "🇧🇷 Português" },
   { code: "Russian",            label: "🇷🇺 Русский" },
   { code: "French",             label: "🇫🇷 Français" },
   { code: "German",             label: "🇩🇪 Deutsch" },
   { code: "Hindi",              label: "🇮🇳 हिन्दी" },
 ];
 
+const COUNTRIES = [
+  { code: "Global",      label: "🌍 Global (Universal)" },
+  { code: "Vietnam",     label: "🇻🇳 Vietnam" },
+  { code: "Indonesia",   label: "🇮🇩 Indonesia" },
+  { code: "Thailand",    label: "🇹🇭 Thailand" },
+  { code: "Philippines", label: "🇵🇭 Philippines" },
+  { code: "Malaysia",    label: "🇲🇾 Malaysia" },
+  { code: "India",       label: "🇮🇳 India" },
+  { code: "Japan",       label: "🇯🇵 Japan" },
+  { code: "Korea",       label: "🇰🇷 South Korea" },
+  { code: "China",       label: "🇨🇳 China" },
+  { code: "USA",         label: "🇺🇸 United States" },
+  { code: "Brazil",      label: "🇧🇷 Brazil" },
+  { code: "Mexico",      label: "🇲🇽 Mexico" },
+  { code: "Saudi Arabia",label: "🇸🇦 Saudi Arabia" },
+  { code: "Germany",     label: "🇩🇪 Germany" },
+  { code: "France",      label: "🇫🇷 France" },
+  { code: "Russia",      label: "🇷🇺 Russia" },
+];
+
 export default function Home() {
   const [step, setStep] = useState<Step>("upload");
   const [niche, setNiche] = useState<"photo"|"tool"|"office">("photo");
   const [language, setLanguage] = useState("English");
-  const [userPrompt, setUserPrompt] = useState("");
+  const [country, setCountry] = useState("Global");
   const [inputMode, setInputMode] = useState<"video"|"image">("video");
   const [videoFile, setVideoFile] = useState<File|null>(null);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -101,8 +121,7 @@ export default function Home() {
         const reader = new FileReader();
         reader.onload = () => {
           const dataUrl = reader.result as string;
-          const base64 = dataUrl.split(",")[1];
-          resolve({ index: i, timestamp: i, dataUrl, base64 });
+          resolve({ index: i, timestamp: i, dataUrl, base64: dataUrl.split(",")[1] });
         };
         reader.onerror = reject;
         reader.readAsDataURL(f);
@@ -128,14 +147,13 @@ export default function Home() {
     if (!frames.length) return;
     setStep("analyzing"); setError("");
     try {
-      // Pick 4 representative frames, compress each to ~512px JPEG
       const indices = frames.length <= 4
         ? frames.map((_: unknown, i: number) => i)
         : [0, Math.floor(frames.length * 0.33), Math.floor(frames.length * 0.66), frames.length - 1];
       const selectedFrames = await Promise.all(
         indices.map(async (i: number) => ({ base64: await compressFrame(frames[i].dataUrl) }))
       );
-      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ selectedFrames, niche, userPrompt, language }) });
+      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ selectedFrames, niche, language, country }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       const defaults = NICHE_DEFAULTS[niche] || {};
@@ -149,8 +167,7 @@ export default function Home() {
     try {
       const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
       const bgDataUrl = frames[bestIdx]?.dataUrl || null;
-      const allFrameDataUrls = frames.map(f => f.dataUrl);
-      const generated = await generateAllBanners(brief, bgDataUrl, allFrameDataUrls);
+      const generated = await generateAllBanners(brief, bgDataUrl);
       setPreviews(generated);
 
       const JSZip = (await import("jszip")).default;
@@ -178,7 +195,6 @@ export default function Home() {
 
   const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text };
   const labelStyle = { color: t.textMuted };
-  const cardStyle = { backgroundColor: t.card, borderColor: t.border };
 
   return (
     <div className="min-h-screen" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
@@ -201,8 +217,7 @@ export default function Home() {
                 style={{backgroundColor: p.color, boxShadow: p.color === "#ffffff" || p.color === "#F8FAFC" ? "inset 0 0 0 1px rgba(0,0,0,0.15)" : undefined}}/>
             ))}
             <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
-              className="w-5 h-5 rounded-full cursor-pointer border-0 p-0 opacity-60 hover:opacity-100"
-              title="Tuỳ chỉnh màu"/>
+              className="w-5 h-5 rounded-full cursor-pointer border-0 p-0 opacity-60 hover:opacity-100" title="Tuỳ chỉnh màu"/>
           </div>
           {step !== "upload" && (
             <button onClick={resetAll} className="text-xs px-3 py-1.5 rounded-md border transition-colors"
@@ -228,55 +243,50 @@ export default function Home() {
           <div className="space-y-8">
             <div>
               <h1 className="text-2xl font-bold mb-1" style={{color: t.text}}>Tạo ảnh Google Ads</h1>
-              <p className="text-sm" style={{color: t.textMuted}}>Upload video ads → tự động gen {AD_SIZES.length} banner PNG cho Google UAC App Install</p>
+              <p className="text-sm" style={{color: t.textMuted}}>Upload video hoặc ảnh → tự động gen {AD_SIZES.length} banner PNG cho Google UAC App Install</p>
             </div>
 
-            {/* Niche + Language */}
-            <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>Ngành app</label>
-                <div className="grid grid-cols-3 gap-3">
-                  {(["photo","tool","office"] as const).map(n => (
-                    <button key={n} onClick={()=>setNiche(n)}
-                      className={`py-3 px-4 rounded-xl border text-sm font-medium transition-all ${niche===n?"border-violet-500 bg-violet-500/10 text-violet-400":""}`}
-                      style={niche===n ? {} : {borderColor: t.border, color: t.textMuted}}>
-                      {n==="photo"?"📸 Photo":n==="tool"?"🔧 Tool":"💼 Office"}
-                    </button>
-                  ))}
-                </div>
+            {/* Niche */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>Ngành app</label>
+              <div className="grid grid-cols-3 gap-3">
+                {(["photo","tool","office"] as const).map(n => (
+                  <button key={n} onClick={()=>setNiche(n)}
+                    className={`py-3 px-4 rounded-xl border text-sm font-medium transition-all ${niche===n?"border-violet-500 bg-violet-500/10 text-violet-400":""}`}
+                    style={niche===n ? {} : {borderColor: t.border, color: t.textMuted}}>
+                    {n==="photo"?"📸 Photo":n==="tool"?"🔧 Tool":"💼 Office"}
+                  </button>
+                ))}
               </div>
+            </div>
 
-              {/* Language dropdown */}
+            {/* Language + Country */}
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>Ngôn ngữ text</label>
-                <select
-                  value={language}
-                  onChange={e => setLanguage(e.target.value)}
+                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={labelStyle}>
+                  🌐 Ngôn ngữ text trong ảnh
+                </label>
+                <select value={language} onChange={e => setLanguage(e.target.value)}
                   className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500 transition-colors"
                   style={{...inputStyle, borderColor: t.inputBorder}}>
-                  {LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>{l.label}</option>
-                  ))}
+                  {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
                 </select>
+                <p className="text-xs mt-1.5" style={{color: t.textMuted}}>Headline, subheadline, CTA sẽ được viết bằng ngôn ngữ này</p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={labelStyle}>
+                  🎯 Thị trường mục tiêu
+                </label>
+                <select value={country} onChange={e => setCountry(e.target.value)}
+                  className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500 transition-colors"
+                  style={{...inputStyle, borderColor: t.inputBorder}}>
+                  {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                </select>
+                <p className="text-xs mt-1.5" style={{color: t.textMuted}}>AI điều chỉnh màu sắc, tone & style phù hợp thị trường</p>
               </div>
             </div>
 
-            {/* User Prompt */}
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>
-                Mô tả thêm <span className="font-normal normal-case" style={{color: t.textMuted}}>(tuỳ chọn)</span>
-              </label>
-              <textarea
-                value={userPrompt}
-                onChange={e => setUserPrompt(e.target.value)}
-                placeholder="Mô tả thêm về app của bạn... (ví dụ: app chỉnh ảnh cho giới trẻ, tone năng động, target 18-25 tuổi)"
-                rows={3}
-                className="w-full rounded-xl px-4 py-3 text-sm border focus:outline-none focus:border-violet-500/50 transition-colors resize-none"
-                style={{...inputStyle, borderColor: t.inputBorder}}
-              />
-            </div>
-
-            {/* Input mode tabs + upload */}
+            {/* Input mode + upload */}
             <div>
               <div className="flex items-center justify-between mb-3">
                 <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>
@@ -343,7 +353,7 @@ export default function Home() {
                     <div className="space-y-2">
                       <div className="text-3xl opacity-40">🖼️</div>
                       <div className="text-sm" style={{color: t.textMuted}}>Click để upload 1–8 ảnh</div>
-                      <div className="text-xs" style={{color: t.textMuted, opacity: 0.7}}>PNG, JPG, WebP — mỗi ảnh sẽ là 1 background variant</div>
+                      <div className="text-xs" style={{color: t.textMuted, opacity: 0.7}}>PNG, JPG, WebP</div>
                     </div>
                   )}
                   <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e=>e.target.files&&e.target.files.length>0&&handleImagesChange(e.target.files)}/>
@@ -373,18 +383,16 @@ export default function Home() {
                   Store links <span className="font-normal normal-case" style={{color: t.textMuted}}>(tuỳ chọn)</span>
                 </label>
                 <input type="url" placeholder="🍎 App Store URL" value={brief.app_store_url} onChange={e=>setBrief(p=>({...p,app_store_url:e.target.value}))}
-                  className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors"
-                  style={inputStyle}/>
+                  className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
                 <input type="url" placeholder="🤖 Google Play URL" value={brief.play_store_url} onChange={e=>setBrief(p=>({...p,play_store_url:e.target.value}))}
-                  className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors"
-                  style={inputStyle}/>
+                  className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
               </div>
             </div>
 
             {error&&<p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-4 py-3">{error}</p>}
             <button onClick={handleAnalyze} disabled={frames.length===0||step==="analyzing"}
               className="w-full py-3.5 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white">
-              {step==="analyzing"?<span className="flex items-center justify-center gap-2"><span className="animate-spin">⏳</span> Đang phân tích video...</span>:"Phân tích video →"}
+              {step==="analyzing"?<span className="flex items-center justify-center gap-2"><span className="animate-spin">⏳</span> Đang phân tích...</span>:"Phân tích & tạo brief →"}
             </button>
           </div>
         )}
@@ -394,7 +402,7 @@ export default function Home() {
           <div className="space-y-8">
             <div>
               <h2 className="text-xl font-bold mb-1" style={{color: t.text}}>Xem lại & chỉnh brief</h2>
-              <p className="text-sm" style={{color: t.textMuted}}>Claude đã phân tích video. Chỉnh bất kỳ mục nào trước khi gen ảnh.</p>
+              <p className="text-sm" style={{color: t.textMuted}}>Claude đã phân tích. Chỉnh bất kỳ mục nào trước khi gen ảnh.</p>
             </div>
 
             {/* Frame selector */}

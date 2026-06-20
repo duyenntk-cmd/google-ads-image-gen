@@ -7,8 +7,9 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
-    const { frames, selectedFrames, niche, userPrompt, language } = await req.json();
+    const { frames, selectedFrames, niche, userPrompt, language, country } = await req.json();
     const lang = language || "English";
+    const mkt = country && country !== "Global" ? country : null;
 
     // Support both old format (frames[]) and new format (selectedFrames[])
     let framesToUse: { base64: string }[] = selectedFrames || [];
@@ -27,6 +28,10 @@ export async function POST(req: NextRequest) {
         data: f.base64,
       },
     }));
+
+    const marketContext = mkt
+      ? `\nTarget market: ${mkt}. Adjust color palette, visual mood, and copywriting style to resonate with ${mkt} audiences. Consider local cultural preferences, popular color associations, and typical aesthetic trends in ${mkt}.`
+      : "";
 
     const response = await client.messages.create({
       model: "claude-sonnet-4-5",
@@ -54,7 +59,7 @@ Analyze the visual style and return ONLY a JSON object with no markdown, no expl
   "mood": "bold|minimal|professional|playful"
 }
 
-IMPORTANT: headline, subheadline, and cta_text must be written in ${lang}.${userPrompt ? `\nAdditional context from user: ${userPrompt}` : ""}`,
+IMPORTANT: headline, subheadline, and cta_text must be written in ${lang}.${marketContext}${userPrompt ? `\nAdditional context from user: ${userPrompt}` : ""}`,
             },
           ],
         },
