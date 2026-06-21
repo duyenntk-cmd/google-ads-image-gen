@@ -132,7 +132,7 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|null>(null);
 
-  interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; previews: Preview[]; zipBase64: string; }
+  interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem("banner_history") || "[]")); } catch {}
@@ -140,7 +140,21 @@ export default function Home() {
   const saveHistory = (item: HistoryItem) => {
     setHistory(prev => {
       const next = [item, ...prev].slice(0, 20);
-      try { localStorage.setItem("banner_history", JSON.stringify(next)); } catch {}
+      try {
+        // Compress thumbnail to small size before saving
+        const canvas = document.createElement("canvas");
+        const img = new Image(); img.src = item.thumbnail;
+        canvas.width = 120; canvas.height = 63;
+        const ctx = canvas.getContext("2d");
+        img.onload = () => {
+          ctx?.drawImage(img, 0, 0, 120, 63);
+          const smallThumb = canvas.toDataURL("image/jpeg", 0.5);
+          const compressed = next.map((h, i) => i === 0 ? {...h, thumbnail: smallThumb} : h);
+          localStorage.setItem("banner_history", JSON.stringify(compressed));
+          setHistory(compressed);
+        };
+        img.src = item.thumbnail;
+      } catch {}
       return next;
     });
   };
@@ -287,7 +301,7 @@ export default function Home() {
         const zip64 = (reader.result as string).split(",")[1];
         setZipBase64(zip64);
         const thumbnail = generated.find(p => p.isTop5)?.dataUrl || generated[0]?.dataUrl || "";
-        saveHistory({ id: Date.now().toString(), appName: brief.app_name || "Untitled", date: new Date().toLocaleString("vi-VN"), thumbnail, previews: generated, zipBase64: zip64 });
+        saveHistory({ id: Date.now().toString(), appName: brief.app_name || "Untitled", date: new Date().toLocaleString("vi-VN"), thumbnail, count: generated.length });
       };
       reader.readAsDataURL(blob);
       setStep("preview");
@@ -466,16 +480,11 @@ export default function Home() {
                   {h.thumbnail && <img src={h.thumbnail} alt="" className="w-full h-24 object-cover"/>}
                   <div className="p-3">
                     <div className="font-semibold text-sm truncate" style={{color: t.text}}>{h.appName || "Untitled"}</div>
-                    <div className="text-xs mb-3" style={{color: t.textMuted}}>{h.date} · {h.previews.length} ảnh</div>
+                    <div className="text-xs mb-3" style={{color: t.textMuted}}>{h.date} · {h.count} ảnh</div>
                     <div className="flex gap-2">
-                      <button onClick={() => { setPreviews(h.previews); setZipBase64(h.zipBase64); setStep("preview"); setSidebarOpen(false); }}
-                        className="flex-1 text-xs py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-all font-medium">
-                        Xem lại
-                      </button>
-                      <button onClick={() => { const a=document.createElement("a"); a.href=`data:application/zip;base64,${h.zipBase64}`; a.download=`${h.appName||"banners"}.zip`; a.click(); }}
-                        className="text-xs px-3 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
-                        ⬇
-                      </button>
+                      <div className="flex-1 text-xs py-1.5 rounded-lg text-center" style={{backgroundColor: t.tabBg, color: t.textMuted}}>
+                        {h.count} banners đã tạo
+                      </div>
                       <button onClick={() => deleteHistory(h.id)}
                         className="text-xs px-2.5 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
                         🗑
