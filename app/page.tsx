@@ -80,6 +80,12 @@ export default function Home() {
   const iconInputRef = useRef<HTMLInputElement>(null);
 
   const [bgColor, setBgColor] = useState("#F8FAFC");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|null>(null);
+  const [compQuery, setCompQuery] = useState("");
+  const [compLoading, setCompLoading] = useState(false);
+  const [compResult, setCompResult] = useState<Record<string, unknown> | null>(null);
+  const [compError, setCompError] = useState("");
   const PRESETS = [
     { color: "#0A0A0F", label: "Dark" },
     { color: "#0F172A", label: "Navy" },
@@ -213,8 +219,140 @@ export default function Home() {
   const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text };
   const labelStyle = { color: t.textMuted };
 
+  const handleCompetitorSearch = async () => {
+    if (!compQuery.trim()) return;
+    setCompLoading(true); setCompError(""); setCompResult(null);
+    try {
+      const res = await fetch("/api/competitor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: compQuery.trim() }) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      setCompResult(data);
+    } catch (e) { setCompError(String(e)); }
+    finally { setCompLoading(false); }
+  };
+
+  // Helper to render competitor creatives
+  const renderCompResult = () => {
+    if (!compResult) return null;
+    const creatives = (compResult.creatives as { creatives?: unknown[] } | null)?.creatives || [];
+    const details = compResult.details as { name?: string; icon_url?: string; publisher_name?: string; global_rating_count?: number } | null;
+    const network = compResult.network as { data?: { date: string; networks: { name: string; sov: number }[] }[] } | null;
+    return (
+      <div className="space-y-4 mt-4">
+        {details && (
+          <div className="flex items-center gap-3 p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.card}}>
+            {details.icon_url && <img src={details.icon_url} alt="" className="w-10 h-10 rounded-xl"/>}
+            <div>
+              <div className="font-semibold text-sm" style={{color: t.text}}>{details.name}</div>
+              <div className="text-xs" style={{color: t.textMuted}}>{details.publisher_name}</div>
+              {details.global_rating_count && <div className="text-xs" style={{color: t.textMuted}}>⭐ {Number(details.global_rating_count).toLocaleString()} ratings</div>}
+            </div>
+          </div>
+        )}
+        {network?.data && network.data.length > 0 && (
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>Ad Networks (Share of Voice)</div>
+            {network.data.slice(-1)[0]?.networks?.slice(0,5).map((n: {name:string;sov:number}, i: number) => (
+              <div key={i} className="flex items-center gap-2 mb-1.5">
+                <div className="text-xs w-24 truncate" style={{color: t.textSub}}>{n.name}</div>
+                <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{backgroundColor: t.progress}}>
+                  <div className="h-full bg-violet-500 rounded-full" style={{width:`${Math.min(n.sov*100,100)}%`}}/>
+                </div>
+                <div className="text-xs w-10 text-right" style={{color: t.textMuted}}>{(n.sov*100).toFixed(1)}%</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {creatives.length > 0 ? (
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>{creatives.length} Ad Creatives</div>
+            <div className="grid grid-cols-2 gap-2">
+              {(creatives as Array<{preview_url?:string;ad_type?:string;first_seen_date?:string;last_seen_date?:string;impression_share?:number}>).slice(0,6).map((c, i) => (
+                <div key={i} className="rounded-xl overflow-hidden border" style={{borderColor: t.border}}>
+                  {c.preview_url ? (
+                    <img src={c.preview_url} alt="" className="w-full aspect-video object-cover"/>
+                  ) : (
+                    <div className="w-full aspect-video flex items-center justify-center text-xs" style={{backgroundColor: t.tabBg, color: t.textMuted}}>No preview</div>
+                  )}
+                  <div className="p-2 space-y-0.5" style={{backgroundColor: t.card}}>
+                    <div className="text-xs font-medium capitalize" style={{color: t.text}}>{c.ad_type || "Display"}</div>
+                    {c.first_seen_date && <div className="text-xs" style={{color: t.textMuted}}>First: {c.first_seen_date}</div>}
+                    {c.last_seen_date && <div className="text-xs" style={{color: t.textMuted}}>Last: {c.last_seen_date}</div>}
+                    {c.impression_share !== undefined && <div className="text-xs" style={{color: t.textMuted}}>SOV: {(c.impression_share*100).toFixed(1)}%</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-center py-4" style={{color: t.textMuted}}>Không có dữ liệu ad creatives<br/>(Cần SensorTower Ad Intelligence plan)</div>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="min-h-screen" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
+    <div className="min-h-screen flex" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
+
+      {/* Left Sidebar */}
+      <aside className="fixed top-0 left-0 h-full z-40 flex">
+        {/* Icon rail */}
+        <div className="flex flex-col items-center py-4 gap-2 border-r w-14" style={{backgroundColor: t.card, borderColor: t.border}}>
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center mb-4">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="5" rx="1" fill="white" opacity="0.9"/><rect x="9" y="1" width="6" height="8" rx="1" fill="white" opacity="0.6"/><rect x="1" y="8" width="6" height="7" rx="1" fill="white" opacity="0.6"/><rect x="9" y="11" width="6" height="4" rx="1" fill="white" opacity="0.4"/></svg>
+          </div>
+          <button title="Competitor Ads" onClick={() => { setActiveSidebarTool("competitor"); setSidebarOpen(true); }}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all border"
+            style={activeSidebarTool==="competitor"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
+            🔍
+          </button>
+        </div>
+
+        {/* Slide-out panel */}
+        {sidebarOpen && activeSidebarTool === "competitor" && (
+          <div className="h-full w-80 border-r overflow-y-auto flex flex-col" style={{backgroundColor: bgColor, borderColor: t.border}}>
+            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{backgroundColor: bgColor, borderColor: t.border}}>
+              <div>
+                <div className="text-sm font-semibold" style={{color: t.text}}>🔍 Competitor Ads</div>
+                <div className="text-xs" style={{color: t.textMuted}}>Tra cứu quảng cáo đối thủ</div>
+              </div>
+              <button onClick={() => setSidebarOpen(false)} className="text-lg leading-none" style={{color: t.textMuted}}>✕</button>
+            </div>
+            <div className="p-4 flex-1">
+              <div className="text-xs mb-2" style={{color: t.textMuted}}>Nhập link App Store / Play Store hoặc tên app</div>
+              <div className="flex gap-2">
+                <input value={compQuery} onChange={e => setCompQuery(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleCompetitorSearch()}
+                  placeholder="https://apps.apple.com/..."
+                  className="flex-1 text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
+                  style={inputStyle}/>
+                <button onClick={handleCompetitorSearch} disabled={compLoading}
+                  className="bg-violet-600 hover:bg-violet-500 text-white text-xs px-3 py-2 rounded-lg transition-all disabled:opacity-50 font-medium">
+                  {compLoading ? "..." : "Search"}
+                </button>
+              </div>
+              {compError && <div className="text-xs mt-2 text-red-400">{compError}</div>}
+              {renderCompResult()}
+              {!compResult && !compError && !compLoading && (
+                <div className="mt-6 space-y-2">
+                  <div className="text-xs font-semibold" style={{color: t.textMuted}}>Ví dụ</div>
+                  {["https://apps.apple.com/us/app/canva/id897446215","https://play.google.com/store/apps/details?id=com.canva.editor"].map(ex => (
+                    <button key={ex} onClick={() => { setCompQuery(ex); }}
+                      className="w-full text-left text-xs px-3 py-2 rounded-lg border transition-colors truncate"
+                      style={{borderColor: t.border, color: t.textMuted}}>
+                      {ex.includes("apple") ? "🍎" : "🤖"} {ex.split("/").pop()?.slice(0,40)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </aside>
+
+      {/* Main content — push right when sidebar open */}
+      <div className="flex-1 flex flex-col transition-all" style={{marginLeft: sidebarOpen ? "calc(3.5rem + 20rem)" : "3.5rem"}}>
+
       {/* Header */}
       <header className="border-b px-6 py-4 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="flex items-center gap-3">
@@ -582,6 +720,7 @@ export default function Home() {
           </div>
         </div>
       )}
+      </div>{/* end main content */}
     </div>
   );
 }
