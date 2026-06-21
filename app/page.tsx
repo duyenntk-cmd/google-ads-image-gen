@@ -86,6 +86,9 @@ export default function Home() {
   const [compLoading, setCompLoading] = useState(false);
   const [compResult, setCompResult] = useState<Record<string, unknown> | null>(null);
   const [compError, setCompError] = useState("");
+  const [compAppName, setCompAppName] = useState("");
+  const [compAppIcon, setCompAppIcon] = useState("");
+  const [compNameLoading, setCompNameLoading] = useState(false);
   const PRESETS = [
     { color: "#0A0A0F", label: "Dark" },
     { color: "#0F172A", label: "Navy" },
@@ -263,6 +266,26 @@ export default function Home() {
     finally { setCompLoading(false); }
   };
 
+  const lookupAppNamePreview = async (url: string) => {
+    const { name, iosId, androidPkg } = extractAppName(url);
+    setCompAppName(name); setCompAppIcon("");
+    if (!iosId && !androidPkg) return;
+    setCompNameLoading(true);
+    try {
+      if (iosId) {
+        const res = await fetch(`https://itunes.apple.com/lookup?id=${iosId}`);
+        const data = await res.json();
+        const app = data.results?.[0];
+        if (app?.trackName) { setCompAppName(app.trackName); setCompAppIcon(app.artworkUrl60 || ""); }
+      } else if (androidPkg) {
+        const res = await fetch("/api/app-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ packageId: androidPkg }) });
+        const data = await res.json();
+        if (data.name) setCompAppName(data.name);
+      }
+    } catch { /* giữ tên từ URL */ }
+    finally { setCompNameLoading(false); }
+  };
+
   // Helper to render competitor creatives — unused now but kept for future
   const renderCompResult = () => {
     if (!compResult) return null;
@@ -352,24 +375,38 @@ export default function Home() {
             </div>
             <div className="p-4 flex-1">
               <div className="text-xs mb-2" style={{color: t.textMuted}}>Nhập link App Store hoặc Play Store</div>
-              <input value={compQuery} onChange={e => setCompQuery(e.target.value)}
+              <input value={compQuery} onChange={e => {
+                const val = e.target.value;
+                setCompQuery(val); setCompAppName(""); setCompAppIcon("");
+                if (val.trim().startsWith("http")) lookupAppNamePreview(val.trim());
+              }}
                 placeholder="https://apps.apple.com/..."
                 className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
                 style={inputStyle}/>
-              {compQuery.trim() && (() => {
-                const { name } = extractAppName(compQuery.trim());
-                return (
-                  <div className="mt-3 p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.card}}>
-                    {name && <><div className="text-xs mb-1" style={{color: t.textMuted}}>Tên app nhận diện:</div>
-                    <div className="text-sm font-semibold mb-3" style={{color: t.text}}>"{name}"</div></>}
-                    <button onClick={handleCompetitorSearch} disabled={compLoading}
-                      className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
-                      {compLoading ? <><span className="animate-spin">⏳</span> Đang tra cứu...</> : <>🔎 Xem quảng cáo trên Google</>}
-                    </button>
-                    <div className="text-xs mt-2 text-center" style={{color: t.textMuted}}>Mở Google Ads Transparency Center</div>
-                  </div>
-                );
-              })()}
+
+              {/* App name preview */}
+              {compQuery.trim().startsWith("http") && (
+                <div className="mt-2 flex items-center gap-2 px-1">
+                  {compNameLoading ? (
+                    <span className="text-xs" style={{color: t.textMuted}}>⏳ Đang nhận diện app...</span>
+                  ) : compAppName ? (
+                    <>
+                      {compAppIcon && <img src={compAppIcon} alt="" className="w-7 h-7 rounded-lg flex-shrink-0"/>}
+                      <span className="text-xs font-semibold truncate" style={{color: t.text}}>{compAppName}</span>
+                    </>
+                  ) : null}
+                </div>
+              )}
+
+              {compQuery.trim() && (
+                <div className="mt-3 p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.card}}>
+                  <button onClick={handleCompetitorSearch} disabled={compLoading || compNameLoading}
+                    className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
+                    {compLoading ? <><span>⏳</span> Đang mở...</> : <>🔎 Xem quảng cáo trên Google</>}
+                  </button>
+                  <div className="text-xs mt-2 text-center" style={{color: t.textMuted}}>Mở Google Ads Transparency Center</div>
+                </div>
+              )}
               <div className="mt-6 space-y-2">
                 <div className="text-xs font-semibold" style={{color: t.textMuted}}>Ví dụ</div>
                 {["https://apps.apple.com/us/app/canva/id897446215","https://play.google.com/store/apps/details?id=com.canva.editor"].map(ex => (
