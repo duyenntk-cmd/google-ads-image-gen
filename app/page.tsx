@@ -239,13 +239,21 @@ export default function Home() {
     try {
       const { name, iosId, androidPkg } = extractAppName(compQuery.trim());
       let finalName = name;
+
       if (iosId) {
         try {
           const res = await fetch(`https://itunes.apple.com/lookup?id=${iosId}`);
           const data = await res.json();
           if (data.results?.[0]?.trackName) finalName = data.results[0].trackName;
         } catch { /* dùng tên từ URL */ }
+      } else if (androidPkg) {
+        try {
+          const res = await fetch("/api/app-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ packageId: androidPkg }) });
+          const data = await res.json();
+          if (data.name) finalName = data.name;
+        } catch { /* dùng tên từ package */ }
       }
+
       if (!finalName || finalName.length < 3) {
         finalName = androidPkg?.split(".").pop()?.replace(/_/g, " ") || compQuery.trim();
       }
