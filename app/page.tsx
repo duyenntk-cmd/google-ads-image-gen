@@ -38,23 +38,72 @@ const LANGUAGES = [
 ];
 
 const COUNTRIES = [
-  { code: "Global",      label: "🌍 Global (Universal)" },
-  { code: "Vietnam",     label: "🇻🇳 Vietnam" },
-  { code: "Indonesia",   label: "🇮🇩 Indonesia" },
-  { code: "Thailand",    label: "🇹🇭 Thailand" },
-  { code: "Philippines", label: "🇵🇭 Philippines" },
-  { code: "Malaysia",    label: "🇲🇾 Malaysia" },
-  { code: "India",       label: "🇮🇳 India" },
-  { code: "Japan",       label: "🇯🇵 Japan" },
-  { code: "Korea",       label: "🇰🇷 South Korea" },
-  { code: "China",       label: "🇨🇳 China" },
-  { code: "USA",         label: "🇺🇸 United States" },
-  { code: "Brazil",      label: "🇧🇷 Brazil" },
-  { code: "Mexico",      label: "🇲🇽 Mexico" },
-  { code: "Saudi Arabia",label: "🇸🇦 Saudi Arabia" },
-  { code: "Germany",     label: "🇩🇪 Germany" },
-  { code: "France",      label: "🇫🇷 France" },
-  { code: "Russia",      label: "🇷🇺 Russia" },
+  { code: "Global",           label: "🌍 Global (Universal)" },
+  // Southeast Asia
+  { code: "Vietnam",          label: "🇻🇳 Vietnam" },
+  { code: "Indonesia",        label: "🇮🇩 Indonesia" },
+  { code: "Thailand",         label: "🇹🇭 Thailand" },
+  { code: "Philippines",      label: "🇵🇭 Philippines" },
+  { code: "Malaysia",         label: "🇲🇾 Malaysia" },
+  { code: "Singapore",        label: "🇸🇬 Singapore" },
+  { code: "Myanmar",          label: "🇲🇲 Myanmar" },
+  { code: "Cambodia",         label: "🇰🇭 Cambodia" },
+  // East Asia
+  { code: "Japan",            label: "🇯🇵 Japan" },
+  { code: "South Korea",      label: "🇰🇷 South Korea" },
+  { code: "China",            label: "🇨🇳 China" },
+  { code: "Taiwan",           label: "🇹🇼 Taiwan" },
+  { code: "Hong Kong",        label: "🇭🇰 Hong Kong" },
+  // South Asia
+  { code: "India",            label: "🇮🇳 India" },
+  { code: "Pakistan",         label: "🇵🇰 Pakistan" },
+  { code: "Bangladesh",       label: "🇧🇩 Bangladesh" },
+  { code: "Sri Lanka",        label: "🇱🇰 Sri Lanka" },
+  // Middle East
+  { code: "Saudi Arabia",     label: "🇸🇦 Saudi Arabia" },
+  { code: "UAE",              label: "🇦🇪 UAE" },
+  { code: "Egypt",            label: "🇪🇬 Egypt" },
+  { code: "Turkey",           label: "🇹🇷 Turkey" },
+  { code: "Israel",           label: "🇮🇱 Israel" },
+  { code: "Iraq",             label: "🇮🇶 Iraq" },
+  // North America
+  { code: "USA",              label: "🇺🇸 United States" },
+  { code: "Canada",           label: "🇨🇦 Canada" },
+  { code: "Mexico",           label: "🇲🇽 Mexico" },
+  // Latin America
+  { code: "Brazil",           label: "🇧🇷 Brazil" },
+  { code: "Argentina",        label: "🇦🇷 Argentina" },
+  { code: "Colombia",         label: "🇨🇴 Colombia" },
+  { code: "Chile",            label: "🇨🇱 Chile" },
+  { code: "Peru",             label: "🇵🇪 Peru" },
+  // Europe
+  { code: "Germany",          label: "🇩🇪 Germany" },
+  { code: "France",           label: "🇫🇷 France" },
+  { code: "United Kingdom",   label: "🇬🇧 United Kingdom" },
+  { code: "Italy",            label: "🇮🇹 Italy" },
+  { code: "Spain",            label: "🇪🇸 Spain" },
+  { code: "Netherlands",      label: "🇳🇱 Netherlands" },
+  { code: "Poland",           label: "🇵🇱 Poland" },
+  { code: "Sweden",           label: "🇸🇪 Sweden" },
+  { code: "Norway",           label: "🇳🇴 Norway" },
+  { code: "Denmark",          label: "🇩🇰 Denmark" },
+  { code: "Finland",          label: "🇫🇮 Finland" },
+  { code: "Belgium",          label: "🇧🇪 Belgium" },
+  { code: "Switzerland",      label: "🇨🇭 Switzerland" },
+  { code: "Austria",          label: "🇦🇹 Austria" },
+  { code: "Portugal",         label: "🇵🇹 Portugal" },
+  { code: "Greece",           label: "🇬🇷 Greece" },
+  { code: "Ukraine",          label: "🇺🇦 Ukraine" },
+  { code: "Russia",           label: "🇷🇺 Russia" },
+  // Oceania
+  { code: "Australia",        label: "🇦🇺 Australia" },
+  { code: "New Zealand",      label: "🇳🇿 New Zealand" },
+  // Africa
+  { code: "Nigeria",          label: "🇳🇬 Nigeria" },
+  { code: "South Africa",     label: "🇿🇦 South Africa" },
+  { code: "Kenya",            label: "🇰🇪 Kenya" },
+  { code: "Ethiopia",         label: "🇪🇹 Ethiopia" },
+  { code: "Ghana",            label: "🇬🇭 Ghana" },
 ];
 
 export default function Home() {
@@ -109,6 +158,9 @@ export default function Home() {
   const [compAppName, setCompAppName] = useState("");
   const [compAppIcon, setCompAppIcon] = useState("");
   const [compNameLoading, setCompNameLoading] = useState(false);
+  const [countrySearch, setCountrySearch] = useState("");
+  const [countryOpen, setCountryOpen] = useState(false);
+  const countryRef = useRef<HTMLDivElement>(null);
   const PRESETS = [
     { color: "#0A0A0F", label: "Dark" },
     { color: "#0F172A", label: "Navy" },
@@ -587,11 +639,34 @@ export default function Home() {
                 <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={labelStyle}>
                   🎯 Thị trường mục tiêu
                 </label>
-                <select value={country} onChange={e => setCountry(e.target.value)}
-                  className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500 transition-colors"
-                  style={{...inputStyle, borderColor: t.inputBorder}}>
-                  {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
-                </select>
+                <div ref={countryRef} className="relative">
+                  <button type="button" onClick={() => { setCountryOpen(o => !o); setCountrySearch(""); }}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none focus:border-violet-500 transition-colors"
+                    style={{...inputStyle, borderColor: countryOpen ? "#7C3AED" : t.inputBorder}}>
+                    <span>{COUNTRIES.find(c => c.code === country)?.label || country}</span>
+                    <span className="text-xs ml-2" style={{color: t.textMuted}}>{countryOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {countryOpen && (
+                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                      <div className="p-2 border-b" style={{borderColor: t.border}}>
+                        <input autoFocus value={countrySearch} onChange={e => setCountrySearch(e.target.value)}
+                          placeholder="🔍 Tìm quốc gia..."
+                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
+                          style={inputStyle}/>
+                      </div>
+                      <div className="max-h-52 overflow-y-auto">
+                        {COUNTRIES.filter(c => c.label.toLowerCase().includes(countrySearch.toLowerCase()) || c.code.toLowerCase().includes(countrySearch.toLowerCase())).map(c => (
+                          <button key={c.code} type="button"
+                            onClick={() => { setCountry(c.code); setCountryOpen(false); setCountrySearch(""); }}
+                            className="w-full text-left px-4 py-2 text-sm transition-colors"
+                            style={{backgroundColor: country === c.code ? "#7C3AED22" : "transparent", color: country === c.code ? "#A78BFA" : t.text}}>
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <p className="text-xs mt-1.5" style={{color: t.textMuted}}>AI điều chỉnh màu sắc, tone & style phù hợp thị trường</p>
               </div>
             </div>
