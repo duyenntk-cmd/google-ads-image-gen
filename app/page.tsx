@@ -122,7 +122,9 @@ export default function Home() {
   const [zipBase64, setZipBase64] = useState("");
   const [error, setError] = useState("");
   const [inpainting, setInpainting] = useState(false);
-  const [activeTab, setActiveTab] = useState<"top5"|"all">("top5");
+  const [activeTab, setActiveTab] = useState<"top5"|"all"|"device">("top5");
+  const [deviceType, setDeviceType] = useState<"phone"|"tablet">("phone");
+  const [devicePreviewIndex, setDevicePreviewIndex] = useState(0);
   const [selectedPreview, setSelectedPreview] = useState<Preview|null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -912,15 +914,113 @@ export default function Home() {
               </button>
             </div>
             <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
-              {(["top5","all"] as const).map(tab=>(
+              {([["top5","⭐ Top 5"],["all",`Tất cả (${previews.length})`],["device","📱 Device Preview"]] as const).map(([tab,label])=>(
                 <button key={tab} onClick={()=>setActiveTab(tab)}
                   className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
                   style={activeTab===tab ? {backgroundColor: t.tabActive, color: t.text} : {color: t.textMuted}}>
-                  {tab==="top5"?"⭐ Top 5":`Tất cả (${previews.length})`}
+                  {label}
                 </button>
               ))}
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {/* Device Preview Tab */}
+            {activeTab === "device" && (() => {
+              const allP = previews;
+              const cur = allP[devicePreviewIndex] || allP[0];
+              const isPortrait = cur && cur.height > cur.width;
+              const isSquare = cur && cur.width === cur.height;
+              return (
+                <div className="space-y-6">
+                  {/* Device selector */}
+                  <div className="flex items-center gap-3">
+                    {(["phone","tablet"] as const).map(d => (
+                      <button key={d} onClick={() => setDeviceType(d)}
+                        className="px-4 py-1.5 rounded-lg text-sm font-medium border transition-all"
+                        style={deviceType===d ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {borderColor:t.border,color:t.textMuted}}>
+                        {d==="phone"?"📱 Phone":"📟 Tablet"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-col lg:flex-row gap-8 items-start">
+                    {/* Mockup */}
+                    <div className="flex-shrink-0 flex flex-col items-center gap-4">
+                      {/* Phone frame */}
+                      {deviceType === "phone" ? (
+                        <div className="relative rounded-[2.5rem] border-[6px] shadow-2xl overflow-hidden flex-shrink-0"
+                          style={{width:220, height:440, borderColor: isDark?"#334155":"#1E293B", backgroundColor:"#0F172A"}}>
+                          {/* Notch */}
+                          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-20 h-5 rounded-b-xl z-10" style={{backgroundColor: isDark?"#334155":"#1E293B"}}/>
+                          {/* Screen */}
+                          <div className="w-full h-full overflow-hidden flex flex-col" style={{backgroundColor:"#F8FAFC"}}>
+                            {/* Status bar */}
+                            <div className="flex items-center justify-between px-5 pt-6 pb-1 text-xs font-medium" style={{color:"#0F172A"}}>
+                              <span>9:41</span><span>●●●</span>
+                            </div>
+                            {/* App-like content above ad */}
+                            <div className="flex-1 px-2 py-1 space-y-1.5 overflow-hidden">
+                              {[80,60,70].map((w,i)=>(
+                                <div key={i} className="h-2 rounded-full" style={{width:`${w}%`,backgroundColor:"#E2E8F0"}}/>
+                              ))}
+                              <div className="h-16 rounded-lg mt-2" style={{backgroundColor:"#E2E8F0"}}/>
+                              <div className="h-2 rounded-full w-4/5" style={{backgroundColor:"#E2E8F0"}}/>
+                              <div className="h-2 rounded-full w-3/5" style={{backgroundColor:"#E2E8F0"}}/>
+                            </div>
+                            {/* Ad banner at bottom */}
+                            {cur && (
+                              <div className="relative mx-1 mb-1 overflow-hidden rounded-lg shadow" style={{flexShrink:0}}>
+                                <div className="absolute top-0.5 right-0.5 text-xs bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
+                                <img src={cur.dataUrl} alt="" className="w-full object-cover" style={{maxHeight: isPortrait?180:80}}/>
+                              </div>
+                            )}
+                          </div>
+                          {/* Home bar */}
+                          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-16 h-1 rounded-full" style={{backgroundColor:"#334155"}}/>
+                        </div>
+                      ) : (
+                        /* Tablet frame */
+                        <div className="relative rounded-[1.5rem] border-[6px] shadow-2xl overflow-hidden"
+                          style={{width:320, height:440, borderColor: isDark?"#334155":"#1E293B", backgroundColor:"#0F172A"}}>
+                          <div className="w-full h-full overflow-hidden flex flex-col" style={{backgroundColor:"#F8FAFC"}}>
+                            <div className="flex items-center justify-between px-4 pt-3 pb-1 text-xs font-medium" style={{color:"#0F172A"}}>
+                              <span>9:41</span><span>●●● 100%</span>
+                            </div>
+                            <div className="flex-1 px-3 py-2 grid grid-cols-2 gap-2 overflow-hidden">
+                              {[1,2,3,4].map(i=>(
+                                <div key={i} className="rounded-lg" style={{backgroundColor:"#E2E8F0",height:80}}/>
+                              ))}
+                            </div>
+                            {cur && (
+                              <div className="relative mx-2 mb-2 overflow-hidden rounded-lg shadow">
+                                <div className="absolute top-0.5 right-0.5 text-xs bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
+                                <img src={cur.dataUrl} alt="" className="w-full object-cover" style={{maxHeight: isPortrait?200:100}}/>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      <div className="text-xs text-center" style={{color:t.textMuted}}>
+                        {cur?.label} · {cur?.width}×{cur?.height}px
+                      </div>
+                    </div>
+
+                    {/* Banner selector list */}
+                    <div className="flex-1 grid grid-cols-2 gap-2 max-h-96 overflow-y-auto pr-1">
+                      {allP.map((p,i) => (
+                        <button key={p.key} onClick={() => setDevicePreviewIndex(i)}
+                          className="rounded-lg border p-2 text-left transition-all"
+                          style={{borderColor: devicePreviewIndex===i?"#7C3AED":t.border, backgroundColor: devicePreviewIndex===i?"#7C3AED11":t.card}}>
+                          <img src={p.dataUrl} alt="" className="w-full rounded mb-1 object-cover" style={{height:40}}/>
+                          <div className="text-xs font-medium truncate" style={{color: devicePreviewIndex===i?"#A78BFA":t.text}}>{p.key}</div>
+                          <div className="text-xs truncate" style={{color:t.textMuted}}>{p.width}×{p.height}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Banner grid */}
+            {activeTab !== "device" && <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               {displayedPreviews.map(p=>{
                 const scale=Math.min(1,340/Math.max(p.width,p.height));
                 return (
@@ -946,7 +1046,7 @@ export default function Home() {
                   </div>
                 );
               })}
-            </div>
+            </div>}
           </div>
         )}
       </main>
