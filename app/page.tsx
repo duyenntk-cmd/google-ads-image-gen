@@ -81,7 +81,27 @@ export default function Home() {
 
   const [bgColor, setBgColor] = useState("#F8FAFC");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|null>(null);
+  const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|null>(null);
+
+  interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; previews: Preview[]; zipBase64: string; }
+  const [history, setHistory] = useState<HistoryItem[]>(() => {
+    if (typeof window === "undefined") return [];
+    try { return JSON.parse(localStorage.getItem("banner_history") || "[]"); } catch { return []; }
+  });
+  const saveHistory = (item: HistoryItem) => {
+    setHistory(prev => {
+      const next = [item, ...prev].slice(0, 20);
+      try { localStorage.setItem("banner_history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  const deleteHistory = (id: string) => {
+    setHistory(prev => {
+      const next = prev.filter(h => h.id !== id);
+      try { localStorage.setItem("banner_history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
   const [compQuery, setCompQuery] = useState("");
   const [compLoading, setCompLoading] = useState(false);
   const [compResult, setCompResult] = useState<Record<string, unknown> | null>(null);
@@ -208,7 +228,12 @@ export default function Home() {
       }
       const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
       const reader = new FileReader();
-      reader.onload = () => setZipBase64((reader.result as string).split(",")[1]);
+      reader.onload = () => {
+        const zip64 = (reader.result as string).split(",")[1];
+        setZipBase64(zip64);
+        const thumbnail = generated.find(p => p.isTop5)?.dataUrl || generated[0]?.dataUrl || "";
+        saveHistory({ id: Date.now().toString(), appName: brief.app_name || "Untitled", date: new Date().toLocaleString("vi-VN"), thumbnail, previews: generated, zipBase64: zip64 });
+      };
       reader.readAsDataURL(blob);
       setStep("preview");
     } catch(e) { setError(String(e)); setStep("brief"); }
@@ -361,9 +386,53 @@ export default function Home() {
             style={activeSidebarTool==="competitor"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
             🔍
           </button>
+          <button title="Lịch sử gen banner" onClick={() => { setActiveSidebarTool("history"); setSidebarOpen(true); }}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all border"
+            style={activeSidebarTool==="history"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
+            🕐
+          </button>
         </div>
 
         {/* Slide-out panel */}
+        {sidebarOpen && activeSidebarTool === "history" && (
+          <div className="h-full w-80 border-r overflow-y-auto flex flex-col" style={{backgroundColor: bgColor, borderColor: t.border}}>
+            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{backgroundColor: bgColor, borderColor: t.border}}>
+              <div>
+                <div className="text-sm font-semibold" style={{color: t.text}}>🕐 Lịch sử gen banner</div>
+                <div className="text-xs" style={{color: t.textMuted}}>{history.length} lần tạo gần đây</div>
+              </div>
+              <button onClick={() => setSidebarOpen(false)} className="text-lg leading-none" style={{color: t.textMuted}}>✕</button>
+            </div>
+            <div className="p-4 flex-1 space-y-3">
+              {history.length === 0 ? (
+                <div className="text-center py-10 text-xs" style={{color: t.textMuted}}>Chưa có lịch sử.<br/>Gen banner đầu tiên để lưu ở đây.</div>
+              ) : history.map(h => (
+                <div key={h.id} className="rounded-xl border overflow-hidden" style={{borderColor: t.border, backgroundColor: t.card}}>
+                  {h.thumbnail && <img src={h.thumbnail} alt="" className="w-full h-24 object-cover"/>}
+                  <div className="p-3">
+                    <div className="font-semibold text-sm truncate" style={{color: t.text}}>{h.appName || "Untitled"}</div>
+                    <div className="text-xs mb-3" style={{color: t.textMuted}}>{h.date} · {h.previews.length} ảnh</div>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setPreviews(h.previews); setZipBase64(h.zipBase64); setStep("preview"); setSidebarOpen(false); }}
+                        className="flex-1 text-xs py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-all font-medium">
+                        Xem lại
+                      </button>
+                      <button onClick={() => { const a=document.createElement("a"); a.href=`data:application/zip;base64,${h.zipBase64}`; a.download=`${h.appName||"banners"}.zip`; a.click(); }}
+                        className="text-xs px-3 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
+                        ⬇
+                      </button>
+                      <button onClick={() => deleteHistory(h.id)}
+                        className="text-xs px-2.5 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
+                        🗑
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {sidebarOpen && activeSidebarTool === "competitor" && (
           <div className="h-full w-80 border-r overflow-y-auto flex flex-col" style={{backgroundColor: bgColor, borderColor: t.border}}>
             <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{backgroundColor: bgColor, borderColor: t.border}}>
