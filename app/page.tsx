@@ -161,6 +161,9 @@ export default function Home() {
   const [countrySearch, setCountrySearch] = useState("");
   const [countryOpen, setCountryOpen] = useState(false);
   const countryRef = useRef<HTMLDivElement>(null);
+  const [langSearch, setLangSearch] = useState("");
+  const [langOpen, setLangOpen] = useState(false);
+  const langRef = useRef<HTMLDivElement>(null);
   const PRESETS = [
     { color: "#0A0A0F", label: "Dark" },
     { color: "#0F172A", label: "Navy" },
@@ -628,11 +631,34 @@ export default function Home() {
                 <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={labelStyle}>
                   🌐 Ngôn ngữ text trong ảnh
                 </label>
-                <select value={language} onChange={e => setLanguage(e.target.value)}
-                  className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500 transition-colors"
-                  style={{...inputStyle, borderColor: t.inputBorder}}>
-                  {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
+                <div ref={langRef} className="relative">
+                  <button type="button" onClick={() => { setLangOpen(o => !o); setLangSearch(""); }}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
+                    style={{...inputStyle, borderColor: langOpen ? "#7C3AED" : t.inputBorder}}>
+                    <span>{LANGUAGES.find(l => l.code === language)?.label || language}</span>
+                    <span className="text-xs ml-2" style={{color: t.textMuted}}>{langOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {langOpen && (
+                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                      <div className="p-2 border-b" style={{borderColor: t.border}}>
+                        <input autoFocus value={langSearch} onChange={e => setLangSearch(e.target.value)}
+                          placeholder="🔍 Tìm ngôn ngữ..."
+                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
+                          style={inputStyle}/>
+                      </div>
+                      <div className="max-h-52 overflow-y-auto">
+                        {LANGUAGES.filter(l => l.label.toLowerCase().includes(langSearch.toLowerCase()) || l.code.toLowerCase().includes(langSearch.toLowerCase())).map(l => (
+                          <button key={l.code} type="button"
+                            onClick={() => { setLanguage(l.code); setLangOpen(false); setLangSearch(""); }}
+                            className="w-full text-left px-4 py-2 text-sm transition-colors"
+                            style={{backgroundColor: language === l.code ? "#7C3AED22" : "transparent", color: language === l.code ? "#A78BFA" : t.text}}>
+                            {l.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <p className="text-xs mt-1.5" style={{color: t.textMuted}}>Headline, subheadline, CTA sẽ được viết bằng ngôn ngữ này</p>
               </div>
               <div>
