@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
 import { generateAllBanners } from "@/lib/canvasGen";
@@ -133,10 +133,10 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|null>(null);
 
   interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; previews: Preview[]; zipBase64: string; }
-  const [history, setHistory] = useState<HistoryItem[]>(() => {
-    if (typeof window === "undefined") return [];
-    try { return JSON.parse(localStorage.getItem("banner_history") || "[]"); } catch { return []; }
-  });
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  useEffect(() => {
+    try { setHistory(JSON.parse(localStorage.getItem("banner_history") || "[]")); } catch {}
+  }, []);
   const saveHistory = (item: HistoryItem) => {
     setHistory(prev => {
       const next = [item, ...prev].slice(0, 20);
