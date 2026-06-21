@@ -260,7 +260,7 @@ export default function Home() {
       if (!finalName || finalName.length < 3) {
         finalName = androidPkg?.split(".").pop()?.replace(/_/g, " ") || compQuery.trim();
       }
-      const transparencyUrl = `https://adstransparency.google.com/advertiser/search?query=${encodeURIComponent(finalName)}`;
+      const transparencyUrl = `https://adstransparency.google.com/?region=anywhere&query=${encodeURIComponent(finalName)}`;
       window.open(transparencyUrl, "_blank");
     } catch { setCompError("Không thể tra cứu tên app."); }
     finally { setCompLoading(false); }
