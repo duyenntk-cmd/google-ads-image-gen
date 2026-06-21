@@ -219,24 +219,40 @@ export default function Home() {
   const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text };
   const labelStyle = { color: t.textMuted };
 
-  const extractAppName = (url: string): string => {
-    // App Store: .../app/APP-NAME/id123 → lấy APP-NAME
-    const iosMatch = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id\d+/);
-    if (iosMatch) return iosMatch[1].replace(/-/g, " ");
-    // Play Store: id=com.example.myapp → lấy phần cuối "myapp"
+  const extractAppName = (url: string): { name: string; iosId?: string; androidPkg?: string } => {
+    const iosSlugMatch = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id(\d+)/);
+    if (iosSlugMatch) return { name: iosSlugMatch[1].replace(/-/g, " "), iosId: iosSlugMatch[2] };
+    const iosIdOnly = url.match(/apps\.apple\.com.*\/id(\d+)/);
+    if (iosIdOnly) return { name: "", iosId: iosIdOnly[1] };
     const androidMatch = url.match(/id=([a-zA-Z0-9._]+)/);
     if (androidMatch) {
-      const parts = androidMatch[1].split(".");
-      return parts[parts.length - 1].replace(/_/g, " ");
+      const pkg = androidMatch[1];
+      const parts = pkg.split(".");
+      return { name: parts[parts.length - 1].replace(/_/g, " "), androidPkg: pkg };
     }
-    return url.trim();
+    return { name: url.trim() };
   };
 
-  const handleCompetitorSearch = () => {
+  const handleCompetitorSearch = async () => {
     if (!compQuery.trim()) return;
-    const appName = extractAppName(compQuery.trim());
-    const transparencyUrl = `https://adstransparency.google.com/?region=anywhere&query=${encodeURIComponent(appName)}`;
-    window.open(transparencyUrl, "_blank");
+    setCompLoading(true); setCompError("");
+    try {
+      const { name, iosId, androidPkg } = extractAppName(compQuery.trim());
+      let finalName = name;
+      if (iosId) {
+        try {
+          const res = await fetch(`https://itunes.apple.com/lookup?id=${iosId}`);
+          const data = await res.json();
+          if (data.results?.[0]?.trackName) finalName = data.results[0].trackName;
+        } catch { /* dùng tên từ URL */ }
+      }
+      if (!finalName || finalName.length < 3) {
+        finalName = androidPkg?.split(".").pop()?.replace(/_/g, " ") || compQuery.trim();
+      }
+      const transparencyUrl = `https://adstransparency.google.com/advertiser/search?query=${encodeURIComponent(finalName)}`;
+      window.open(transparencyUrl, "_blank");
+    } catch { setCompError("Không thể tra cứu tên app."); }
+    finally { setCompLoading(false); }
   };
 
   // Helper to render competitor creatives — unused now but kept for future
@@ -333,14 +349,14 @@ export default function Home() {
                 className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
                 style={inputStyle}/>
               {compQuery.trim() && (() => {
-                const name = extractAppName(compQuery.trim());
+                const { name } = extractAppName(compQuery.trim());
                 return (
                   <div className="mt-3 p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.card}}>
-                    <div className="text-xs mb-1" style={{color: t.textMuted}}>Tên app nhận diện được:</div>
-                    <div className="text-sm font-semibold mb-3" style={{color: t.text}}>"{name}"</div>
-                    <button onClick={handleCompetitorSearch}
-                      className="w-full bg-violet-600 hover:bg-violet-500 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
-                      🔎 Xem quảng cáo trên Google
+                    {name && <><div className="text-xs mb-1" style={{color: t.textMuted}}>Tên app nhận diện:</div>
+                    <div className="text-sm font-semibold mb-3" style={{color: t.text}}>"{name}"</div></>}
+                    <button onClick={handleCompetitorSearch} disabled={compLoading}
+                      className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
+                      {compLoading ? <><span className="animate-spin">⏳</span> Đang tra cứu...</> : <>🔎 Xem quảng cáo trên Google</>}
                     </button>
                     <div className="text-xs mt-2 text-center" style={{color: t.textMuted}}>Mở Google Ads Transparency Center</div>
                   </div>
