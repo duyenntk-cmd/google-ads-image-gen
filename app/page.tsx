@@ -955,22 +955,30 @@ export default function Home() {
                             <div className="flex items-center justify-between px-5 pt-6 pb-1 text-xs font-medium" style={{color:"#0F172A"}}>
                               <span>9:41</span><span>●●●</span>
                             </div>
-                            {/* App-like content above ad */}
-                            <div className="flex-1 px-2 py-1 space-y-1.5 overflow-hidden">
-                              {[80,60,70].map((w,i)=>(
-                                <div key={i} className="h-2 rounded-full" style={{width:`${w}%`,backgroundColor:"#E2E8F0"}}/>
-                              ))}
-                              <div className="h-16 rounded-lg mt-2" style={{backgroundColor:"#E2E8F0"}}/>
-                              <div className="h-2 rounded-full w-4/5" style={{backgroundColor:"#E2E8F0"}}/>
-                              <div className="h-2 rounded-full w-3/5" style={{backgroundColor:"#E2E8F0"}}/>
-                            </div>
-                            {/* Ad banner at bottom */}
-                            {cur && (
-                              <div className="relative mx-1 mb-1 overflow-hidden rounded-lg shadow" style={{flexShrink:0}}>
-                                <div className="absolute top-0.5 right-0.5 text-xs bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
-                                <img src={cur.dataUrl} alt="" className="w-full object-cover" style={{maxHeight: isPortrait?180:80}}/>
+                            {/* App-like content above ad — thu nhỏ lại nếu portrait */}
+                            {!isPortrait && (
+                              <div className="flex-1 px-2 py-1 space-y-1.5 overflow-hidden">
+                                {[80,60,70].map((w,i)=>(
+                                  <div key={i} className="h-2 rounded-full" style={{width:`${w}%`,backgroundColor:"#E2E8F0"}}/>
+                                ))}
+                                <div className="h-16 rounded-lg mt-2" style={{backgroundColor:"#E2E8F0"}}/>
+                                <div className="h-2 rounded-full w-4/5" style={{backgroundColor:"#E2E8F0"}}/>
+                                <div className="h-2 rounded-full w-3/5" style={{backgroundColor:"#E2E8F0"}}/>
                               </div>
                             )}
+                            {/* Ad banner — scale đúng tỉ lệ, phone inner width ~196px */}
+                            {cur && (() => {
+                              const innerW = 196;
+                              const ratio = cur.height / cur.width;
+                              const adH = Math.round(innerW * ratio);
+                              const maxAdH = isPortrait ? 320 : isSquare ? 196 : 103;
+                              return (
+                                <div className="relative mx-1 mb-1 overflow-hidden rounded-lg shadow" style={{flexShrink:0, height: Math.min(adH, maxAdH)}}>
+                                  <div className="absolute top-0.5 right-0.5 bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
+                                  <img src={cur.dataUrl} alt="" style={{width:"100%", height:"100%", objectFit:"cover", objectPosition:"top"}}/>
+                                </div>
+                              );
+                            })()}
                           </div>
                           {/* Home bar */}
                           <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-16 h-1 rounded-full" style={{backgroundColor:"#334155"}}/>
@@ -988,12 +996,18 @@ export default function Home() {
                                 <div key={i} className="rounded-lg" style={{backgroundColor:"#E2E8F0",height:80}}/>
                               ))}
                             </div>
-                            {cur && (
-                              <div className="relative mx-2 mb-2 overflow-hidden rounded-lg shadow">
-                                <div className="absolute top-0.5 right-0.5 text-xs bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
-                                <img src={cur.dataUrl} alt="" className="w-full object-cover" style={{maxHeight: isPortrait?200:100}}/>
-                              </div>
-                            )}
+                            {cur && (() => {
+                              const innerW = 296;
+                              const ratio = cur.height / cur.width;
+                              const adH = Math.round(innerW * ratio);
+                              const maxAdH = isPortrait ? 380 : isSquare ? 296 : 155;
+                              return (
+                                <div className="relative mx-2 mb-2 overflow-hidden rounded-lg shadow" style={{flexShrink:0, height: Math.min(adH, maxAdH)}}>
+                                  <div className="absolute top-0.5 right-0.5 bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
+                                  <img src={cur.dataUrl} alt="" style={{width:"100%", height:"100%", objectFit:"cover", objectPosition:"top"}}/>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       )}
