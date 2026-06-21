@@ -219,19 +219,27 @@ export default function Home() {
   const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text };
   const labelStyle = { color: t.textMuted };
 
-  const handleCompetitorSearch = async () => {
-    if (!compQuery.trim()) return;
-    setCompLoading(true); setCompError(""); setCompResult(null);
-    try {
-      const res = await fetch("/api/competitor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: compQuery.trim() }) });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      setCompResult(data);
-    } catch (e) { setCompError(String(e)); }
-    finally { setCompLoading(false); }
+  const extractAppName = (url: string): string => {
+    // App Store: .../app/APP-NAME/id123 → lấy APP-NAME
+    const iosMatch = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id\d+/);
+    if (iosMatch) return iosMatch[1].replace(/-/g, " ");
+    // Play Store: id=com.example.myapp → lấy phần cuối "myapp"
+    const androidMatch = url.match(/id=([a-zA-Z0-9._]+)/);
+    if (androidMatch) {
+      const parts = androidMatch[1].split(".");
+      return parts[parts.length - 1].replace(/_/g, " ");
+    }
+    return url.trim();
   };
 
-  // Helper to render competitor creatives
+  const handleCompetitorSearch = () => {
+    if (!compQuery.trim()) return;
+    const appName = extractAppName(compQuery.trim());
+    const transparencyUrl = `https://adstransparency.google.com/?region=anywhere&query=${encodeURIComponent(appName)}`;
+    window.open(transparencyUrl, "_blank");
+  };
+
+  // Helper to render competitor creatives — unused now but kept for future
   const renderCompResult = () => {
     if (!compResult) return null;
     const creatives = (compResult.creatives as { creatives?: unknown[] } | null)?.creatives || [];
@@ -319,32 +327,35 @@ export default function Home() {
               <button onClick={() => setSidebarOpen(false)} className="text-lg leading-none" style={{color: t.textMuted}}>✕</button>
             </div>
             <div className="p-4 flex-1">
-              <div className="text-xs mb-2" style={{color: t.textMuted}}>Nhập link App Store / Play Store hoặc tên app</div>
-              <div className="flex gap-2">
-                <input value={compQuery} onChange={e => setCompQuery(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && handleCompetitorSearch()}
-                  placeholder="https://apps.apple.com/..."
-                  className="flex-1 text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}/>
-                <button onClick={handleCompetitorSearch} disabled={compLoading}
-                  className="bg-violet-600 hover:bg-violet-500 text-white text-xs px-3 py-2 rounded-lg transition-all disabled:opacity-50 font-medium">
-                  {compLoading ? "..." : "Search"}
-                </button>
-              </div>
-              {compError && <div className="text-xs mt-2 text-red-400">{compError}</div>}
-              {renderCompResult()}
-              {!compResult && !compError && !compLoading && (
-                <div className="mt-6 space-y-2">
-                  <div className="text-xs font-semibold" style={{color: t.textMuted}}>Ví dụ</div>
-                  {["https://apps.apple.com/us/app/canva/id897446215","https://play.google.com/store/apps/details?id=com.canva.editor"].map(ex => (
-                    <button key={ex} onClick={() => { setCompQuery(ex); }}
-                      className="w-full text-left text-xs px-3 py-2 rounded-lg border transition-colors truncate"
-                      style={{borderColor: t.border, color: t.textMuted}}>
-                      {ex.includes("apple") ? "🍎" : "🤖"} {ex.split("/").pop()?.slice(0,40)}
+              <div className="text-xs mb-2" style={{color: t.textMuted}}>Nhập link App Store hoặc Play Store</div>
+              <input value={compQuery} onChange={e => setCompQuery(e.target.value)}
+                placeholder="https://apps.apple.com/..."
+                className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
+                style={inputStyle}/>
+              {compQuery.trim() && (() => {
+                const name = extractAppName(compQuery.trim());
+                return (
+                  <div className="mt-3 p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.card}}>
+                    <div className="text-xs mb-1" style={{color: t.textMuted}}>Tên app nhận diện được:</div>
+                    <div className="text-sm font-semibold mb-3" style={{color: t.text}}>"{name}"</div>
+                    <button onClick={handleCompetitorSearch}
+                      className="w-full bg-violet-600 hover:bg-violet-500 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
+                      🔎 Xem quảng cáo trên Google
                     </button>
-                  ))}
-                </div>
-              )}
+                    <div className="text-xs mt-2 text-center" style={{color: t.textMuted}}>Mở Google Ads Transparency Center</div>
+                  </div>
+                );
+              })()}
+              <div className="mt-6 space-y-2">
+                <div className="text-xs font-semibold" style={{color: t.textMuted}}>Ví dụ</div>
+                {["https://apps.apple.com/us/app/canva/id897446215","https://play.google.com/store/apps/details?id=com.canva.editor"].map(ex => (
+                  <button key={ex} onClick={() => setCompQuery(ex)}
+                    className="w-full text-left text-xs px-3 py-2 rounded-lg border transition-colors"
+                    style={{borderColor: t.border, color: t.textMuted}}>
+                    {ex.includes("apple") ? "🍎" : "🤖"} {ex.includes("apple") ? "App Store link" : "Play Store link"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
