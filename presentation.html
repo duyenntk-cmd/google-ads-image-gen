@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Google Ads Image Generator – Presentation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=DM+Sans:wght@400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #F5F4FF;
+    --surface: #FFFFFF;
+    --accent: #6D28D9;
+    --accent2: #8B5CF6;
+    --amber: #F59E0B;
+    --text: #1E1B4B;
+    --muted: #6B7280;
+    --border: #E5E3FF;
+  }
+
+  html, body { height: 100%; overflow: hidden; background: var(--bg); font-family: 'DM Sans', sans-serif; color: var(--text); }
+
+  .deck { width: 100%; height: 100%; position: relative; }
+
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 48px;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.4s ease;
+  }
+  .slide.active { opacity: 1; pointer-events: all; }
+
+  h1 { font-family: 'Space Grotesk', sans-serif; font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; line-height: 1.15; }
+  h2 { font-family: 'Space Grotesk', sans-serif; font-size: clamp(1.4rem, 3vw, 2.2rem); font-weight: 700; margin-bottom: 32px; }
+  p  { font-size: clamp(0.95rem, 1.8vw, 1.15rem); line-height: 1.7; color: var(--muted); }
+
+  /* NAV */
+  .nav {
+    position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: 10px 20px;
+    box-shadow: 0 4px 24px rgba(109,40,217,.12);
+    z-index: 100;
+  }
+  .nav button {
+    background: none; border: none; cursor: pointer;
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent); font-size: 18px;
+    transition: background .2s;
+  }
+  .nav button:hover { background: var(--bg); }
+  .dots { display: flex; gap: 8px; }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--border); cursor: pointer; transition: all .25s;
+  }
+  .dot.active { background: var(--accent); width: 24px; border-radius: 4px; }
+  .slide-num { font-size: 13px; color: var(--muted); min-width: 36px; text-align: center; }
+
+  /* SLIDE 1 – HERO */
+  .hero-wrap { display: flex; flex-direction: column; align-items: center; gap: 32px; max-width: 900px; text-align: center; }
+  .hero-tag { background: #EDE9FE; color: var(--accent); font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 999px; letter-spacing: .04em; }
+  .hero-title { background: linear-gradient(135deg, var(--accent), var(--accent2), var(--amber)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .hero-sub { font-size: clamp(1rem, 2vw, 1.2rem); color: var(--muted); max-width: 560px; }
+  .banners { display: flex; gap: 16px; align-items: flex-end; justify-content: center; margin-top: 8px; }
+  .banner-shape {
+    border-radius: 12px;
+    background: linear-gradient(135deg, #7C3AED 0%, #A78BFA 50%, #F59E0B 100%);
+    box-shadow: 0 8px 32px rgba(109,40,217,.25);
+  }
+  .b1 { width: 180px; height: 95px; }
+  .b2 { width: 110px; height: 110px; }
+  .b3 { width: 58px; height: 103px; border-radius: 10px; }
+
+  /* SLIDE 2 – STATS */
+  .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; max-width: 860px; width: 100%; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 20px;
+    padding: 36px 28px; text-align: center;
+    box-shadow: 0 4px 20px rgba(109,40,217,.07);
+  }
+  .stat-num { font-family: 'Space Grotesk', sans-serif; font-size: clamp(2.4rem, 5vw, 3.6rem); font-weight: 700; color: var(--accent); }
+  .stat-label { color: var(--muted); font-size: 15px; margin-top: 8px; }
+
+  /* SLIDE 3 – PROCESS */
+  .steps { display: flex; align-items: flex-start; gap: 0; max-width: 900px; width: 100%; position: relative; }
+  .step { flex: 1; text-align: center; padding: 0 16px; position: relative; }
+  .step-num {
+    width: 52px; height: 52px; border-radius: 50%; border: 2px solid var(--accent);
+    background: var(--surface); color: var(--accent); font-weight: 700; font-size: 20px;
+    display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;
+    position: relative; z-index: 2;
+  }
+  .step-title { font-weight: 600; font-size: 15px; margin-bottom: 8px; }
+  .step-desc { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .step-connector {
+    position: absolute; top: 26px; left: calc(50% + 26px); width: calc(100% - 52px);
+    height: 2px; background: var(--border); z-index: 1;
+  }
+  .step-connector.last { display: none; }
+
+  /* SLIDE 4 – FEATURES */
+  .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 900px; width: 100%; }
+  .feat-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 24px 20px; box-shadow: 0 2px 12px rgba(109,40,217,.06);
+    transition: transform .2s, box-shadow .2s;
+  }
+  .feat-card:hover { transform: translateY(-4px); box-shadow: 0 8px 32px rgba(109,40,217,.14); }
+  .feat-icon { font-size: 28px; margin-bottom: 12px; }
+  .feat-title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+  .feat-desc { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+  /* SLIDE 5 – GUIDE */
+  .guide-wrap { display: flex; gap: 40px; max-width: 960px; width: 100%; align-items: flex-start; }
+  .guide-list { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+  .guide-item {
+    padding: 12px 16px; border-radius: 12px; cursor: pointer; font-size: 14px; font-weight: 500;
+    border: 1px solid transparent; transition: all .2s; color: var(--muted);
+  }
+  .guide-item.active { background: #EDE9FE; border-color: var(--border); color: var(--accent); }
+  .guide-panel {
+    flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 20px;
+    padding: 32px; min-height: 260px; box-shadow: 0 4px 20px rgba(109,40,217,.07);
+  }
+  .guide-step { display: none; }
+  .guide-step.active { display: block; }
+  .guide-step h3 { font-family: 'Space Grotesk', sans-serif; font-size: 1.2rem; margin-bottom: 16px; }
+  .guide-step ol { padding-left: 20px; }
+  .guide-step li { font-size: 14px; color: var(--muted); line-height: 2; }
+  .guide-step li strong { color: var(--text); }
+
+  /* SLIDE 6 – CTA */
+  .cta-wrap { text-align: center; max-width: 660px; display: flex; flex-direction: column; align-items: center; gap: 28px; }
+  .cta-url {
+    background: var(--surface); border: 2px solid var(--accent); border-radius: 14px;
+    padding: 18px 36px; font-family: 'Space Grotesk', sans-serif; font-size: 1.3rem;
+    font-weight: 700; color: var(--accent); letter-spacing: .02em;
+  }
+  .cta-note { font-size: 14px; color: var(--muted); }
+  .chips { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .chip { background: #EDE9FE; color: var(--accent); font-size: 13px; padding: 6px 14px; border-radius: 999px; font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+  <!-- SLIDE 1: HERO -->
+  <div class="slide active" data-slide="0">
+    <div class="hero-wrap">
+      <span class="hero-tag">🚀 Internal Tool · Apero Group</span>
+      <h1 class="hero-title">Google Ads<br>Image Generator</h1>
+      <p class="hero-sub">Tự động tạo toàn bộ bộ banner quảng cáo chuẩn Google Ads chỉ trong vòng 60 giây — không cần designer.</p>
+      <div class="banners">
+        <div class="banner-shape b1"></div>
+        <div class="banner-shape b2"></div>
+        <div class="banner-shape b3"></div>
+      </div>
+      <p style="font-size:13px;color:var(--muted);">Landscape 1.91:1 &nbsp;·&nbsp; Square 1:1 &nbsp;·&nbsp; Portrait 9:16</p>
+    </div>
+  </div>
+
+  <!-- SLIDE 2: STATS -->
+  <div class="slide" data-slide="1">
+    <h2>Tại sao cần công cụ này?</h2>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-num">2–4h</div>
+        <div class="stat-label">Thời gian designer làm thủ công mỗi bộ banner</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">&lt;60s</div>
+        <div class="stat-label">Thời gian công cụ tạo xong toàn bộ kích thước</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">20+</div>
+        <div class="stat-label">Kích thước banner được xuất cùng lúc (ZIP)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 3: PROCESS -->
+  <div class="slide" data-slide="2">
+    <h2>Quy trình 4 bước</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-connector"></div>
+        <div class="step-title">Tải ảnh lên</div>
+        <div class="step-desc">Ảnh sản phẩm hoặc app screenshot</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-connector"></div>
+        <div class="step-title">AI phân tích</div>
+        <div class="step-desc">Claude tự động đọc nội dung ảnh và xóa chữ cũ</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-connector"></div>
+        <div class="step-title">Cấu hình</div>
+        <div class="step-desc">Chọn thị trường, ngôn ngữ, thông điệp</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-connector last"></div>
+        <div class="step-title">Tải về</div>
+        <div class="step-desc">Xuất ZIP với 20+ kích thước chuẩn Google Ads</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 4: FEATURES -->
+  <div class="slide" data-slide="3">
+    <h2>Tính năng nổi bật</h2>
+    <div class="features-grid">
+      <div class="feat-card">
+        <div class="feat-icon">🤖</div>
+        <div class="feat-title">AI tạo headline</div>
+        <div class="feat-desc">Claude tự động viết headline theo thị trường và ngôn ngữ đã chọn</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🌍</div>
+        <div class="feat-title">60+ thị trường</div>
+        <div class="feat-desc">Hỗ trợ toàn cầu từ Việt Nam, Indonesia đến Mỹ, Châu Âu</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🗣️</div>
+        <div class="feat-title">32 ngôn ngữ</div>
+        <div class="feat-desc">Dịch tự động headline sang ngôn ngữ bản địa của thị trường</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🔍</div>
+        <div class="feat-title">Competitor Ads</div>
+        <div class="feat-desc">Tra cứu banner đang chạy của đối thủ qua Google Ads Transparency Center</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">📱</div>
+        <div class="feat-title">Device Preview</div>
+        <div class="feat-desc">Xem trước banner hiển thị trên điện thoại và tablet thực tế</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🕘</div>
+        <div class="feat-title">Lịch sử tạo ảnh</div>
+        <div class="feat-desc">Lưu tự động, truy cập lại các bộ banner đã tạo trước đó</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 5: GUIDE -->
+  <div class="slide" data-slide="4">
+    <h2>Hướng dẫn sử dụng</h2>
+    <div class="guide-wrap">
+      <div class="guide-list">
+        <div class="guide-item active" onclick="setGuide(0, this)">📤 Bước 1: Upload ảnh</div>
+        <div class="guide-item" onclick="setGuide(1, this)">⚙️ Bước 2: Cấu hình</div>
+        <div class="guide-item" onclick="setGuide(2, this)">✨ Bước 3: Generate</div>
+        <div class="guide-item" onclick="setGuide(3, this)">💾 Bước 4: Tải về</div>
+        <div class="guide-item" onclick="setGuide(4, this)">🔍 Competitor Ads</div>
+      </div>
+      <div class="guide-panel">
+        <div class="guide-step active">
+          <h3>Upload ảnh nguồn</h3>
+          <ol>
+            <li>Nhấn <strong>Choose File</strong> hoặc kéo thả ảnh vào vùng upload</li>
+            <li>Định dạng hỗ trợ: JPG, PNG, WebP (tối đa 10MB)</li>
+            <li>AI sẽ tự động phân tích nội dung ảnh</li>
+            <li>Nếu ảnh có chữ cũ, chọn <strong>Remove text</strong> để xóa</li>
+          </ol>
+        </div>
+        <div class="guide-step">
+          <h3>Cấu hình banner</h3>
+          <ol>
+            <li>Chọn <strong>Country</strong> — thị trường mục tiêu (gõ để tìm nhanh)</li>
+            <li>Chọn <strong>Language</strong> — ngôn ngữ headline trong banner</li>
+            <li>Nhập <strong>App Name</strong> — tên ứng dụng hoặc sản phẩm</li>
+            <li>Nhập <strong>Key Message</strong> — thông điệp chính muốn truyền đạt</li>
+          </ol>
+        </div>
+        <div class="guide-step">
+          <h3>Generate banner</h3>
+          <ol>
+            <li>Nhấn <strong>Generate Banners</strong> để bắt đầu</li>
+            <li>AI tạo 5 phương án headline khác nhau</li>
+            <li>Chờ khoảng 20–40 giây</li>
+            <li>Xem trước ở tab <strong>Top 5</strong>, <strong>All Sizes</strong>, hoặc <strong>Device Preview</strong></li>
+          </ol>
+        </div>
+        <div class="guide-step">
+          <h3>Tải về và sử dụng</h3>
+          <ol>
+            <li>Chọn headline ưng ý từ tab <strong>Top 5</strong></li>
+            <li>Nhấn <strong>Download ZIP</strong> để tải toàn bộ kích thước</li>
+            <li>ZIP chứa 20+ ảnh PNG chuẩn kích thước Google Ads</li>
+            <li>Upload trực tiếp lên Google Ads campaign</li>
+          </ol>
+        </div>
+        <div class="guide-step">
+          <h3>Xem banner đối thủ</h3>
+          <ol>
+            <li>Mở sidebar bên trái → chọn biểu tượng <strong>Competitor Ads</strong></li>
+            <li>Dán link App Store hoặc Play Store của app đối thủ</li>
+            <li>Nhấn <strong>Search</strong> → mở Google Ads Transparency Center</li>
+            <li>Xem toàn bộ banner đang chạy của đối thủ miễn phí</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 6: CTA -->
+  <div class="slide" data-slide="5">
+    <div class="cta-wrap">
+      <span class="hero-tag">✅ Sẵn sàng sử dụng</span>
+      <h1 class="hero-title">Bắt đầu ngay</h1>
+      <div class="cta-url">ads-image-gen.vercel.app</div>
+      <div class="chips">
+        <span class="chip">Miễn phí nội bộ</span>
+        <span class="chip">Không cần cài đặt</span>
+        <span class="chip">Cập nhật liên tục</span>
+      </div>
+      <p class="cta-note">Phản hồi &amp; đề xuất tính năng → gửi về team UA / Marketing</p>
+    </div>
+  </div>
+
+</div><!-- /deck -->
+
+<!-- NAV -->
+<div class="nav">
+  <button onclick="go(-1)">←</button>
+  <div class="dots" id="dots"></div>
+  <button onclick="go(1)">→</button>
+  <span class="slide-num" id="slideNum">1 / 6</span>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const dotsEl = document.getElementById('dots');
+  const slideNum = document.getElementById('slideNum');
+  let cur = 0;
+
+  // build dots
+  slides.forEach((_, i) => {
+    const d = document.createElement('div');
+    d.className = 'dot' + (i === 0 ? ' active' : '');
+    d.onclick = () => goTo(i);
+    dotsEl.appendChild(d);
+  });
+
+  function goTo(n) {
+    slides[cur].classList.remove('active');
+    dotsEl.children[cur].classList.remove('active');
+    cur = (n + slides.length) % slides.length;
+    slides[cur].classList.add('active');
+    dotsEl.children[cur].classList.add('active');
+    slideNum.textContent = (cur + 1) + ' / ' + slides.length;
+  }
+  function go(d) { goTo(cur + d); }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') go(1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   go(-1);
+  });
+
+  // touch swipe
+  let tx = 0;
+  document.addEventListener('touchstart', e => { tx = e.touches[0].clientX; });
+  document.addEventListener('touchend',   e => {
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1);
+  });
+
+  // guide panel switcher
+  function setGuide(i, el) {
+    document.querySelectorAll('.guide-item').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.guide-step').forEach(x => x.classList.remove('active'));
+    el.classList.add('active');
+    document.querySelectorAll('.guide-step')[i].classList.add('active');
+  }
+</script>
+</body>
+</html>
