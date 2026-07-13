@@ -21,38 +21,20 @@ const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
 };
 
 const LANGUAGES = [
-  { code: "English",              label: "🇺🇸 English" },
-  { code: "Vietnamese",           label: "🇻🇳 Tiếng Việt" },
-  { code: "Indonesian",           label: "🇮🇩 Bahasa Indonesia" },
-  { code: "Thai",                 label: "🇹🇭 ภาษาไทย" },
-  { code: "Korean",               label: "🇰🇷 한국어" },
-  { code: "Japanese",             label: "🇯🇵 日本語" },
-  { code: "Chinese Simplified",   label: "🇨🇳 中文简体" },
-  { code: "Chinese Traditional",  label: "🇹🇼 中文繁體" },
-  { code: "Arabic",               label: "🇸🇦 العربية" },
-  { code: "Spanish",              label: "🇪🇸 Español" },
-  { code: "Portuguese",           label: "🇧🇷 Português" },
-  { code: "Russian",              label: "🇷🇺 Русский" },
-  { code: "French",               label: "🇫🇷 Français" },
-  { code: "German",               label: "🇩🇪 Deutsch" },
-  { code: "Hindi",                label: "🇮🇳 हिन्दी" },
-  { code: "Malay",                label: "🇲🇾 Bahasa Melayu" },
-  { code: "Filipino",             label: "🇵🇭 Filipino" },
-  { code: "Burmese",              label: "🇲🇲 မြန်မာဘာသာ" },
-  { code: "Khmer",                label: "🇰🇭 ភាសាខ្មែរ" },
-  { code: "Italian",              label: "🇮🇹 Italiano" },
-  { code: "Dutch",                label: "🇳🇱 Nederlands" },
-  { code: "Turkish",              label: "🇹🇷 Türkçe" },
-  { code: "Polish",               label: "🇵🇱 Polski" },
-  { code: "Ukrainian",            label: "🇺🇦 Українська" },
-  { code: "Swedish",              label: "🇸🇪 Svenska" },
-  { code: "Norwegian",            label: "🇳🇴 Norsk" },
-  { code: "Danish",               label: "🇩🇰 Dansk" },
-  { code: "Finnish",              label: "🇫🇮 Suomi" },
-  { code: "Greek",                label: "🇬🇷 Ελληνικά" },
-  { code: "Hebrew",               label: "🇮🇱 עברית" },
-  { code: "Bengali",              label: "🇧🇩 বাংলা" },
-  { code: "Swahili",              label: "🇰🇪 Kiswahili" },
+  { code: "English",            label: "🇺🇸 English" },
+  { code: "Vietnamese",         label: "🇻🇳 Tiếng Việt" },
+  { code: "Indonesian",         label: "🇮🇩 Bahasa Indonesia" },
+  { code: "Thai",               label: "🇹🇭 ภาษาไทย" },
+  { code: "Korean",             label: "🇰🇷 한국어" },
+  { code: "Japanese",           label: "🇯🇵 日本語" },
+  { code: "Chinese Simplified", label: "🇨🇳 中文简体" },
+  { code: "Arabic",             label: "🇸🇦 العربية" },
+  { code: "Spanish",            label: "🇪🇸 Español" },
+  { code: "Portuguese",         label: "🇧🇷 Português" },
+  { code: "Russian",            label: "🇷🇺 Русский" },
+  { code: "French",             label: "🇫🇷 Français" },
+  { code: "German",             label: "🇩🇪 Deutsch" },
+  { code: "Hindi",              label: "🇮🇳 हिन्दी" },
 ];
 
 const COUNTRIES = [
@@ -150,7 +132,38 @@ export default function Home() {
 
   const [bgColor, setBgColor] = useState("#F8FAFC");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|null>(null);
+  const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
+
+  // Ad Copy Generator state
+  const [adcopyAppName, setAdcopyAppName] = useState("");
+  const [adcopyMessage, setAdcopyMessage] = useState("");
+  const [adcopyCountry, setAdcopyCountry] = useState("Global");
+  const [adcopyLang, setAdcopyLang] = useState("English");
+  const [adcopyLoading, setAdcopyLoading] = useState(false);
+  interface AdCopyResult { headlines: string[]; descriptions: string[]; ctas: string[]; }
+  const [adcopyResult, setAdcopyResult] = useState<AdCopyResult|null>(null);
+  const [adcopyCopied, setAdcopyCopied] = useState<string|null>(null);
+
+  const handleAdCopyGenerate = async () => {
+    if (!adcopyAppName.trim()) return;
+    setAdcopyLoading(true); setAdcopyResult(null);
+    try {
+      const res = await fetch("/api/adcopy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appName: adcopyAppName, message: adcopyMessage, country: adcopyCountry, language: adcopyLang }),
+      });
+      const data = await res.json();
+      if (data.success) setAdcopyResult(data.result);
+    } catch { /* silent */ }
+    finally { setAdcopyLoading(false); }
+  };
+
+  const copyText = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setAdcopyCopied(text);
+    setTimeout(() => setAdcopyCopied(null), 1500);
+  };
 
   interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -480,6 +493,11 @@ export default function Home() {
             style={activeSidebarTool==="history"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
             🕐
           </button>
+          <button title="Ad Copy Generator" onClick={() => { setActiveSidebarTool("adcopy"); setSidebarOpen(true); }}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all border"
+            style={activeSidebarTool==="adcopy"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
+            ✍️
+          </button>
         </div>
 
         {/* Slide-out panel */}
@@ -513,6 +531,123 @@ export default function Home() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {sidebarOpen && activeSidebarTool === "adcopy" && (
+          <div className="h-full w-80 border-r overflow-y-auto flex flex-col" style={{backgroundColor: bgColor, borderColor: t.border}}>
+            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{backgroundColor: bgColor, borderColor: t.border}}>
+              <div>
+                <div className="text-sm font-semibold" style={{color: t.text}}>✍️ Ad Copy Generator</div>
+                <div className="text-xs" style={{color: t.textMuted}}>Tạo headline, description & CTA</div>
+              </div>
+              <button onClick={() => setSidebarOpen(false)} className="text-lg leading-none" style={{color: t.textMuted}}>✕</button>
+            </div>
+            <div className="p-4 flex-1 space-y-3">
+              <div>
+                <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Tên app / sản phẩm *</div>
+                <input value={adcopyAppName} onChange={e => setAdcopyAppName(e.target.value)}
+                  placeholder="VD: Canva, PhotoRoom..."
+                  className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
+                  style={inputStyle}/>
+              </div>
+              <div>
+                <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Key message</div>
+                <textarea value={adcopyMessage} onChange={e => setAdcopyMessage(e.target.value)}
+                  placeholder="VD: Chỉnh ảnh chuyên nghiệp, miễn phí..."
+                  rows={2}
+                  className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-none"
+                  style={inputStyle}/>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Thị trường</div>
+                  <select value={adcopyCountry} onChange={e => setAdcopyCountry(e.target.value)}
+                    className="w-full text-xs rounded-lg px-2 py-2 border focus:outline-none focus:border-violet-500"
+                    style={inputStyle}>
+                    {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Ngôn ngữ</div>
+                  <select value={adcopyLang} onChange={e => setAdcopyLang(e.target.value)}
+                    className="w-full text-xs rounded-lg px-2 py-2 border focus:outline-none focus:border-violet-500"
+                    style={inputStyle}>
+                    {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyAppName.trim()}
+                className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
+                {adcopyLoading ? <><span className="animate-spin">⏳</span> Đang tạo...</> : <>✨ Generate Ad Copy</>}
+              </button>
+
+              {adcopyResult && (
+                <div className="space-y-3 pt-1">
+                  {/* Headlines */}
+                  <div className="rounded-xl border overflow-hidden" style={{borderColor: t.border}}>
+                    <div className="px-3 py-2 text-xs font-semibold border-b flex items-center gap-1.5" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
+                      📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(tối đa 30 ký tự)</span>
+                    </div>
+                    <div className="divide-y" style={{divideColor: t.border}}>
+                      {adcopyResult.headlines.map((h, i) => (
+                        <div key={i} className="flex items-center justify-between px-3 py-2 gap-2 group"
+                          style={{backgroundColor: t.card}}>
+                          <span className="text-xs flex-1" style={{color: t.text}}>{h}</span>
+                          <button onClick={() => copyText(h)}
+                            className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded"
+                            style={{backgroundColor: t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
+                            {adcopyCopied===h ? "✓" : "copy"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Descriptions */}
+                  <div className="rounded-xl border overflow-hidden" style={{borderColor: t.border}}>
+                    <div className="px-3 py-2 text-xs font-semibold border-b flex items-center gap-1.5" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
+                      📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(tối đa 90 ký tự)</span>
+                    </div>
+                    <div className="divide-y" style={{divideColor: t.border}}>
+                      {adcopyResult.descriptions.map((d, i) => (
+                        <div key={i} className="flex items-start justify-between px-3 py-2 gap-2 group"
+                          style={{backgroundColor: t.card}}>
+                          <span className="text-xs flex-1 leading-relaxed" style={{color: t.text}}>{d}</span>
+                          <button onClick={() => copyText(d)}
+                            className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded mt-0.5 flex-shrink-0"
+                            style={{backgroundColor: t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
+                            {adcopyCopied===d ? "✓" : "copy"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* CTAs */}
+                  <div className="rounded-xl border overflow-hidden" style={{borderColor: t.border}}>
+                    <div className="px-3 py-2 text-xs font-semibold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
+                      🎯 Call to Action
+                    </div>
+                    <div className="p-3 flex flex-wrap gap-2" style={{backgroundColor: t.card}}>
+                      {adcopyResult.ctas.map((c, i) => (
+                        <button key={i} onClick={() => copyText(c)}
+                          className="text-xs px-3 py-1.5 rounded-lg border transition-all"
+                          style={{borderColor: adcopyCopied===c ? "#10B981" : t.border, color: adcopyCopied===c ? "#10B981" : t.text, backgroundColor: t.tabBg}}>
+                          {adcopyCopied===c ? "✓ Copied" : c}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button onClick={handleAdCopyGenerate}
+                    className="w-full text-xs py-1.5 rounded-lg border transition-colors"
+                    style={{borderColor: t.border, color: t.textMuted}}>
+                    🔄 Tạo lại
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
