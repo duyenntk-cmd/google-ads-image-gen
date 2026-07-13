@@ -137,7 +137,100 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube">("home");
+
+  // YouTube upload state
+  const [ytAuthenticated, setYtAuthenticated] = useState(false);
+  const [ytAccessToken, setYtAccessToken] = useState("");
+  interface YtVideo { file: File; title: string; description: string; tags: string; privacy: "public"|"unlisted"|"private"; status: "idle"|"uploading"|"done"|"error"; progress: number; errorMsg: string; }
+  const [ytVideos, setYtVideos] = useState<YtVideo[]>([]);
+  const [ytUploading, setYtUploading] = useState(false);
+  const ytFileRef = useRef<HTMLInputElement>(null);
+
+  const checkYtAuth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/token");
+      if (res.ok) { const d = await res.json(); if (d.access_token) { setYtAccessToken(d.access_token); setYtAuthenticated(true); } }
+    } catch {}
+  }, []);
+
+  useEffect(() => { checkYtAuth(); }, [checkYtAuth]);
+
+  // Handle OAuth redirect back
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("yt_ok")) { setActivePage("youtube"); checkYtAuth(); window.history.replaceState({}, "", "/"); }
+    if (params.get("page") === "youtube") { setActivePage("youtube"); window.history.replaceState({}, "", "/"); }
+  }, [checkYtAuth]);
+
+  const addYtFiles = (files: FileList) => {
+    const newVids: YtVideo[] = Array.from(files).map(f => ({
+      file: f, title: f.name.replace(/\.[^.]+$/, ""), description: "", tags: "", privacy: "unlisted",
+      status: "idle", progress: 0, errorMsg: "",
+    }));
+    setYtVideos(prev => [...prev, ...newVids]);
+  };
+
+  const uploadSingleVideo = async (video: YtVideo, index: number, token: string): Promise<void> => {
+    setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "uploading", progress: 0} : v));
+    try {
+      const metadata = {
+        snippet: { title: video.title || video.file.name, description: video.description, tags: video.tags ? video.tags.split(",").map(t=>t.trim()) : [] },
+        status: { privacyStatus: video.privacy },
+      };
+      // 1. Init resumable upload
+      const initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "X-Upload-Content-Type": video.file.type, "X-Upload-Content-Length": String(video.file.size) },
+        body: JSON.stringify(metadata),
+      });
+      if (!initRes.ok) throw new Error(`Init failed: ${initRes.status}`);
+      const uploadUrl = initRes.headers.get("Location");
+      if (!uploadUrl) throw new Error("No upload URL");
+
+      // 2. Upload in chunks
+      const CHUNK = 5 * 1024 * 1024; // 5MB
+      let offset = 0;
+      while (offset < video.file.size) {
+        const chunk = video.file.slice(offset, offset + CHUNK);
+        const end = Math.min(offset + CHUNK - 1, video.file.size - 1);
+        const uploadRes = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Range": `bytes ${offset}-${end}/${video.file.size}`, "Content-Type": video.file.type },
+          body: chunk,
+        });
+        if (uploadRes.status === 308) {
+          const range = uploadRes.headers.get("Range");
+          offset = range ? parseInt(range.split("-")[1]) + 1 : offset + CHUNK;
+        } else if (uploadRes.ok || uploadRes.status === 201 || uploadRes.status === 200) {
+          offset = video.file.size;
+        } else {
+          throw new Error(`Upload chunk failed: ${uploadRes.status}`);
+        }
+        const pct = Math.round((Math.min(offset, video.file.size) / video.file.size) * 100);
+        setYtVideos(prev => prev.map((v, i) => i === index ? {...v, progress: pct} : v));
+      }
+      setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "done", progress: 100} : v));
+    } catch (e) {
+      setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "error", errorMsg: String(e)} : v));
+    }
+  };
+
+  const handleYtUploadAll = async () => {
+    if (!ytAccessToken) return;
+    setYtUploading(true);
+    for (let i = 0; i < ytVideos.length; i++) {
+      if (ytVideos[i].status === "idle" || ytVideos[i].status === "error") {
+        await uploadSingleVideo(ytVideos[i], i, ytAccessToken);
+      }
+    }
+    setYtUploading(false);
+  };
+
+  const ytLogout = async () => {
+    await fetch("/api/auth/token", { method: "DELETE" });
+    setYtAuthenticated(false); setYtAccessToken(""); setYtVideos([]);
+  };
 
   // Ad Copy Generator state
   const [adcopyAppName, setAdcopyAppName] = useState("");
@@ -521,7 +614,20 @@ export default function Home() {
               <span>{icon}</span>{label}
             </button>
           ))}
-          <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Nghiên cứu</div>
+          <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Upload</div>
+    {([
+      ["youtube", "▶️", "YouTube Upload"],
+    ] as const).map(([page, icon, label]) => (
+      <button key={page} onClick={() => setActivePage(page)}
+        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
+        style={activePage===page
+          ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
+          : {color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}>
+        <span>{icon}</span>{label}
+        {ytAuthenticated && <span className="ml-auto w-2 h-2 rounded-full bg-green-400 flex-shrink-0"/>}
+      </button>
+    ))}
+    <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Nghiên cứu</div>
           {([
             ["competitor", "🔍", "Competitor Ads"],
             ["history",   "🕐", "Lịch sử"],
@@ -555,7 +661,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -1281,6 +1387,145 @@ export default function Home() {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* YOUTUBE UPLOAD PAGE */}
+        {activePage === "youtube" && (
+          <div className="space-y-6 max-w-3xl">
+            {!ytAuthenticated ? (
+              <div className="flex flex-col items-center justify-center py-24 space-y-6">
+                <div className="text-6xl">▶️</div>
+                <div className="text-center">
+                  <div className="text-xl font-bold mb-2" style={{color: t.text}}>Upload video lên YouTube</div>
+                  <div className="text-sm" style={{color: t.textMuted}}>Đăng nhập Google để bắt đầu upload hàng loạt</div>
+                </div>
+                <a href="/api/auth/google"
+                  className="flex items-center gap-3 px-6 py-3 rounded-xl font-semibold text-sm transition-all border"
+                  style={{backgroundColor: t.card, borderColor: t.border, color: t.text, boxShadow: t.cardShadow}}>
+                  <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+                  Đăng nhập với Google
+                </a>
+                <p className="text-xs text-center" style={{color: t.textMuted}}>Chỉ cấp quyền upload video lên YouTube của bạn</p>
+              </div>
+            ) : (
+              <>
+                {/* Top bar */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-green-400 inline-block"/>
+                    <span className="text-sm" style={{color: t.textMuted}}>Đã kết nối Google</span>
+                  </div>
+                  <button onClick={ytLogout} className="text-xs px-3 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
+                    Đăng xuất
+                  </button>
+                </div>
+
+                {/* Drop zone */}
+                <div onClick={() => ytFileRef.current?.click()}
+                  className="border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all"
+                  style={{borderColor: t.border}}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = "#7C3AED")}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = t.border)}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#7C3AED"; }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = t.border; if (e.dataTransfer.files.length) addYtFiles(e.dataTransfer.files); }}>
+                  <div className="text-3xl mb-2">🎬</div>
+                  <div className="text-sm font-medium mb-1" style={{color: t.text}}>Kéo thả video vào đây hoặc click để chọn</div>
+                  <div className="text-xs" style={{color: t.textMuted}}>MP4, MOV, AVI, MKV — nhiều file cùng lúc</div>
+                  <input ref={ytFileRef} type="file" accept="video/*" multiple className="hidden" onChange={e => e.target.files && addYtFiles(e.target.files)}/>
+                </div>
+
+                {/* Video list */}
+                {ytVideos.length > 0 && (
+                  <div className="space-y-3">
+                    {ytVideos.map((v, i) => (
+                      <div key={i} className="rounded-2xl border p-4 space-y-3" style={cardStyle}>
+                        <div className="flex items-center gap-3">
+                          <div className="text-2xl flex-shrink-0">🎬</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold truncate" style={{color: t.text}}>{v.file.name}</div>
+                            <div className="text-xs" style={{color: t.textMuted}}>{(v.file.size/1024/1024).toFixed(1)} MB</div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {v.status === "done" && <span className="text-xs font-bold text-green-400">✓ Done</span>}
+                            {v.status === "error" && <span className="text-xs font-bold text-red-400">✗ Lỗi</span>}
+                            {v.status === "uploading" && <span className="text-xs" style={{color: t.textMuted}}>{v.progress}%</span>}
+                            {v.status !== "uploading" && (
+                              <button onClick={() => setYtVideos(prev => prev.filter((_, j) => j !== i))}
+                                className="text-xs px-2 py-1 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>✕</button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Progress bar */}
+                        {v.status === "uploading" && (
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{backgroundColor: t.progress}}>
+                            <div className="h-full bg-gradient-to-r from-violet-600 to-violet-400 transition-all duration-300" style={{width: `${v.progress}%`}}/>
+                          </div>
+                        )}
+                        {v.status === "error" && <div className="text-xs text-red-400">{v.errorMsg}</div>}
+
+                        {/* Metadata */}
+                        {(v.status === "idle" || v.status === "error") && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="col-span-2">
+                              <input value={v.title} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,title:e.target.value}:x))}
+                                placeholder="Tiêu đề video *"
+                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
+                                style={inputStyle}/>
+                            </div>
+                            <div className="col-span-2">
+                              <textarea value={v.description} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,description:e.target.value}:x))}
+                                placeholder="Mô tả (tuỳ chọn)" rows={2}
+                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-none"
+                                style={inputStyle}/>
+                            </div>
+                            <div>
+                              <input value={v.tags} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,tags:e.target.value}:x))}
+                                placeholder="Tags (cách nhau bởi dấu phẩy)"
+                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
+                                style={inputStyle}/>
+                            </div>
+                            <div>
+                              <select value={v.privacy} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,privacy:e.target.value as "public"|"unlisted"|"private"}:x))}
+                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
+                                style={inputStyle}>
+                                <option value="unlisted">🔗 Unlisted (có link xem được)</option>
+                                <option value="private">🔒 Private (chỉ mình tôi)</option>
+                                <option value="public">🌍 Public (công khai)</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    {/* Upload button */}
+                    <div className="flex gap-3">
+                      <button onClick={handleYtUploadAll}
+                        disabled={ytUploading || ytVideos.every(v => v.status === "done")}
+                        className="flex-1 py-3 rounded-xl font-semibold text-sm bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
+                        {ytUploading
+                          ? <><span className="animate-spin">⏳</span> Đang upload {ytVideos.filter(v=>v.status==="uploading").length > 0 ? `(${ytVideos.filter(v=>v.status==="uploading")[0]?.progress}%)` : ""}...</>
+                          : <>▶️ Upload {ytVideos.filter(v=>v.status==="idle"||v.status==="error").length} video lên YouTube</>}
+                      </button>
+                      <button onClick={() => setYtVideos([])} disabled={ytUploading}
+                        className="px-4 py-3 rounded-xl border text-sm transition-colors disabled:opacity-40"
+                        style={{borderColor: t.border, color: t.textMuted}}>
+                        Xóa tất cả
+                      </button>
+                    </div>
+
+                    {/* Summary */}
+                    {ytVideos.some(v => v.status === "done") && (
+                      <div className="flex items-center gap-2 text-sm text-green-400">
+                        ✓ {ytVideos.filter(v=>v.status==="done").length}/{ytVideos.length} video đã upload thành công
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
