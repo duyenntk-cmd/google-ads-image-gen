@@ -590,7 +590,7 @@ export default function Home() {
                     <div className="px-3 py-2 text-xs font-semibold border-b flex items-center gap-1.5" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
                       📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(tối đa 30 ký tự)</span>
                     </div>
-                    <div className="divide-y" style={{divideColor: t.border}}>
+                    <div className="divide-y" style={{borderColor: t.border}}>
                       {adcopyResult.headlines.map((h, i) => (
                         <div key={i} className="flex items-center justify-between px-3 py-2 gap-2 group"
                           style={{backgroundColor: t.card}}>
@@ -610,7 +610,7 @@ export default function Home() {
                     <div className="px-3 py-2 text-xs font-semibold border-b flex items-center gap-1.5" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
                       📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(tối đa 90 ký tự)</span>
                     </div>
-                    <div className="divide-y" style={{divideColor: t.border}}>
+                    <div className="divide-y" style={{borderColor: t.border}}>
                       {adcopyResult.descriptions.map((d, i) => (
                         <div key={i} className="flex items-start justify-between px-3 py-2 gap-2 group"
                           style={{backgroundColor: t.card}}>
