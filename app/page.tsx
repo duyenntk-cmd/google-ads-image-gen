@@ -132,8 +132,12 @@ export default function Home() {
 
   const [darkMode, setDarkMode] = useState(false);
   const bgColor = darkMode ? "#0A0A0F" : "#F8FAFC";
+  // kept for compatibility but no longer used
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
+  void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
+
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history">("home");
 
   // Ad Copy Generator state
   const [adcopyAppName, setAdcopyAppName] = useState("");
@@ -346,6 +350,7 @@ export default function Home() {
   const labelStyle = { color: t.textMuted };
   const cardStyle = { backgroundColor: t.card, borderColor: t.border, boxShadow: t.cardShadow, borderRadius: 16 };
   const cardStyleHover = { backgroundColor: t.card, borderColor: t.border, boxShadow: t.cardShadowHover, borderRadius: 16 };
+  void cardStyleHover;
 
   const extractAppName = (url: string): { name: string; iosId?: string; androidPkg?: string } => {
     const iosSlugMatch = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id(\d+)/);
@@ -470,6 +475,7 @@ export default function Home() {
       </div>
     );
   };
+  void renderCompResult; void compError; void compResult;
 
   return (
     <div className="min-h-screen flex relative" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
@@ -480,296 +486,158 @@ export default function Home() {
       </div>
       <div className="min-h-screen flex w-full relative" style={{zIndex:1}}>
 
-      {/* Left Sidebar */}
-      <aside className="fixed top-0 left-0 h-full z-40 flex">
-        {/* Icon rail */}
-        <div className="flex flex-col items-center py-4 gap-2 border-r w-14" style={{backgroundColor: t.card, borderColor: t.border}}>
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center mb-4">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="5" rx="1" fill="white" opacity="0.9"/><rect x="9" y="1" width="6" height="8" rx="1" fill="white" opacity="0.6"/><rect x="1" y="8" width="6" height="7" rx="1" fill="white" opacity="0.6"/><rect x="9" y="11" width="6" height="4" rx="1" fill="white" opacity="0.4"/></svg>
-          </div>
-          <button title="Competitor Ads" onClick={() => { setActiveSidebarTool("competitor"); setSidebarOpen(true); }}
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all border"
-            style={activeSidebarTool==="competitor"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
-            🔍
-          </button>
-          <button title="Lịch sử gen banner" onClick={() => { setActiveSidebarTool("history"); setSidebarOpen(true); }}
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all border"
-            style={activeSidebarTool==="history"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
-            🕐
-          </button>
-          <button title="Ad Copy Generator" onClick={() => { setActiveSidebarTool("adcopy"); setSidebarOpen(true); }}
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all border"
-            style={activeSidebarTool==="adcopy"&&sidebarOpen ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {backgroundColor:"transparent",borderColor:"transparent",color:t.textMuted}}>
-            ✍️
-          </button>
-        </div>
-
-        {/* Slide-out panel */}
-        {sidebarOpen && activeSidebarTool === "history" && (
-          <div className="h-full w-80 border-r overflow-y-auto flex flex-col" style={{backgroundColor: bgColor, borderColor: t.border}}>
-            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{backgroundColor: bgColor, borderColor: t.border}}>
-              <div>
-                <div className="text-sm font-semibold" style={{color: t.text}}>🕐 Lịch sử gen banner</div>
-                <div className="text-xs" style={{color: t.textMuted}}>{history.length} lần tạo gần đây</div>
-              </div>
-              <button onClick={() => setSidebarOpen(false)} className="text-lg leading-none" style={{color: t.textMuted}}>✕</button>
-            </div>
-            <div className="p-4 flex-1 space-y-3">
-              {history.length === 0 ? (
-                <div className="text-center py-10 text-xs" style={{color: t.textMuted}}>Chưa có lịch sử.<br/>Gen banner đầu tiên để lưu ở đây.</div>
-              ) : history.map(h => (
-                <div key={h.id} className="rounded-xl border overflow-hidden" style={{borderColor: t.border, backgroundColor: t.card}}>
-                  {h.thumbnail && <img src={h.thumbnail} alt="" className="w-full h-24 object-cover"/>}
-                  <div className="p-3">
-                    <div className="font-semibold text-sm truncate" style={{color: t.text}}>{h.appName || "Untitled"}</div>
-                    <div className="text-xs mb-3" style={{color: t.textMuted}}>{h.date} · {h.count} ảnh</div>
-                    <div className="flex gap-2">
-                      <div className="flex-1 text-xs py-1.5 rounded-lg text-center" style={{backgroundColor: t.tabBg, color: t.textMuted}}>
-                        {h.count} banners đã tạo
-                      </div>
-                      <button onClick={() => deleteHistory(h.id)}
-                        className="text-xs px-2.5 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
-                        🗑
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {sidebarOpen && activeSidebarTool === "adcopy" && (
-          <div className="h-full w-80 border-r overflow-y-auto flex flex-col" style={{backgroundColor: bgColor, borderColor: t.border}}>
-            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{backgroundColor: bgColor, borderColor: t.border}}>
-              <div>
-                <div className="text-sm font-semibold" style={{color: t.text}}>✍️ Ad Copy Generator</div>
-                <div className="text-xs" style={{color: t.textMuted}}>Tạo headline, description & CTA</div>
-              </div>
-              <button onClick={() => setSidebarOpen(false)} className="text-lg leading-none" style={{color: t.textMuted}}>✕</button>
-            </div>
-            <div className="p-4 flex-1 space-y-3">
-              <div>
-                <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Tên app / sản phẩm *</div>
-                <input value={adcopyAppName} onChange={e => setAdcopyAppName(e.target.value)}
-                  placeholder="VD: Canva, PhotoRoom..."
-                  className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}/>
-              </div>
-              <div>
-                <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Key message</div>
-                <textarea value={adcopyMessage} onChange={e => setAdcopyMessage(e.target.value)}
-                  placeholder="VD: Chỉnh ảnh chuyên nghiệp, miễn phí..."
-                  rows={2}
-                  className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-none"
-                  style={inputStyle}/>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Thị trường</div>
-                  <select value={adcopyCountry} onChange={e => setAdcopyCountry(e.target.value)}
-                    className="w-full text-xs rounded-lg px-2 py-2 border focus:outline-none focus:border-violet-500"
-                    style={inputStyle}>
-                    {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Ngôn ngữ</div>
-                  <select value={adcopyLang} onChange={e => setAdcopyLang(e.target.value)}
-                    className="w-full text-xs rounded-lg px-2 py-2 border focus:outline-none focus:border-violet-500"
-                    style={inputStyle}>
-                    {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-                  </select>
-                </div>
-              </div>
-              <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyAppName.trim()}
-                className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
-                {adcopyLoading ? <><span className="animate-spin">⏳</span> Đang tạo...</> : <>✨ Generate Ad Copy</>}
-              </button>
-
-              {adcopyResult && (
-                <div className="space-y-3 pt-1">
-                  {/* Headlines */}
-                  <div className="rounded-xl border overflow-hidden" style={{borderColor: t.border}}>
-                    <div className="px-3 py-2 text-xs font-semibold border-b flex items-center gap-1.5" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-                      📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(tối đa 30 ký tự)</span>
-                    </div>
-                    <div className="divide-y" style={{borderColor: t.border}}>
-                      {adcopyResult.headlines.map((h, i) => (
-                        <div key={i} className="flex items-center justify-between px-3 py-2 gap-2 group"
-                          style={{backgroundColor: t.card}}>
-                          <span className="text-xs flex-1" style={{color: t.text}}>{h}</span>
-                          <button onClick={() => copyText(h)}
-                            className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded"
-                            style={{backgroundColor: t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
-                            {adcopyCopied===h ? "✓" : "copy"}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Descriptions */}
-                  <div className="rounded-xl border overflow-hidden" style={{borderColor: t.border}}>
-                    <div className="px-3 py-2 text-xs font-semibold border-b flex items-center gap-1.5" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-                      📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(tối đa 90 ký tự)</span>
-                    </div>
-                    <div className="divide-y" style={{borderColor: t.border}}>
-                      {adcopyResult.descriptions.map((d, i) => (
-                        <div key={i} className="flex items-start justify-between px-3 py-2 gap-2 group"
-                          style={{backgroundColor: t.card}}>
-                          <span className="text-xs flex-1 leading-relaxed" style={{color: t.text}}>{d}</span>
-                          <button onClick={() => copyText(d)}
-                            className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded mt-0.5 flex-shrink-0"
-                            style={{backgroundColor: t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
-                            {adcopyCopied===d ? "✓" : "copy"}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* CTAs */}
-                  <div className="rounded-xl border overflow-hidden" style={{borderColor: t.border}}>
-                    <div className="px-3 py-2 text-xs font-semibold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-                      🎯 Call to Action
-                    </div>
-                    <div className="p-3 flex flex-wrap gap-2" style={{backgroundColor: t.card}}>
-                      {adcopyResult.ctas.map((c, i) => (
-                        <button key={i} onClick={() => copyText(c)}
-                          className="text-xs px-3 py-1.5 rounded-lg border transition-all"
-                          style={{borderColor: adcopyCopied===c ? "#10B981" : t.border, color: adcopyCopied===c ? "#10B981" : t.text, backgroundColor: t.tabBg}}>
-                          {adcopyCopied===c ? "✓ Copied" : c}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <button onClick={handleAdCopyGenerate}
-                    className="w-full text-xs py-1.5 rounded-lg border transition-colors"
-                    style={{borderColor: t.border, color: t.textMuted}}>
-                    🔄 Tạo lại
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {sidebarOpen && activeSidebarTool === "competitor" && (
-          <div className="h-full w-80 border-r overflow-y-auto flex flex-col" style={{backgroundColor: bgColor, borderColor: t.border}}>
-            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{backgroundColor: bgColor, borderColor: t.border}}>
-              <div>
-                <div className="text-sm font-semibold" style={{color: t.text}}>🔍 Competitor Ads</div>
-                <div className="text-xs" style={{color: t.textMuted}}>Tra cứu quảng cáo đối thủ</div>
-              </div>
-              <button onClick={() => setSidebarOpen(false)} className="text-lg leading-none" style={{color: t.textMuted}}>✕</button>
-            </div>
-            <div className="p-4 flex-1">
-              <div className="text-xs mb-2" style={{color: t.textMuted}}>Nhập link App Store hoặc Play Store</div>
-              <input value={compQuery} onChange={e => {
-                const val = e.target.value;
-                setCompQuery(val); setCompAppName(""); setCompAppIcon("");
-                if (val.trim().startsWith("http")) lookupAppNamePreview(val.trim());
-              }}
-                placeholder="https://apps.apple.com/..."
-                className="w-full text-xs rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
-                style={inputStyle}/>
-
-              {/* App name preview */}
-              {compQuery.trim().startsWith("http") && (
-                <div className="mt-2 flex items-center gap-2 px-1">
-                  {compNameLoading ? (
-                    <span className="text-xs" style={{color: t.textMuted}}>⏳ Đang nhận diện app...</span>
-                  ) : compAppName ? (
-                    <>
-                      {compAppIcon && <img src={compAppIcon} alt="" className="w-7 h-7 rounded-lg flex-shrink-0"/>}
-                      <span className="text-xs font-semibold truncate" style={{color: t.text}}>{compAppName}</span>
-                    </>
-                  ) : null}
-                </div>
-              )}
-
-              {compQuery.trim() && (
-                <div className="mt-3 p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.card}}>
-                  <button onClick={handleCompetitorSearch} disabled={compLoading || compNameLoading}
-                    className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs py-2 px-3 rounded-lg transition-all font-medium flex items-center justify-center gap-2">
-                    {compLoading ? <><span>⏳</span> Đang mở...</> : <>🔎 Xem quảng cáo trên Google</>}
-                  </button>
-                  <div className="text-xs mt-2 text-center" style={{color: t.textMuted}}>Mở Google Ads Transparency Center</div>
-                </div>
-              )}
-              <div className="mt-6 space-y-2">
-                <div className="text-xs font-semibold" style={{color: t.textMuted}}>Ví dụ</div>
-                {["https://apps.apple.com/us/app/canva/id897446215","https://play.google.com/store/apps/details?id=com.canva.editor"].map(ex => (
-                  <button key={ex} onClick={() => setCompQuery(ex)}
-                    className="w-full text-left text-xs px-3 py-2 rounded-lg border transition-colors"
-                    style={{borderColor: t.border, color: t.textMuted}}>
-                    {ex.includes("apple") ? "🍎" : "🤖"} {ex.includes("apple") ? "App Store link" : "Play Store link"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </aside>
-
-      {/* Main content — push right when sidebar open */}
-      <div className="flex-1 flex flex-col transition-all" style={{marginLeft: sidebarOpen ? "calc(3.5rem + 20rem)" : "3.5rem"}}>
-
-      {/* Header */}
-      <header className="border-b px-6 py-4 flex items-center justify-between" style={{borderColor: t.border}}>
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="5" rx="1" fill="white" opacity="0.9"/><rect x="9" y="1" width="6" height="8" rx="1" fill="white" opacity="0.6"/><rect x="1" y="8" width="6" height="7" rx="1" fill="white" opacity="0.6"/><rect x="9" y="11" width="6" height="4" rx="1" fill="white" opacity="0.4"/></svg>
+      {/* Fixed Sidebar */}
+      <aside className="fixed top-0 left-0 h-full z-40 flex flex-col border-r" style={{width:200, backgroundColor: t.card, borderColor: t.border}}>
+        {/* Logo */}
+        <div className="flex items-center gap-2.5 px-4 py-4 border-b" style={{borderColor: t.border}}>
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center flex-shrink-0">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="5" rx="1" fill="white" opacity="0.9"/><rect x="9" y="1" width="6" height="8" rx="1" fill="white" opacity="0.6"/><rect x="1" y="8" width="6" height="7" rx="1" fill="white" opacity="0.6"/><rect x="9" y="11" width="6" height="4" rx="1" fill="white" opacity="0.4"/></svg>
           </div>
           <div>
-            <div className="font-semibold text-sm" style={{color: t.text}}>Google Ads Generator</div>
-            <div className="text-xs" style={{color: t.textMuted}}>App Mobile — Photo / Tool / Office</div>
+            <div className="text-xs font-bold leading-tight" style={{color: t.text}}>Ads Generator</div>
+            <div className="text-[10px]" style={{color: t.textMuted}}>Apero Group</div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+
+        {/* Nav */}
+        <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
+          <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2" style={{color: t.textMuted}}>Công cụ</div>
+          {([
+            ["home",     "🏠", "Home"],
+            ["generate", "🎨", "Gen Banner"],
+            ["adcopy",   "✍️", "Ad Copy"],
+          ] as const).map(([page, icon, label]) => (
+            <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
+              style={activePage===page
+                ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
+                : {color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}>
+              <span>{icon}</span>{label}
+            </button>
+          ))}
+          <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Nghiên cứu</div>
+          {([
+            ["competitor", "🔍", "Competitor Ads"],
+            ["history",   "🕐", "Lịch sử"],
+          ] as const).map(([page, icon, label]) => (
+            <button key={page} onClick={() => setActivePage(page)}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
+              style={activePage===page
+                ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
+                : {color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}>
+              <span>{icon}</span>{label}
+              {page==="history" && history.length>0 && (
+                <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full font-bold" style={{backgroundColor:"#10B98122",color:"#10B981"}}>{history.length}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+
+        {/* Dark mode toggle at bottom */}
+        <div className="p-3 border-t" style={{borderColor: t.border}}>
           <button onClick={() => setDarkMode(d => !d)}
-            title={darkMode ? "Chuyển Light mode" : "Chuyển Dark mode"}
-            className="w-8 h-8 rounded-full flex items-center justify-center transition-all border"
-            style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-            {darkMode ? "☀️" : "🌙"}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all border"
+            style={{color: t.textMuted, borderColor: t.border, backgroundColor: t.tabBg}}>
+            {darkMode ? "☀️" : "🌙"} {darkMode ? "Light mode" : "Dark mode"}
           </button>
-          {step !== "upload" && (
-            <div className="flex items-center gap-2">
-              <button onClick={() => {
-                if (step === "preview") setStep("brief");
-                else if (step === "brief") setStep("upload");
-                else if (step === "analyzing") setStep("upload");
-              }}
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col" style={{marginLeft: 200}}>
+
+      {/* Header */}
+      <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
+        <div className="text-sm font-semibold" style={{color: t.text}}>
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : "🕐 Lịch sử"}
+        </div>
+        <div className="flex items-center gap-2">
+          {activePage==="generate" && step !== "upload" && (
+            <>
+              <button onClick={() => { if (step==="preview") setStep("brief"); else if (step==="brief") setStep("upload"); else if (step==="analyzing") setStep("upload"); }}
                 className="text-xs px-3 py-1.5 rounded-md border transition-colors"
-                style={{color: t.textMuted, borderColor: t.border}}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = t.text; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = t.textMuted; }}>
-                ← Back
-              </button>
+                style={{color: t.textMuted, borderColor: t.border}}>← Back</button>
               <button onClick={resetAll}
                 className="text-xs px-3 py-1.5 rounded-md border transition-colors"
-                style={{color: t.textMuted, borderColor: t.border}}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = t.text; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = t.textMuted; }}>
-                🏠 Home
-              </button>
-            </div>
+                style={{color: t.textMuted, borderColor: t.border}}>🏠 Home</button>
+            </>
+          )}
+          {activePage==="generate" && step==="upload" && (
+            <button onClick={() => setActivePage("home")}
+              className="text-xs px-3 py-1.5 rounded-md border transition-colors"
+              style={{color: t.textMuted, borderColor: t.border}}>← Dashboard</button>
           )}
         </div>
       </header>
 
       {/* Progress bar */}
-      <div className="h-0.5" style={{backgroundColor: t.progress}}>
-        <div className="h-full bg-gradient-to-r from-violet-600 to-violet-400 transition-all duration-500"
-          style={{width: step==="upload"?"15%":step==="analyzing"?"40%":step==="brief"?"60%":step==="generating"?"80%":"100%"}}/>
-      </div>
+      {activePage === "generate" && (
+        <div className="h-0.5" style={{backgroundColor: t.progress}}>
+          <div className="h-full bg-gradient-to-r from-violet-600 to-violet-400 transition-all duration-500"
+            style={{width: step==="upload"?"15%":step==="analyzing"?"40%":step==="brief"?"60%":step==="generating"?"80%":"100%"}}/>
+        </div>
+      )}
 
       <main className="max-w-4xl mx-auto px-6 py-10">
 
+        {/* HOME DASHBOARD */}
+        {activePage === "home" && (
+          <div className="space-y-8">
+            <div>
+              <h1 className="text-2xl font-bold mb-1" style={{color: t.text}}>Xin chào! 👋</h1>
+              <p className="text-sm" style={{color: t.textMuted}}>Chọn công cụ để bắt đầu tạo quảng cáo</p>
+            </div>
+
+            {/* Tool cards */}
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Công cụ chính</div>
+              <div className="grid grid-cols-3 gap-4">
+                {[
+                  { page: "generate" as const, icon: "🎨", name: "Gen Banner", desc: "Upload ảnh → AI tạo 20+ kích thước chuẩn Google Ads trong 60 giây", badge: "Phổ biến nhất", primary: true },
+                  { page: "adcopy" as const,   icon: "✍️", name: "Ad Copy",    desc: "Tạo headline, description & CTA chuẩn Google Ads theo thị trường", badge: null, primary: false },
+                  { page: "competitor" as const, icon: "🔍", name: "Competitor", desc: "Xem banner quảng cáo đối thủ đang chạy qua Google Ads Transparency", badge: null, primary: false },
+                ].map(tool => (
+                  <button key={tool.page} onClick={() => { setActivePage(tool.page); if (tool.page==="generate") setStep("upload"); }}
+                    className="p-5 rounded-2xl border text-left transition-all hover:scale-[1.02]"
+                    style={tool.primary
+                      ? {backgroundColor:"#7C3AED12", borderColor:"#7C3AED44", boxShadow: t.cardShadow}
+                      : {...cardStyle}}>
+                    <div className="text-3xl mb-3">{tool.icon}</div>
+                    <div className="text-sm font-bold mb-1" style={{color: t.text}}>{tool.name}</div>
+                    <div className="text-xs leading-relaxed" style={{color: t.textMuted}}>{tool.desc}</div>
+                    {tool.badge && (
+                      <div className="mt-3 inline-flex text-[10px] font-bold px-2 py-0.5 rounded-full" style={{backgroundColor:"#7C3AED22",color:"#A78BFA"}}>⭐ {tool.badge}</div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Recent history */}
+            {history.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Lần tạo gần đây</div>
+                  <button onClick={() => setActivePage("history")} className="text-xs" style={{color:"#A78BFA"}}>Xem tất cả →</button>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {history.slice(0,3).map(h => (
+                    <div key={h.id} className="rounded-xl border overflow-hidden" style={cardStyle}>
+                      {h.thumbnail && <img src={h.thumbnail} alt="" className="w-full object-cover" style={{height:64}}/>}
+                      <div className="p-3">
+                        <div className="text-xs font-semibold truncate" style={{color: t.text}}>{h.appName || "Untitled"}</div>
+                        <div className="text-[10px] mt-0.5" style={{color: t.textMuted}}>{h.date} · {h.count} ảnh</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* UPLOAD */}
-        {(step==="upload"||step==="analyzing") && (
+        {activePage==="generate" && (step==="upload"||step==="analyzing") && (
           <div className="space-y-6">
             <div>
               <h1 className="text-2xl font-bold mb-1" style={{color: t.text}}>Tạo ảnh Google Ads</h1>
@@ -974,7 +842,7 @@ export default function Home() {
         )}
 
         {/* BRIEF */}
-        {step==="brief" && (
+        {activePage==="generate" && step==="brief" && (
           <div className="space-y-6">
             <div>
               <h2 className="text-xl font-bold mb-1" style={{color: t.text}}>Xem lại & chỉnh brief</h2>
@@ -1042,7 +910,7 @@ export default function Home() {
         )}
 
         {/* GENERATING */}
-        {step==="generating" && (
+        {activePage==="generate" && step==="generating" && (
           <div className="text-center py-20 space-y-6">
             <div className="text-5xl animate-pulse">🎨</div>
             <div>
@@ -1056,7 +924,7 @@ export default function Home() {
         )}
 
         {/* PREVIEW */}
-        {step==="preview" && (
+        {activePage==="generate" && step==="preview" && (
           <div className="space-y-6">
             <div className="flex items-start justify-between">
               <div>
@@ -1217,6 +1085,152 @@ export default function Home() {
             </div>}
           </div>
         )}
+
+        {/* AD COPY PAGE */}
+        {activePage === "adcopy" && (
+          <div className="max-w-xl space-y-4">
+            <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Tên app / sản phẩm *</div>
+            <input value={adcopyAppName} onChange={e => setAdcopyAppName(e.target.value)}
+              placeholder="VD: Canva, PhotoRoom..."
+              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500"
+              style={inputStyle}/>
+            <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Key message</div>
+            <textarea value={adcopyMessage} onChange={e => setAdcopyMessage(e.target.value)}
+              placeholder="VD: Chỉnh ảnh chuyên nghiệp, miễn phí..." rows={3}
+              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500 resize-none"
+              style={inputStyle}/>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Thị trường</div>
+                <select value={adcopyCountry} onChange={e => setAdcopyCountry(e.target.value)}
+                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
+                  style={inputStyle}>
+                  {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</div>
+                <select value={adcopyLang} onChange={e => setAdcopyLang(e.target.value)}
+                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
+                  style={inputStyle}>
+                  {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyAppName.trim()}
+              className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm py-3 px-4 rounded-xl transition-all font-semibold flex items-center justify-center gap-2">
+              {adcopyLoading ? <><span className="animate-spin">⏳</span> Đang tạo...</> : <>✨ Generate Ad Copy</>}
+            </button>
+
+            {adcopyResult && (
+              <div className="space-y-4 pt-2">
+                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
+                  <div className="px-4 py-3 text-xs font-bold border-b flex items-center gap-2" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
+                    📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(≤30 ký tự)</span>
+                  </div>
+                  {adcopyResult.headlines.map((h, i) => (
+                    <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-2 group border-b last:border-0" style={{borderColor: t.border}}>
+                      <span className="text-sm" style={{color: t.text}}>{h}</span>
+                      <button onClick={() => copyText(h)} className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded" style={{backgroundColor: t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
+                        {adcopyCopied===h ? "✓" : "copy"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
+                  <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
+                    📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(≤90 ký tự)</span>
+                  </div>
+                  {adcopyResult.descriptions.map((d, i) => (
+                    <div key={i} className="flex items-start justify-between px-4 py-2.5 gap-2 group border-b last:border-0" style={{borderColor: t.border}}>
+                      <span className="text-sm leading-relaxed flex-1" style={{color: t.text}}>{d}</span>
+                      <button onClick={() => copyText(d)} className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded mt-0.5 flex-shrink-0" style={{backgroundColor: t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
+                        {adcopyCopied===d ? "✓" : "copy"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
+                  <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>🎯 Call to Action</div>
+                  <div className="p-4 flex flex-wrap gap-2">
+                    {adcopyResult.ctas.map((c, i) => (
+                      <button key={i} onClick={() => copyText(c)} className="text-sm px-4 py-2 rounded-xl border transition-all"
+                        style={{borderColor: adcopyCopied===c ? "#10B981" : t.border, color: adcopyCopied===c ? "#10B981" : t.text, backgroundColor: t.tabBg}}>
+                        {adcopyCopied===c ? "✓ Copied" : c}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={handleAdCopyGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Tạo lại</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* COMPETITOR PAGE */}
+        {activePage === "competitor" && (
+          <div className="max-w-xl space-y-4">
+            <div className="text-xs" style={{color: t.textMuted}}>Nhập link App Store hoặc Play Store của app đối thủ</div>
+            <input value={compQuery} onChange={e => {
+              const val = e.target.value; setCompQuery(val); setCompAppName(""); setCompAppIcon("");
+              if (val.trim().startsWith("http")) lookupAppNamePreview(val.trim());
+            }}
+              placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
+              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500"
+              style={inputStyle}/>
+            {compQuery.trim().startsWith("http") && (
+              <div className="flex items-center gap-2 px-1">
+                {compNameLoading ? <span className="text-xs" style={{color: t.textMuted}}>⏳ Đang nhận diện app...</span>
+                  : compAppName ? (
+                    <>
+                      {compAppIcon && <img src={compAppIcon} alt="" className="w-8 h-8 rounded-xl flex-shrink-0"/>}
+                      <span className="text-sm font-semibold" style={{color: t.text}}>{compAppName}</span>
+                    </>
+                  ) : null}
+              </div>
+            )}
+            {compQuery.trim() && (
+              <button onClick={handleCompetitorSearch} disabled={compLoading || compNameLoading}
+                className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm py-3 px-4 rounded-xl transition-all font-semibold flex items-center justify-center gap-2">
+                {compLoading ? <><span>⏳</span> Đang mở...</> : <>🔎 Xem quảng cáo trên Google</>}
+              </button>
+            )}
+            <div className="text-xs font-semibold mt-6" style={{color: t.textMuted}}>Ví dụ nhanh</div>
+            {["https://apps.apple.com/us/app/canva/id897446215","https://play.google.com/store/apps/details?id=com.canva.editor"].map(ex => (
+              <button key={ex} onClick={() => setCompQuery(ex)}
+                className="w-full text-left text-sm px-4 py-3 rounded-xl border transition-colors"
+                style={cardStyle}>
+                {ex.includes("apple") ? "🍎 App Store — Canva" : "🤖 Play Store — Canva"}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* HISTORY PAGE */}
+        {activePage === "history" && (
+          <div className="space-y-4">
+            {history.length === 0 ? (
+              <div className="text-center py-20" style={{color: t.textMuted}}>
+                <div className="text-4xl mb-3">🕐</div>
+                <div className="text-sm">Chưa có lịch sử. Gen banner đầu tiên để lưu ở đây.</div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-4">
+                {history.map(h => (
+                  <div key={h.id} className="rounded-2xl border overflow-hidden" style={cardStyle}>
+                    {h.thumbnail && <img src={h.thumbnail} alt="" className="w-full object-cover" style={{height:96}}/>}
+                    <div className="p-4">
+                      <div className="font-semibold text-sm truncate" style={{color: t.text}}>{h.appName || "Untitled"}</div>
+                      <div className="text-xs mt-0.5 mb-3" style={{color: t.textMuted}}>{h.date} · {h.count} ảnh</div>
+                      <button onClick={() => deleteHistory(h.id)} className="text-xs px-2.5 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🗑 Xóa</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
       </main>
 
       {/* Lightbox */}
