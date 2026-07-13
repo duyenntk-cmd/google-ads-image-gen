@@ -144,6 +144,12 @@ export default function Home() {
   const [adcopyMessage, setAdcopyMessage] = useState("");
   const [adcopyCountry, setAdcopyCountry] = useState("Global");
   const [adcopyLang, setAdcopyLang] = useState("English");
+  const [adcopyCountrySearch, setAdcopyCountrySearch] = useState("");
+  const [adcopyCountryOpen, setAdcopyCountryOpen] = useState(false);
+  const adcopyCountryRef = useRef<HTMLDivElement>(null);
+  const [adcopyLangSearch, setAdcopyLangSearch] = useState("");
+  const [adcopyLangOpen, setAdcopyLangOpen] = useState(false);
+  const adcopyLangRef = useRef<HTMLDivElement>(null);
   const [adcopyLoading, setAdcopyLoading] = useState(false);
   interface AdCopyResult { headlines: string[]; descriptions: string[]; ctas: string[]; }
   const [adcopyResult, setAdcopyResult] = useState<AdCopyResult|null>(null);
@@ -1100,21 +1106,69 @@ export default function Home() {
               className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500 resize-none"
               style={inputStyle}/>
             <div className="grid grid-cols-2 gap-3">
+              {/* Country searchable dropdown */}
               <div>
                 <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Thị trường</div>
-                <select value={adcopyCountry} onChange={e => setAdcopyCountry(e.target.value)}
-                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}>
-                  {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
-                </select>
+                <div ref={adcopyCountryRef} className="relative">
+                  <button type="button" onClick={() => { setAdcopyCountryOpen(o => !o); setAdcopyCountrySearch(""); }}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
+                    style={{...inputStyle, borderColor: adcopyCountryOpen ? "#7C3AED" : t.inputBorder}}>
+                    <span className="truncate">{COUNTRIES.find(c => c.code === adcopyCountry)?.label || adcopyCountry}</span>
+                    <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{adcopyCountryOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {adcopyCountryOpen && (
+                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                      <div className="p-2 border-b" style={{borderColor: t.border}}>
+                        <input autoFocus value={adcopyCountrySearch} onChange={e => setAdcopyCountrySearch(e.target.value)}
+                          placeholder="🔍 Tìm quốc gia..."
+                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
+                          style={inputStyle}/>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto">
+                        {COUNTRIES.filter(c => c.label.toLowerCase().includes(adcopyCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(adcopyCountrySearch.toLowerCase())).map(c => (
+                          <button key={c.code} type="button"
+                            onClick={() => { setAdcopyCountry(c.code); setAdcopyCountryOpen(false); setAdcopyCountrySearch(""); }}
+                            className="w-full text-left px-4 py-2 text-sm transition-colors"
+                            style={{backgroundColor: adcopyCountry === c.code ? "#7C3AED22" : "transparent", color: adcopyCountry === c.code ? "#A78BFA" : t.text}}>
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
+              {/* Language searchable dropdown */}
               <div>
                 <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</div>
-                <select value={adcopyLang} onChange={e => setAdcopyLang(e.target.value)}
-                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}>
-                  {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
+                <div ref={adcopyLangRef} className="relative">
+                  <button type="button" onClick={() => { setAdcopyLangOpen(o => !o); setAdcopyLangSearch(""); }}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
+                    style={{...inputStyle, borderColor: adcopyLangOpen ? "#7C3AED" : t.inputBorder}}>
+                    <span className="truncate">{LANGUAGES.find(l => l.code === adcopyLang)?.label || adcopyLang}</span>
+                    <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{adcopyLangOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {adcopyLangOpen && (
+                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                      <div className="p-2 border-b" style={{borderColor: t.border}}>
+                        <input autoFocus value={adcopyLangSearch} onChange={e => setAdcopyLangSearch(e.target.value)}
+                          placeholder="🔍 Tìm ngôn ngữ..."
+                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
+                          style={inputStyle}/>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto">
+                        {LANGUAGES.filter(l => l.label.toLowerCase().includes(adcopyLangSearch.toLowerCase()) || l.code.toLowerCase().includes(adcopyLangSearch.toLowerCase())).map(l => (
+                          <button key={l.code} type="button"
+                            onClick={() => { setAdcopyLang(l.code); setAdcopyLangOpen(false); setAdcopyLangSearch(""); }}
+                            className="w-full text-left px-4 py-2 text-sm transition-colors"
+                            style={{backgroundColor: adcopyLang === l.code ? "#7C3AED22" : "transparent", color: adcopyLang === l.code ? "#A78BFA" : t.text}}>
+                            {l.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyAppName.trim()}
