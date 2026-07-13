@@ -130,7 +130,8 @@ export default function Home() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const iconInputRef = useRef<HTMLInputElement>(null);
 
-  const [bgColor, setBgColor] = useState("#F8FAFC");
+  const [darkMode, setDarkMode] = useState(false);
+  const bgColor = darkMode ? "#0A0A0F" : "#F8FAFC";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
 
@@ -211,29 +212,24 @@ export default function Home() {
   const [langSearch, setLangSearch] = useState("");
   const [langOpen, setLangOpen] = useState(false);
   const langRef = useRef<HTMLDivElement>(null);
-  const PRESETS = [
-    { color: "#0A0A0F", label: "Dark" },
-    { color: "#0F172A", label: "Navy" },
-    { color: "#1A0A2E", label: "Purple" },
-    { color: "#0A1628", label: "Ocean" },
-    { color: "#ffffff", label: "Light" },
-    { color: "#F8FAFC", label: "Gray" },
-  ];
-  const hexToLuma = (hex: string) => { const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16); return 0.299*r + 0.587*g + 0.114*b; };
-  const isDark = hexToLuma(bgColor) < 128;
+  const isDark = darkMode;
   const t = {
     text:        isDark ? "#F1F5F9" : "#0F172A",
     textSub:     isDark ? "#94A3B8" : "#475569",
     textMuted:   isDark ? "#64748B" : "#94A3B8",
-    border:      isDark ? "#1E1E2E" : "#E2E8F0",
-    card:        isDark ? "#111118" : "#FFFFFF",
-    cardHover:   isDark ? "#0F0F1A" : "#F1F5F9",
-    input:       isDark ? "#111118" : "#FFFFFF",
-    inputBorder: isDark ? "#1E1E2E" : "#CBD5E1",
-    progress:    isDark ? "#111118" : "#E2E8F0",
-    tabBg:       isDark ? "#111118" : "#F1F5F9",
-    tabActive:   isDark ? "#1E1E2E" : "#FFFFFF",
-    uploadHover: isDark ? "#111118" : "#F8FAFC",
+    border:      isDark ? "#1E293B" : "#E2E8F0",
+    card:        isDark ? "#0F1117" : "#FFFFFF",
+    cardHover:   isDark ? "#161B27" : "#F8FAFC",
+    input:       isDark ? "#0F1117" : "#FFFFFF",
+    inputBorder: isDark ? "#1E293B" : "#CBD5E1",
+    progress:    isDark ? "#1E293B" : "#E2E8F0",
+    tabBg:       isDark ? "#161B27" : "#F1F5F9",
+    tabActive:   isDark ? "#1E293B" : "#FFFFFF",
+    uploadHover: isDark ? "#161B27" : "#F8FAFC",
+    cardShadow:  isDark ? "0 4px 24px rgba(0,0,0,0.4)" : "0 4px 24px rgba(109,40,217,0.07)",
+    cardShadowHover: isDark ? "0 8px 40px rgba(0,0,0,0.5)" : "0 8px 40px rgba(109,40,217,0.13)",
+    gradientOrb1: isDark ? "rgba(109,40,217,0.15)" : "rgba(139,92,246,0.08)",
+    gradientOrb2: isDark ? "rgba(236,72,153,0.08)" : "rgba(236,72,153,0.05)",
   };
 
   const handleVideoChange = useCallback(async (file: File) => {
@@ -346,8 +342,10 @@ export default function Home() {
   const displayedPreviews = activeTab==="top5" ? previews.filter(p=>p.isTop5) : previews;
   const resetAll = () => { setStep("upload"); setPreviews([]); setFrames([]); setVideoFile(null); setImageFiles([]); setIconFile(null); setError(""); setExtractProgress(0); };
 
-  const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text };
+  const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text, transition: "border-color 0.15s, box-shadow 0.15s" };
   const labelStyle = { color: t.textMuted };
+  const cardStyle = { backgroundColor: t.card, borderColor: t.border, boxShadow: t.cardShadow, borderRadius: 16 };
+  const cardStyleHover = { backgroundColor: t.card, borderColor: t.border, boxShadow: t.cardShadowHover, borderRadius: 16 };
 
   const extractAppName = (url: string): { name: string; iosId?: string; androidPkg?: string } => {
     const iosSlugMatch = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id(\d+)/);
@@ -474,7 +472,13 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen flex" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
+    <div className="min-h-screen flex relative" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
+      {/* Gradient orbs */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden" style={{zIndex:0}}>
+        <div style={{position:"absolute",top:"-10%",right:"5%",width:600,height:600,borderRadius:"50%",background:`radial-gradient(circle, ${t.gradientOrb1} 0%, transparent 70%)`,filter:"blur(40px)"}}/>
+        <div style={{position:"absolute",bottom:"10%",left:"10%",width:400,height:400,borderRadius:"50%",background:`radial-gradient(circle, ${t.gradientOrb2} 0%, transparent 70%)`,filter:"blur(40px)"}}/>
+      </div>
+      <div className="min-h-screen flex w-full relative" style={{zIndex:1}}>
 
       {/* Left Sidebar */}
       <aside className="fixed top-0 left-0 h-full z-40 flex">
@@ -725,15 +729,12 @@ export default function Home() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            {PRESETS.map(p => (
-              <button key={p.color} onClick={() => setBgColor(p.color)} title={p.label}
-                className={`w-5 h-5 rounded-full border-2 transition-all ${bgColor === p.color ? "border-violet-400 scale-110" : "border-transparent opacity-60 hover:opacity-100"}`}
-                style={{backgroundColor: p.color, boxShadow: p.color === "#ffffff" || p.color === "#F8FAFC" ? "inset 0 0 0 1px rgba(0,0,0,0.15)" : undefined}}/>
-            ))}
-            <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
-              className="w-5 h-5 rounded-full cursor-pointer border-0 p-0 opacity-60 hover:opacity-100" title="Tuỳ chỉnh màu"/>
-          </div>
+          <button onClick={() => setDarkMode(d => !d)}
+            title={darkMode ? "Chuyển Light mode" : "Chuyển Dark mode"}
+            className="w-8 h-8 rounded-full flex items-center justify-center transition-all border"
+            style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
+            {darkMode ? "☀️" : "🌙"}
+          </button>
           {step !== "upload" && (
             <div className="flex items-center gap-2">
               <button onClick={() => {
@@ -769,14 +770,14 @@ export default function Home() {
 
         {/* UPLOAD */}
         {(step==="upload"||step==="analyzing") && (
-          <div className="space-y-8">
+          <div className="space-y-6">
             <div>
               <h1 className="text-2xl font-bold mb-1" style={{color: t.text}}>Tạo ảnh Google Ads</h1>
               <p className="text-sm" style={{color: t.textMuted}}>Upload video hoặc ảnh → tự động gen {AD_SIZES.length} banner PNG cho Google UAC App Install</p>
             </div>
 
             {/* Niche */}
-            <div>
+            <div className="p-5 border" style={cardStyle}>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>Ngành app</label>
               <div className="grid grid-cols-3 gap-3">
                 {(["photo","tool","office"] as const).map(n => (
@@ -790,7 +791,7 @@ export default function Home() {
             </div>
 
             {/* Language + Country */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="p-5 border grid grid-cols-2 gap-4" style={cardStyle}>
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={labelStyle}>
                   🌐 Ngôn ngữ text trong ảnh
@@ -862,7 +863,7 @@ export default function Home() {
             </div>
 
             {/* Input mode + upload */}
-            <div>
+            <div className="p-5 border" style={cardStyle}>
               <div className="flex items-center justify-between mb-3">
                 <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>
                   Nguồn ảnh <span className="text-violet-400">*</span>
@@ -937,7 +938,7 @@ export default function Home() {
             </div>
 
             {/* Icon + Store links */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="p-5 border grid grid-cols-2 gap-4" style={cardStyle}>
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>
                   Icon app <span className="font-normal normal-case" style={{color: t.textMuted}}>(tuỳ chọn)</span>
@@ -974,14 +975,14 @@ export default function Home() {
 
         {/* BRIEF */}
         {step==="brief" && (
-          <div className="space-y-8">
+          <div className="space-y-6">
             <div>
               <h2 className="text-xl font-bold mb-1" style={{color: t.text}}>Xem lại & chỉnh brief</h2>
               <p className="text-sm" style={{color: t.textMuted}}>Claude đã phân tích. Chỉnh bất kỳ mục nào trước khi gen ảnh.</p>
             </div>
 
             {/* Frame selector */}
-            <div>
+            <div className="p-5 border" style={cardStyle}>
               <div className="flex items-center justify-between mb-3">
                 <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>
                   Frame background ({brief.best_frame_index+1}/{frames.length})
@@ -1006,7 +1007,7 @@ export default function Home() {
             </div>
 
             {/* Text fields */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="p-5 border grid grid-cols-2 gap-4" style={cardStyle}>
               {[{key:"app_name",label:"Tên app",placeholder:"e.g. PhotoPro"},{key:"cta_text",label:"CTA Button",placeholder:"e.g. Try Free"},{key:"headline",label:"Headline",placeholder:"e.g. Edit Photos Like a Pro",full:true},{key:"subheadline",label:"Subheadline",placeholder:"e.g. 100+ Filters & AI Tools",full:true}].map(field=>(
                 <div key={field.key} className={field.full?"col-span-2":""}>
                   <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>{field.label}</label>
@@ -1020,7 +1021,7 @@ export default function Home() {
             </div>
 
             {/* Colors */}
-            <div>
+            <div className="p-5 border" style={cardStyle}>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>Màu sắc</label>
               <div className="flex gap-6">
                 {[{key:"primary_color",label:"Primary"},{key:"secondary_color",label:"Secondary"},{key:"accent_color",label:"Accent (CTA)"}].map(c=>(
@@ -1192,10 +1193,10 @@ export default function Home() {
                 const scale=Math.min(1,340/Math.max(p.width,p.height));
                 return (
                   <div key={p.key} onClick={()=>setSelectedPreview(p)}
-                    className="group rounded-xl p-4 cursor-pointer transition-all border"
-                    style={{backgroundColor: t.card, borderColor: t.border}}
-                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = t.cardHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = t.card; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
+                    className="group rounded-2xl p-4 cursor-pointer transition-all border"
+                    style={{...cardStyle, transition:"box-shadow 0.2s, border-color 0.2s, background-color 0.2s"}}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
                     <div className="flex items-center justify-center mb-3" style={{height:Math.round(p.height*scale)+16}}>
                       <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
                     </div>
@@ -1221,7 +1222,7 @@ export default function Home() {
       {/* Lightbox */}
       {selectedPreview && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-6" onClick={()=>setSelectedPreview(null)}>
-          <div className="rounded-2xl p-6 max-w-3xl w-full space-y-4 border" style={{backgroundColor: t.card, borderColor: t.border}} onClick={e=>e.stopPropagation()}>
+          <div className="rounded-2xl p-6 max-w-3xl w-full space-y-4 border" style={{...cardStyle, boxShadow:"0 25px 80px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div>
                 <div className="font-semibold" style={{color: t.text}}>{selectedPreview.key} — {selectedPreview.label}</div>
@@ -1239,6 +1240,7 @@ export default function Home() {
         </div>
       )}
       </div>{/* end main content */}
+      </div>{/* end inner flex */}
     </div>
   );
 }
