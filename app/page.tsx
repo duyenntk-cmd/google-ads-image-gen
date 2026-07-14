@@ -142,7 +142,7 @@ export default function Home() {
   // YouTube upload state
   const [ytAuthenticated, setYtAuthenticated] = useState(false);
   const [ytAccessToken, setYtAccessToken] = useState("");
-  interface YtVideo { file: File; title: string; description: string; tags: string; privacy: "public"|"unlisted"|"private"; status: "idle"|"uploading"|"done"|"error"; progress: number; errorMsg: string; }
+  interface YtVideo { file: File; title: string; description: string; tags: string; privacy: "public"|"unlisted"|"private"; status: "idle"|"uploading"|"done"|"error"; progress: number; errorMsg: string; videoId?: string; }
   const [ytVideos, setYtVideos] = useState<YtVideo[]>([]);
   const [ytUploading, setYtUploading] = useState(false);
   const ytFileRef = useRef<HTMLInputElement>(null);
@@ -203,6 +203,9 @@ export default function Home() {
           const range = uploadRes.headers.get("Range");
           offset = range ? parseInt(range.split("-")[1]) + 1 : offset + CHUNK;
         } else if (uploadRes.ok || uploadRes.status === 201 || uploadRes.status === 200) {
+          const resData = await uploadRes.json().catch(() => ({}));
+          const vid = resData?.id;
+          setYtVideos(prev => prev.map((v, i) => i === index ? {...v, videoId: vid || undefined} : v));
           offset = video.file.size;
         } else {
           throw new Error(`Upload chunk failed: ${uploadRes.status}`);
@@ -1444,11 +1447,19 @@ export default function Home() {
                         <div className="flex items-center gap-3">
                           <div className="text-2xl flex-shrink-0">🎬</div>
                           <div className="flex-1 min-w-0">
-                            <div className="text-xs font-semibold truncate" style={{color: t.text}}>{v.file.name}</div>
+                            <div className="text-xs font-semibold truncate" style={{color: t.text}}>{v.title || v.file.name}</div>
                             <div className="text-xs" style={{color: t.textMuted}}>{(v.file.size/1024/1024).toFixed(1)} MB</div>
                           </div>
                           <div className="flex items-center gap-2">
                             {v.status === "done" && <span className="text-xs font-bold text-green-400">✓ Done</span>}
+                            {v.status === "done" && v.videoId && (
+                              <button onClick={() => { navigator.clipboard.writeText(`https://youtu.be/${v.videoId}`); }}
+                                className="text-xs px-2 py-1 rounded-lg border transition-colors"
+                                style={{borderColor: "#10B981", color: "#10B981", backgroundColor: "#10B98111"}}
+                                title={`https://youtu.be/${v.videoId}`}>
+                                🔗 Copy link
+                              </button>
+                            )}
                             {v.status === "error" && <span className="text-xs font-bold text-red-400">✗ Lỗi</span>}
                             {v.status === "uploading" && <span className="text-xs" style={{color: t.textMuted}}>{v.progress}%</span>}
                             {v.status !== "uploading" && (
