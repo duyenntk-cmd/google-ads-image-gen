@@ -145,6 +145,7 @@ export default function Home() {
   interface YtVideo { file: File; title: string; description: string; tags: string; privacy: "public"|"unlisted"|"private"; status: "idle"|"uploading"|"done"|"error"; progress: number; errorMsg: string; videoId?: string; }
   const [ytVideos, setYtVideos] = useState<YtVideo[]>([]);
   const [ytUploading, setYtUploading] = useState(false);
+  const [ytCopiedIndex, setYtCopiedIndex] = useState<number|null>(null);
   const ytFileRef = useRef<HTMLInputElement>(null);
 
   const checkYtAuth = useCallback(async () => {
@@ -1453,11 +1454,17 @@ export default function Home() {
                           <div className="flex items-center gap-2">
                             {v.status === "done" && <span className="text-xs font-bold text-green-400">✓ Done</span>}
                             {v.status === "done" && v.videoId && (
-                              <button onClick={() => { navigator.clipboard.writeText(`https://youtu.be/${v.videoId}`); }}
-                                className="text-xs px-2 py-1 rounded-lg border transition-colors"
-                                style={{borderColor: "#10B981", color: "#10B981", backgroundColor: "#10B98111"}}
+                              <button onClick={() => {
+                                navigator.clipboard.writeText(`https://youtu.be/${v.videoId}`);
+                                setYtCopiedIndex(i);
+                                setTimeout(() => setYtCopiedIndex(null), 2000);
+                              }}
+                                className="text-xs px-2 py-1 rounded-lg border transition-all duration-200"
+                                style={ytCopiedIndex === i
+                                  ? {borderColor: "#6D28D9", color: "#A78BFA", backgroundColor: "#6D28D922"}
+                                  : {borderColor: "#10B981", color: "#10B981", backgroundColor: "#10B98111"}}
                                 title={`https://youtu.be/${v.videoId}`}>
-                                🔗 Copy link
+                                {ytCopiedIndex === i ? "✓ Đã copy!" : "🔗 Copy link"}
                               </button>
                             )}
                             {v.status === "error" && <span className="text-xs font-bold text-red-400">✗ Lỗi</span>}
