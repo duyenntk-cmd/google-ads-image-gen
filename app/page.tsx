@@ -1455,9 +1455,10 @@ export default function Home() {
                             {v.status === "done" && <span className="text-xs font-bold text-green-400">✓ Done</span>}
                             {v.status === "done" && v.videoId && (
                               <button onClick={() => {
-                                navigator.clipboard.writeText(`https://youtu.be/${v.videoId}`);
+                                const url = `https://youtu.be/${v.videoId}`;
+                                try { navigator.clipboard.writeText(url); } catch { /* fallback */ }
                                 setYtCopiedIndex(i);
-                                setTimeout(() => setYtCopiedIndex(null), 2000);
+                                setTimeout(() => setYtCopiedIndex(c => c === i ? null : c), 2000);
                               }}
                                 className="text-xs px-2 py-1 rounded-lg border transition-all duration-200"
                                 style={ytCopiedIndex === i
