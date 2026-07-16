@@ -40,6 +40,29 @@ const LANGUAGES = [
   { code: "Malay",              label: "🇲🇾 Bahasa Melayu" },
 ];
 
+const COUNTRY_DEFAULT_LANG: Record<string, string> = {
+  Vietnam: "Vietnamese", Indonesia: "Indonesian", Thailand: "Thai",
+  Philippines: "Filipino", Malaysia: "Malay", Singapore: "English",
+  Myanmar: "English", Cambodia: "English",
+  Japan: "Japanese", "South Korea": "Korean", China: "Chinese Simplified",
+  Taiwan: "Chinese Simplified", "Hong Kong": "Chinese Simplified",
+  India: "Hindi", Pakistan: "English", Bangladesh: "Bengali", "Sri Lanka": "English",
+  "Saudi Arabia": "Arabic", UAE: "Arabic", Egypt: "Arabic", Turkey: "English",
+  Israel: "English", Iraq: "Arabic",
+  USA: "English", Canada: "English", Mexico: "Spanish",
+  Brazil: "Portuguese", Argentina: "Spanish", Colombia: "Spanish",
+  Chile: "Spanish", Peru: "Spanish",
+  Germany: "German", France: "French", "United Kingdom": "English",
+  Italy: "English", Spain: "Spanish", Netherlands: "English",
+  Poland: "English", Sweden: "English", Norway: "English",
+  Denmark: "English", Finland: "English", Belgium: "French",
+  Switzerland: "German", Austria: "German", Portugal: "Portuguese",
+  Greece: "English", Ukraine: "English", Russia: "Russian",
+  Australia: "English", "New Zealand": "English",
+  Nigeria: "English", "South Africa": "English", Kenya: "English",
+  Ethiopia: "English", Ghana: "English",
+};
+
 const COUNTRIES = [
   { code: "Global",           label: "🌍 Global (Universal)" },
   // Southeast Asia
@@ -1240,7 +1263,7 @@ export default function Home() {
                       <div className="max-h-48 overflow-y-auto">
                         {COUNTRIES.filter(c => c.label.toLowerCase().includes(adcopyCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(adcopyCountrySearch.toLowerCase())).map(c => (
                           <button key={c.code} type="button"
-                            onClick={() => { setAdcopyCountry(c.code); setAdcopyCountryOpen(false); setAdcopyCountrySearch(""); }}
+                            onClick={() => { setAdcopyCountry(c.code); setAdcopyCountryOpen(false); setAdcopyCountrySearch(""); const defaultLang = COUNTRY_DEFAULT_LANG[c.code]; if (defaultLang) setAdcopyLang(defaultLang); }}
                             className="w-full text-left px-4 py-2 text-sm transition-colors"
                             style={{backgroundColor: adcopyCountry === c.code ? "#7C3AED22" : "transparent", color: adcopyCountry === c.code ? "#A78BFA" : t.text}}>
                             {c.label}
