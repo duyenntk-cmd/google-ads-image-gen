@@ -1480,19 +1480,30 @@ export default function Home() {
                           <div className="flex items-center gap-2">
                             {v.status === "done" && <span className="text-xs font-bold text-green-400">✓ Done</span>}
                             {v.status === "done" && v.videoId && (
-                              <button onClick={() => {
-                                const url = `https://youtu.be/${v.videoId}`;
-                                try { navigator.clipboard.writeText(url); } catch { /* fallback */ }
-                                setYtCopiedIndex(i);
-                                setTimeout(() => setYtCopiedIndex(c => c === i ? null : c), 2000);
-                              }}
-                                className="text-xs px-2 py-1 rounded-lg border transition-all duration-200"
-                                style={ytCopiedIndex === i
-                                  ? {borderColor: "#6D28D9", color: "#A78BFA", backgroundColor: "#6D28D922"}
-                                  : {borderColor: "#10B981", color: "#10B981", backgroundColor: "#10B98111"}}
-                                title={`https://youtu.be/${v.videoId}`}>
-                                {ytCopiedIndex === i ? "✓ Đã copy!" : "🔗 Copy link"}
-                              </button>
+                              ytCopiedIndex === i ? (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs px-2 py-1 rounded-lg border font-medium"
+                                    style={{borderColor:"#6D28D9",color:"#A78BFA",backgroundColor:"#6D28D922",
+                                      animation:"popIn 0.2s ease-out"}}>
+                                    ✓ Đã copy!
+                                  </span>
+                                  <button onClick={() => setYtCopiedIndex(null)}
+                                    className="text-xs px-1.5 py-1 rounded-lg border transition-all hover:bg-slate-100"
+                                    style={{borderColor:t.border,color:t.textMuted}}
+                                    title="Reset">↺</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => {
+                                  const url = `https://youtu.be/${v.videoId}`;
+                                  try { navigator.clipboard.writeText(url); } catch { /* fallback */ }
+                                  setYtCopiedIndex(i);
+                                }}
+                                  className="text-xs px-2 py-1 rounded-lg border transition-all duration-150 active:scale-95"
+                                  style={{borderColor:"#10B981",color:"#10B981",backgroundColor:"#10B98111"}}
+                                  title={`https://youtu.be/${v.videoId}`}>
+                                  🔗 Copy link
+                                </button>
+                              )
                             )}
                             {v.status === "error" && <span className="text-xs font-bold text-red-400">✗ Lỗi</span>}
                             {v.status === "uploading" && <span className="text-xs" style={{color: t.textMuted}}>{v.progress}%</span>}
