@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac } from "crypto";
 
-function signSession(email: string): string {
+async function signSession(email: string): Promise<string> {
   const secret = process.env.SESSION_SECRET || "default-secret-change-me";
-  const sig = createHmac("sha256", secret).update(email).digest("hex").slice(0, 16);
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const signedBuf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(email));
+  const sig = Array.from(new Uint8Array(signedBuf))
+    .map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
   return `${email}.${sig}`;
 }
 
@@ -48,7 +53,7 @@ export async function GET(req: NextRequest) {
 
     // Set session cookie
     const response = NextResponse.redirect(`${baseUrl}/`);
-    response.cookies.set("app_session", signSession(email), {
+    response.cookies.set("app_session", await signSession(email), {
       httpOnly: true,
       secure: true,
       sameSite: "lax",
