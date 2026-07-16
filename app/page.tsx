@@ -35,6 +35,9 @@ const LANGUAGES = [
   { code: "French",             label: "🇫🇷 Français" },
   { code: "German",             label: "🇩🇪 Deutsch" },
   { code: "Hindi",              label: "🇮🇳 हिन्दी" },
+  { code: "Bengali",            label: "🇧🇩 বাংলা" },
+  { code: "Filipino",           label: "🇵🇭 Filipino" },
+  { code: "Malay",              label: "🇲🇾 Bahasa Melayu" },
 ];
 
 const COUNTRIES = [
