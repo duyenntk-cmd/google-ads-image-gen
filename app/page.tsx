@@ -290,7 +290,7 @@ export default function Home() {
     if (!agUrl.trim()) return;
     setAgStep("analyzing"); setAgError("");
     try {
-      const res = await fetch("/api/auto-gen", {
+      const res = await fetch("/api/autogen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ appUrl: agUrl, keywords: agKeywords, country: agCountry, language: agLang, niche: agNiche }),
