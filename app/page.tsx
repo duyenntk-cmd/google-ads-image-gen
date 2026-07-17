@@ -1518,19 +1518,6 @@ export default function Home() {
                     style={inputStyle}/>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>Ngành app</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(["photo","tool","office"] as const).map(n => (
-                      <button key={n} onClick={() => setAgNiche(n)}
-                        className={`py-2 px-3 rounded-xl border text-xs font-medium transition-all ${agNiche===n?"border-violet-500 bg-violet-500/10 text-violet-400":""}`}
-                        style={agNiche===n ? {} : {borderColor: t.border, color: t.textMuted}}>
-                        {n==="photo"?"📸 Photo":n==="tool"?"🔧 Tool":"💼 Office"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
