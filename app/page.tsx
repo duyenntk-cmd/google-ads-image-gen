@@ -163,7 +163,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords">("home");
 
   // YouTube upload state
   const [ytAuthenticated, setYtAuthenticated] = useState(false);
@@ -260,6 +260,54 @@ export default function Home() {
   const ytLogout = async () => {
     await fetch("/api/auth/token", { method: "DELETE" });
     setYtAuthenticated(false); setYtAccessToken(""); setYtVideos([]);
+  };
+
+  // Keyword Research state
+  const [kwAppName, setKwAppName] = useState("");
+  const [kwAppUrl, setKwAppUrl] = useState("");
+  const [kwCountry, setKwCountry] = useState("Global");
+  const [kwLang, setKwLang] = useState("English");
+  const [kwCountrySearch, setKwCountrySearch] = useState("");
+  const [kwCountryOpen, setKwCountryOpen] = useState(false);
+  const kwCountryRef = useRef<HTMLDivElement>(null);
+  const [kwLangSearch, setKwLangSearch] = useState("");
+  const [kwLangOpen, setKwLangOpen] = useState(false);
+  const kwLangRef = useRef<HTMLDivElement>(null);
+  const [kwLoading, setKwLoading] = useState(false);
+  const [kwError, setKwError] = useState("");
+  interface KwItem { keyword: string; monthly_searches: string; competition: "Low"|"Medium"|"High"; competition_index: number; cpc_min: number; cpc_max: number; relevance: number; intent: string; }
+  interface KwResult { app_name: string; keywords: KwItem[]; }
+  const [kwResult, setKwResult] = useState<KwResult|null>(null);
+  const [kwSort, setKwSort] = useState<"relevance"|"competition_index"|"cpc_max">("relevance");
+  const [kwCopied, setKwCopied] = useState(false);
+
+  const handleKwGenerate = async () => {
+    if (!kwAppName.trim() && !kwAppUrl.trim()) return;
+    setKwLoading(true); setKwError(""); setKwResult(null);
+    try {
+      const res = await fetch("/api/keywords", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appName: kwAppName, appUrl: kwAppUrl, country: kwCountry, language: kwLang }),
+      });
+      const data = await res.json();
+      if (data.success) setKwResult(data.result);
+      else setKwError(data.error || "Lỗi không xác định");
+    } catch (e) { setKwError(String(e)); }
+    finally { setKwLoading(false); }
+  };
+
+  const copyKwList = () => {
+    if (!kwResult) return;
+    const sorted = [...kwResult.keywords].sort((a, b) => {
+      if (kwSort === "relevance") return b.relevance - a.relevance;
+      if (kwSort === "competition_index") return a.competition_index - b.competition_index;
+      return b.cpc_max - a.cpc_max;
+    });
+    const text = sorted.map(k => k.keyword).join("\n");
+    navigator.clipboard.writeText(text);
+    setKwCopied(true);
+    setTimeout(() => setKwCopied(false), 2000);
   };
 
   // Ad Copy Generator state
@@ -635,6 +683,7 @@ export default function Home() {
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
             ["adcopy",   "✍️", "Ad Copy"],
+            ["keywords", "🔑", "Keywords"],
           ] as const).map(([page, icon, label]) => (
             <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } }}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
@@ -691,7 +740,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -1352,6 +1401,191 @@ export default function Home() {
                   </div>
                 </div>
                 <button onClick={handleAdCopyGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Tạo lại</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* KEYWORD RESEARCH PAGE */}
+        {activePage === "keywords" && (
+          <div className="max-w-2xl space-y-5">
+            {/* Input form */}
+            <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Thông tin app</div>
+              <div>
+                <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Tên app</label>
+                <input value={kwAppName} onChange={e => setKwAppName(e.target.value)}
+                  placeholder="VD: Canva, PhotoRoom, Snapseed..."
+                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
+                  style={inputStyle}/>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1" style={{backgroundColor: t.border}}/>
+                <span className="text-xs" style={{color: t.textMuted}}>hoặc</span>
+                <div className="h-px flex-1" style={{backgroundColor: t.border}}/>
+              </div>
+              <div>
+                <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>URL App Store / Play Store</label>
+                <input value={kwAppUrl} onChange={e => setKwAppUrl(e.target.value)}
+                  placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
+                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
+                  style={inputStyle}/>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {/* Country */}
+                <div>
+                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
+                  <div ref={kwCountryRef} className="relative">
+                    <button type="button" onClick={() => { setKwCountryOpen(o => !o); setKwCountrySearch(""); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none"
+                      style={{...inputStyle, borderColor: kwCountryOpen ? "#7C3AED" : t.inputBorder}}>
+                      <span className="truncate">{COUNTRIES.find(c => c.code === kwCountry)?.label || kwCountry}</span>
+                      <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{kwCountryOpen ? "▲" : "▼"}</span>
+                    </button>
+                    {kwCountryOpen && (
+                      <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                        <div className="p-2 border-b" style={{borderColor: t.border}}>
+                          <input autoFocus value={kwCountrySearch} onChange={e => setKwCountrySearch(e.target.value)}
+                            placeholder="🔍 Tìm quốc gia..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto">
+                          {COUNTRIES.filter(c => c.label.toLowerCase().includes(kwCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(kwCountrySearch.toLowerCase())).map(c => (
+                            <button key={c.code} type="button"
+                              onClick={() => { setKwCountry(c.code); setKwCountryOpen(false); setKwCountrySearch(""); const dl = COUNTRY_DEFAULT_LANG[c.code]; if (dl) setKwLang(dl); }}
+                              className="w-full text-left px-4 py-2 text-sm"
+                              style={{backgroundColor: kwCountry === c.code ? "#7C3AED22" : "transparent", color: kwCountry === c.code ? "#A78BFA" : t.text}}>
+                              {c.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {/* Language */}
+                <div>
+                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</label>
+                  <div ref={kwLangRef} className="relative">
+                    <button type="button" onClick={() => { setKwLangOpen(o => !o); setKwLangSearch(""); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none"
+                      style={{...inputStyle, borderColor: kwLangOpen ? "#7C3AED" : t.inputBorder}}>
+                      <span className="truncate">{LANGUAGES.find(l => l.code === kwLang)?.label || kwLang}</span>
+                      <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{kwLangOpen ? "▲" : "▼"}</span>
+                    </button>
+                    {kwLangOpen && (
+                      <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                        <div className="p-2 border-b" style={{borderColor: t.border}}>
+                          <input autoFocus value={kwLangSearch} onChange={e => setKwLangSearch(e.target.value)}
+                            placeholder="🔍 Tìm ngôn ngữ..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto">
+                          {LANGUAGES.filter(l => l.label.toLowerCase().includes(kwLangSearch.toLowerCase()) || l.code.toLowerCase().includes(kwLangSearch.toLowerCase())).map(l => (
+                            <button key={l.code} type="button"
+                              onClick={() => { setKwLang(l.code); setKwLangOpen(false); setKwLangSearch(""); }}
+                              className="w-full text-left px-4 py-2 text-sm"
+                              style={{backgroundColor: kwLang === l.code ? "#7C3AED22" : "transparent", color: kwLang === l.code ? "#A78BFA" : t.text}}>
+                              {l.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {kwError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{kwError}</p>}
+              <button onClick={handleKwGenerate}
+                disabled={kwLoading || (!kwAppName.trim() && !kwAppUrl.trim())}
+                className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
+                {kwLoading ? <><span className="animate-spin">⏳</span> Đang phân tích...</> : <>🔑 Tìm Keywords</>}
+              </button>
+            </div>
+
+            {/* Results */}
+            {kwResult && (
+              <div className="space-y-3">
+                {/* Header */}
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <div className="text-sm font-bold" style={{color: t.text}}>{kwResult.app_name}</div>
+                    <div className="text-xs" style={{color: t.textMuted}}>{kwResult.keywords.length} keywords · {kwCountry !== "Global" ? kwCountry : "Global"} · ước tính bởi AI</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select value={kwSort} onChange={e => setKwSort(e.target.value as typeof kwSort)}
+                      className="text-xs rounded-lg px-2 py-1.5 border focus:outline-none" style={inputStyle}>
+                      <option value="relevance">Sắp xếp: Relevance</option>
+                      <option value="competition_index">Sắp xếp: Competition ↑</option>
+                      <option value="cpc_max">Sắp xếp: CPC ↓</option>
+                    </select>
+                    <button onClick={copyKwList}
+                      className="text-xs px-3 py-1.5 rounded-lg border transition-all active:scale-95"
+                      style={kwCopied ? {borderColor:"#10B981",color:"#10B981",backgroundColor:"#10B98111"} : {borderColor:t.border,color:t.textMuted}}>
+                      {kwCopied ? "✓ Đã copy!" : "📋 Copy list"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Table */}
+                <div className="rounded-2xl border overflow-hidden" style={{borderColor: t.border}}>
+                  {/* Table header */}
+                  <div className="grid text-xs font-bold uppercase tracking-wider px-4 py-2.5 border-b"
+                    style={{gridTemplateColumns:"1fr 110px 90px 80px 90px", backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
+                    <div>Keyword</div>
+                    <div className="text-center">Volume/tháng</div>
+                    <div className="text-center">Competition</div>
+                    <div className="text-center">CPC (USD)</div>
+                    <div className="text-center">Intent</div>
+                  </div>
+                  {/* Rows */}
+                  {[...kwResult.keywords].sort((a, b) => {
+                    if (kwSort === "relevance") return b.relevance - a.relevance;
+                    if (kwSort === "competition_index") return a.competition_index - b.competition_index;
+                    return b.cpc_max - a.cpc_max;
+                  }).map((kw, i) => (
+                    <div key={i} className="grid items-center px-4 py-2.5 border-b last:border-0 hover:bg-violet-500/5 transition-colors"
+                      style={{gridTemplateColumns:"1fr 110px 90px 80px 90px", borderColor: t.border}}>
+                      <div>
+                        <div className="text-sm font-medium" style={{color: t.text}}>{kw.keyword}</div>
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <div className="h-1 rounded-full overflow-hidden" style={{width:48, backgroundColor: t.progress}}>
+                            <div className="h-full bg-violet-500 rounded-full" style={{width:`${kw.relevance}%`}}/>
+                          </div>
+                          <span className="text-xs" style={{color: t.textMuted}}>{kw.relevance}%</span>
+                        </div>
+                      </div>
+                      <div className="text-xs text-center font-medium" style={{color: t.text}}>{kw.monthly_searches}</div>
+                      <div className="text-center">
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                          style={{
+                            backgroundColor: kw.competition === "Low" ? "#10B98122" : kw.competition === "Medium" ? "#F59E0B22" : "#EF444422",
+                            color: kw.competition === "Low" ? "#10B981" : kw.competition === "Medium" ? "#F59E0B" : "#EF4444",
+                          }}>
+                          {kw.competition}
+                        </span>
+                      </div>
+                      <div className="text-xs text-center" style={{color: t.text}}>${kw.cpc_min.toFixed(2)}–${kw.cpc_max.toFixed(2)}</div>
+                      <div className="text-center">
+                        <span className="text-xs px-1.5 py-0.5 rounded-full"
+                          style={{
+                            backgroundColor: kw.intent === "Install" ? "#7C3AED22" : kw.intent === "Branded" ? "#3B82F622" : kw.intent === "Compare" ? "#F59E0B22" : "#64748B22",
+                            color: kw.intent === "Install" ? "#A78BFA" : kw.intent === "Branded" ? "#60A5FA" : kw.intent === "Compare" ? "#F59E0B" : t.textMuted,
+                          }}>
+                          {kw.intent}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Disclaimer */}
+                <p className="text-xs text-center" style={{color: t.textMuted}}>
+                  ⚠️ Volume & CPC là ước tính AI, không phải dữ liệu thực từ Google Keyword Planner.
+                  Dùng để định hướng chiến lược, không dùng để báo cáo.
+                </p>
+
+                <button onClick={handleKwGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
+                  🔄 Tạo lại
+                </button>
               </div>
             )}
           </div>
