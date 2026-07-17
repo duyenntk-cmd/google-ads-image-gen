@@ -36,15 +36,20 @@ async function fetchAppStoreData(id: string) {
 
 async function fetchPlayStoreData(pkg: string) {
   try {
-    const res = await fetch("/api/app-lookup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ packageId: pkg }),
+    const res = await fetch(`https://play.google.com/store/apps/details?id=${pkg}&hl=en`, {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36" },
+      signal: AbortSignal.timeout(8000),
     });
-    const data = await res.json();
-    return data.name ? { name: data.name as string, description: "", category: "", iconUrl: "", screenshotUrls: [] as string[], rating: 0, ratingCount: 0 } : null;
+    if (!res.ok) return { name: pkg.split(".").pop()?.replace(/_/g, " ") || pkg, description: "", category: "", iconUrl: "", screenshotUrls: [] as string[], rating: 0, ratingCount: 0 };
+    const html = await res.text();
+    const titleMatch = html.match(/<title>([^<]+) - Apps on Google Play<\/title>/);
+    const ogMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
+    const name = titleMatch?.[1]?.trim() || ogMatch?.[1]?.trim() || pkg.split(".").pop()?.replace(/_/g, " ") || pkg;
+    // Try to extract icon URL
+    const iconMatch = html.match(/src="(https:\/\/play-lh\.googleusercontent\.com\/[^"]+)" [^>]*itemprop="image"/);
+    return { name, description: "", category: "", iconUrl: iconMatch?.[1] || "", screenshotUrls: [] as string[], rating: 0, ratingCount: 0 };
   } catch {
-    return null;
+    return { name: pkg.split(".").pop()?.replace(/_/g, " ") || pkg, description: "", category: "", iconUrl: "", screenshotUrls: [] as string[], rating: 0, ratingCount: 0 };
   }
 }
 
