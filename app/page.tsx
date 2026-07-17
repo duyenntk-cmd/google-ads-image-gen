@@ -163,7 +163,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"autogen">("home");
 
   // YouTube upload state
   const [ytAuthenticated, setYtAuthenticated] = useState(false);
@@ -261,6 +261,77 @@ export default function Home() {
     await fetch("/api/auth/token", { method: "DELETE" });
     setYtAuthenticated(false); setYtAccessToken(""); setYtVideos([]);
   };
+
+  // Auto Gen from URL state
+  type AutoGenStep = "input" | "analyzing" | "brief" | "generating" | "preview";
+  const [agStep, setAgStep] = useState<AutoGenStep>("input");
+  const [agUrl, setAgUrl] = useState("");
+  const [agKeywords, setAgKeywords] = useState("");
+  const [agCountry, setAgCountry] = useState("Global");
+  const [agLang, setAgLang] = useState("English");
+  const [agNiche, setAgNiche] = useState<"photo"|"tool"|"office">("tool");
+  const [agCountrySearch, setAgCountrySearch] = useState("");
+  const [agCountryOpen, setAgCountryOpen] = useState(false);
+  const agCountryRef = useRef<HTMLDivElement>(null);
+  const [agLangSearch, setAgLangSearch] = useState("");
+  const [agLangOpen, setAgLangOpen] = useState(false);
+  const agLangRef = useRef<HTMLDivElement>(null);
+  const [agError, setAgError] = useState("");
+  const [agBrief, setAgBrief] = useState<Brief|null>(null);
+  const [agScreenshot, setAgScreenshot] = useState<string|null>(null);
+  const [agIcon, setAgIcon] = useState<string|null>(null);
+  interface AgAppMeta { name: string; category: string; rating: number; ratingCount: number; platform: string; screenshotCount: number; }
+  const [agAppMeta, setAgAppMeta] = useState<AgAppMeta|null>(null);
+  const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
+  const [agZipBase64, setAgZipBase64] = useState("");
+  const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
+
+  const handleAgAnalyze = async () => {
+    if (!agUrl.trim()) return;
+    setAgStep("analyzing"); setAgError("");
+    try {
+      const res = await fetch("/api/auto-gen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appUrl: agUrl, keywords: agKeywords, country: agCountry, language: agLang, niche: agNiche }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      setAgBrief(data.brief);
+      setAgScreenshot(data.screenshotBase64 || null);
+      setAgIcon(data.iconBase64 || null);
+      setAgAppMeta(data.appMeta);
+      setAgStep("brief");
+    } catch (e) { setAgError(String(e)); setAgStep("input"); }
+  };
+
+  const handleAgGenerate = async () => {
+    if (!agBrief) return;
+    setAgStep("generating"); setAgError("");
+    try {
+      const generated = await generateAllBanners(agBrief, agScreenshot || null);
+      setAgPreviews(generated);
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      const top5 = zip.folder("top5")!;
+      const all = zip.folder("all_sizes")!;
+      for (const b of generated) {
+        const base64 = b.dataUrl.split(",")[1];
+        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        if (b.isTop5) top5.file(`${b.key}.png`, bytes);
+        all.file(`${b.key}.png`, bytes);
+      }
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const reader = new FileReader();
+      reader.onload = () => setAgZipBase64((reader.result as string).split(",")[1]);
+      reader.readAsDataURL(blob);
+      setAgStep("preview");
+    } catch (e) { setAgError(String(e)); setAgStep("brief"); }
+  };
+
+  const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
+  const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
+  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshot(null); setAgError(""); };
 
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
@@ -682,6 +753,7 @@ export default function Home() {
           {([
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
+            ["autogen",  "⚡", "Auto Gen"],
             ["adcopy",   "✍️", "Ad Copy"],
             ["keywords", "🔑", "Keywords"],
           ] as const).map(([page, icon, label]) => (
@@ -740,7 +812,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "⚡ Auto Gen từ URL" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -1401,6 +1473,271 @@ export default function Home() {
                   </div>
                 </div>
                 <button onClick={handleAdCopyGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Tạo lại</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* AUTO GEN PAGE */}
+        {activePage === "autogen" && (
+          <div className="space-y-6 max-w-2xl">
+
+            {/* Step indicator */}
+            <div className="flex items-center gap-2 text-xs" style={{color: t.textMuted}}>
+              {(["input","analyzing","brief","generating","preview"] as AutoGenStep[]).map((s, i) => (
+                <div key={s} className="flex items-center gap-2">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${agStep===s?"bg-violet-600 text-white":["preview","generating","brief"].includes(agStep)&&i<["input","analyzing","brief","generating","preview"].indexOf(agStep)?"bg-violet-600/40 text-violet-400":"text-current"}`}
+                    style={agStep!==s?{backgroundColor:t.tabBg}:{}}>{i+1}</span>
+                  <span style={agStep===s?{color:"#A78BFA"}:{}}>{s==="input"?"Nhập URL":s==="analyzing"?"Phân tích":s==="brief"?"Review brief":s==="generating"?"Tạo ảnh":"Kết quả"}</span>
+                  {i<4&&<span>→</span>}
+                </div>
+              ))}
+            </div>
+
+            {/* STEP 1: Input */}
+            {agStep === "input" && (
+              <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
+                    🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
+                  </label>
+                  <input value={agUrl} onChange={e => setAgUrl(e.target.value)}
+                    placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
+                    style={inputStyle}/>
+                  <p className="text-xs mt-1.5" style={{color: t.textMuted}}>AI sẽ tự lấy tên app, mô tả, screenshot và icon từ URL này</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
+                    🎯 Keywords / điểm bán hàng
+                  </label>
+                  <input value={agKeywords} onChange={e => setAgKeywords(e.target.value)}
+                    placeholder="VD: AI photo editor, remove background, free filters..."
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
+                    style={inputStyle}/>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>Ngành app</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["photo","tool","office"] as const).map(n => (
+                      <button key={n} onClick={() => setAgNiche(n)}
+                        className={`py-2 px-3 rounded-xl border text-xs font-medium transition-all ${agNiche===n?"border-violet-500 bg-violet-500/10 text-violet-400":""}`}
+                        style={agNiche===n ? {} : {borderColor: t.border, color: t.textMuted}}>
+                        {n==="photo"?"📸 Photo":n==="tool"?"🔧 Tool":"💼 Office"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
+                    <div ref={agCountryRef} className="relative">
+                      <button type="button" onClick={() => { setAgCountryOpen(o => !o); setAgCountrySearch(""); }}
+                        className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
+                        style={{...inputStyle, borderColor: agCountryOpen ? "#7C3AED" : t.inputBorder}}>
+                        <span className="truncate">{COUNTRIES.find(c => c.code === agCountry)?.label || agCountry}</span>
+                        <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{agCountryOpen ? "▲" : "▼"}</span>
+                      </button>
+                      {agCountryOpen && (
+                        <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                          <div className="p-2 border-b" style={{borderColor: t.border}}>
+                            <input autoFocus value={agCountrySearch} onChange={e => setAgCountrySearch(e.target.value)}
+                              placeholder="🔍 Tìm quốc gia..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                          </div>
+                          <div className="max-h-48 overflow-y-auto">
+                            {COUNTRIES.filter(c => c.label.toLowerCase().includes(agCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(agCountrySearch.toLowerCase())).map(c => (
+                              <button key={c.code} type="button"
+                                onClick={() => { setAgCountry(c.code); setAgCountryOpen(false); setAgCountrySearch(""); const dl = COUNTRY_DEFAULT_LANG[c.code]; if (dl) setAgLang(dl); }}
+                                className="w-full text-left px-4 py-2 text-sm"
+                                style={{backgroundColor: agCountry === c.code ? "#7C3AED22" : "transparent", color: agCountry === c.code ? "#A78BFA" : t.text}}>
+                                {c.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</label>
+                    <div ref={agLangRef} className="relative">
+                      <button type="button" onClick={() => { setAgLangOpen(o => !o); setAgLangSearch(""); }}
+                        className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
+                        style={{...inputStyle, borderColor: agLangOpen ? "#7C3AED" : t.inputBorder}}>
+                        <span className="truncate">{LANGUAGES.find(l => l.code === agLang)?.label || agLang}</span>
+                        <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{agLangOpen ? "▲" : "▼"}</span>
+                      </button>
+                      {agLangOpen && (
+                        <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                          <div className="p-2 border-b" style={{borderColor: t.border}}>
+                            <input autoFocus value={agLangSearch} onChange={e => setAgLangSearch(e.target.value)}
+                              placeholder="🔍 Tìm ngôn ngữ..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                          </div>
+                          <div className="max-h-48 overflow-y-auto">
+                            {LANGUAGES.filter(l => l.label.toLowerCase().includes(agLangSearch.toLowerCase()) || l.code.toLowerCase().includes(agLangSearch.toLowerCase())).map(l => (
+                              <button key={l.code} type="button"
+                                onClick={() => { setAgLang(l.code); setAgLangOpen(false); setAgLangSearch(""); }}
+                                className="w-full text-left px-4 py-2 text-sm"
+                                style={{backgroundColor: agLang === l.code ? "#7C3AED22" : "transparent", color: agLang === l.code ? "#A78BFA" : t.text}}>
+                                {l.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
+
+                <button onClick={handleAgAnalyze} disabled={!agUrl.trim()}
+                  className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
+                  ⚡ Phân tích app & tạo brief →
+                </button>
+              </div>
+            )}
+
+            {/* STEP 2: Analyzing */}
+            {agStep === "analyzing" && (
+              <div className="text-center py-20 space-y-4">
+                <div className="text-5xl animate-pulse">⚡</div>
+                <div className="text-lg font-bold" style={{color: t.text}}>Đang phân tích app...</div>
+                <div className="text-sm space-y-1" style={{color: t.textMuted}}>
+                  <div>📱 Lấy thông tin từ App Store...</div>
+                  <div>🖼️ Tải screenshot & icon...</div>
+                  <div>🤖 Claude đang tạo brief...</div>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: Brief review */}
+            {agStep === "brief" && agBrief && (
+              <div className="space-y-4">
+                {/* App info card */}
+                {agAppMeta && (
+                  <div className="flex items-center gap-4 p-4 rounded-2xl border" style={cardStyle}>
+                    {agIcon && <img src={agIcon} alt="" className="w-16 h-16 rounded-2xl flex-shrink-0 shadow"/>}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-sm" style={{color: t.text}}>{agAppMeta.name}</div>
+                      <div className="text-xs mt-0.5" style={{color: t.textMuted}}>{agAppMeta.category} · {agAppMeta.platform}</div>
+                      {agAppMeta.rating > 0 && <div className="text-xs mt-0.5" style={{color: t.textMuted}}>⭐ {agAppMeta.rating.toFixed(1)} ({agAppMeta.ratingCount?.toLocaleString()} ratings)</div>}
+                      {agScreenshot && <div className="text-xs mt-0.5 text-emerald-500">✓ Screenshot tải thành công</div>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Brief editor */}
+                <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                  <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Review & chỉnh brief</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      {key:"app_name",label:"Tên app"},
+                      {key:"cta_text",label:"CTA"},
+                      {key:"headline",label:"Headline",full:true},
+                      {key:"subheadline",label:"Subheadline",full:true},
+                    ].map(f => (
+                      <div key={f.key} className={f.full?"col-span-2":""}>
+                        <label className="block text-xs mb-1" style={{color: t.textMuted}}>{f.label}</label>
+                        <input value={(agBrief as unknown as Record<string,string>)[f.key]||""}
+                          onChange={e => setAgBrief(p => p ? {...p, [f.key]: e.target.value} : p)}
+                          className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-5">
+                    {[{key:"primary_color",label:"Primary"},{key:"secondary_color",label:"Secondary"},{key:"accent_color",label:"Accent"}].map(c => (
+                      <div key={c.key} className="flex items-center gap-2">
+                        <input type="color" value={(agBrief as unknown as Record<string,string>)[c.key]||"#7B2FBE"}
+                          onChange={e => setAgBrief(p => p ? {...p, [c.key]: e.target.value} : p)}
+                          className="w-8 h-8 rounded cursor-pointer border" style={{borderColor: t.border}}/>
+                        <span className="text-xs" style={{color: t.textMuted}}>{c.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Screenshot preview */}
+                  {agScreenshot && (
+                    <div>
+                      <div className="text-xs mb-1.5" style={{color: t.textMuted}}>Background (screenshot app)</div>
+                      <img src={agScreenshot} alt="" className="h-24 rounded-xl object-cover border" style={{borderColor: t.border}}/>
+                    </div>
+                  )}
+                </div>
+
+                {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
+
+                <div className="flex gap-3">
+                  <button onClick={resetAg} className="px-4 py-3 rounded-xl border text-sm transition-colors" style={{borderColor: t.border, color: t.textMuted}}>← Nhập lại</button>
+                  <button onClick={handleAgGenerate} className="flex-1 py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 transition-all text-white">
+                    Gen {AD_SIZES.length} banner PNG →
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 4: Generating */}
+            {agStep === "generating" && (
+              <div className="text-center py-20 space-y-6">
+                <div className="text-5xl animate-pulse">🎨</div>
+                <div className="text-xl font-bold" style={{color: t.text}}>Đang tạo {AD_SIZES.length} banner...</div>
+                <div className="w-48 h-1 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
+                  <div className="h-full bg-violet-500 animate-pulse w-2/3"/>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 5: Preview */}
+            {agStep === "preview" && (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-lg font-bold" style={{color: t.text}}>✅ {agPreviews.length} banner đã sẵn sàng</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>{agBrief?.app_name} · {agCountry}</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={resetAg} className="text-xs px-3 py-2 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Gen lại</button>
+                    <button onClick={handleAgDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all">
+                      ⬇ Tải tất cả (.zip)
+                    </button>
+                  </div>
+                </div>
+                <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
+                  {([["top5","⭐ Top 5"],["all",`Tất cả (${agPreviews.length})`]] as const).map(([tab,label])=>(
+                    <button key={tab} onClick={() => setAgActiveTab(tab)}
+                      className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
+                      style={agActiveTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {agDisplayed.map(p => {
+                    const scale = Math.min(1, 340/Math.max(p.width, p.height));
+                    return (
+                      <div key={p.key} onClick={() => setSelectedPreview(p)}
+                        className="group rounded-2xl p-4 cursor-pointer transition-all border"
+                        style={cardStyle}
+                        onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
+                        <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
+                          <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
+                            <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
+                          </div>
+                          <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
+                            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
+                            style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
