@@ -44,10 +44,13 @@ Rules:
     if (!jsonMatch) throw new Error("No JSON in response");
 
     const result = JSON.parse(jsonMatch[0]);
-    // Ensure exactly 4 descriptions and 5 headlines/ctas
-    while ((result.descriptions || []).length < 5) result.descriptions.push("Discover the app everyone is talking about. Download free today.");
-    while ((result.headlines || []).length < 5) result.headlines.push("Try It Free Today");
-    while ((result.ctas || []).length < 5) result.ctas.push("Download Now");
+    // Ensure minimum counts
+    result.headlines = result.headlines || [];
+    result.descriptions = result.descriptions || [];
+    result.ctas = result.ctas || [];
+    while (result.descriptions.length < 5) result.descriptions.push("Discover the app everyone is talking about. Download free today.");
+    while (result.headlines.length < 5) result.headlines.push("Try It Free Today");
+    while (result.ctas.length < 5) result.ctas.push("Download Now");
     return NextResponse.json({ success: true, result });
   } catch (err) {
     console.error("AdCopy error:", err);
