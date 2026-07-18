@@ -1440,9 +1440,9 @@ export default function Home() {
                     📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(≤30 ký tự)</span>
                   </div>
                   {adcopyResult.headlines.map((h, i) => (
-                    <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-2 group border-b last:border-0" style={{borderColor: t.border}}>
-                      <span className="text-sm" style={{color: t.text}}>{h}</span>
-                      <button onClick={() => copyText(h)} className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded" style={{backgroundColor: t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
+                    <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
+                      <span className="text-sm flex-1" style={{color: t.text}}>{h}</span>
+                      <button onClick={() => copyText(h)} className="text-xs px-2 py-0.5 rounded flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===h ? "#10B98122" : t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
                         {adcopyCopied===h ? "✓" : "copy"}
                       </button>
                     </div>
@@ -1453,9 +1453,9 @@ export default function Home() {
                     📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(≤90 ký tự)</span>
                   </div>
                   {adcopyResult.descriptions.map((d, i) => (
-                    <div key={i} className="flex items-start justify-between px-4 py-2.5 gap-2 group border-b last:border-0" style={{borderColor: t.border}}>
+                    <div key={i} className="flex items-start justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
                       <span className="text-sm leading-relaxed flex-1" style={{color: t.text}}>{d}</span>
-                      <button onClick={() => copyText(d)} className="text-xs opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded mt-0.5 flex-shrink-0" style={{backgroundColor: t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
+                      <button onClick={() => copyText(d)} className="text-xs px-2 py-0.5 rounded mt-0.5 flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===d ? "#10B98122" : t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
                         {adcopyCopied===d ? "✓" : "copy"}
                       </button>
                     </div>
