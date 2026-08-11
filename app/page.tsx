@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useSession, signOut } from "next-auth/react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
 import { generateAllBanners } from "@/lib/canvasGen";
@@ -133,6 +134,7 @@ const COUNTRIES = [
 ];
 
 export default function Home() {
+  const { data: session } = useSession();
   const [step, setStep] = useState<Step>("upload");
   const [niche, setNiche] = useState<"photo"|"tool"|"office">("photo");
   const [language, setLanguage] = useState("English");
@@ -796,8 +798,27 @@ export default function Home() {
           ))}
         </nav>
 
-        {/* Dark mode toggle at bottom */}
-        <div className="p-3 border-t" style={{borderColor: t.border}}>
+        {/* Bottom: user info + dark mode */}
+        <div className="p-3 border-t space-y-2" style={{borderColor: t.border}}>
+          {session?.user && (
+            <div className="px-3 py-2 rounded-lg" style={{backgroundColor: t.tabBg}}>
+              <div className="flex items-center gap-2 mb-1.5">
+                {session.user.image
+                  ? <img src={session.user.image} alt="" className="w-6 h-6 rounded-full flex-shrink-0"/>
+                  : <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center text-white text-xs flex-shrink-0">{(session.user.name||"?")[0].toUpperCase()}</div>
+                }
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold truncate" style={{color: t.text}}>{session.user.name || "User"}</div>
+                  <div className="text-[10px] truncate" style={{color: t.textMuted}}>{session.user.email}</div>
+                </div>
+              </div>
+              <button onClick={() => signOut({ callbackUrl: "/login" })}
+                className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
+                style={{borderColor: t.border, color: t.textMuted}}>
+                Đăng xuất
+              </button>
+            </div>
+          )}
           <button onClick={() => setDarkMode(d => !d)}
             className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all border"
             style={{color: t.textMuted, borderColor: t.border, backgroundColor: t.tabBg}}>
