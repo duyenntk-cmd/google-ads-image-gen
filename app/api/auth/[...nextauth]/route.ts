@@ -1,6 +1,8 @@
 import NextAuth from "next-auth";
 import KeycloakProvider from "next-auth/providers/keycloak";
 import type { NextAuthOptions } from "next-auth";
+import { logLoginToSheet } from "@/lib/sheetsLogger";
+import { headers } from "next/headers";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -21,6 +23,23 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       session.accessToken = token.accessToken as string;
       return session;
+    },
+  },
+  events: {
+    async signIn({ user }) {
+      try {
+        const hdrs = await headers();
+        const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || hdrs.get("x-real-ip") || "unknown";
+        const ua = hdrs.get("user-agent") || "unknown";
+        await logLoginToSheet({
+          email: user.email || "unknown",
+          name: user.name || "unknown",
+          ip,
+          userAgent: ua,
+        });
+      } catch {
+        // Don't block login if logging fails
+      }
     },
   },
   pages: {
