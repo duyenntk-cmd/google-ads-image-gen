@@ -165,7 +165,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"autogen">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"autogen"|"localize">("home");
 
   // YouTube upload state
   const [ytAuthenticated, setYtAuthenticated] = useState(false);
@@ -398,6 +398,109 @@ export default function Home() {
   interface AdCopyResult { headlines: string[]; descriptions: string[]; ctas: string[]; }
   const [adcopyResult, setAdcopyResult] = useState<AdCopyResult|null>(null);
   const [adcopyCopied, setAdcopyCopied] = useState<string|null>(null);
+
+  // Localize state
+  const LOCALIZE_MARKETS = [
+    { code: "VN", name: "Vietnam",      flag: "🇻🇳" },
+    { code: "ID", name: "Indonesia",    flag: "🇮🇩" },
+    { code: "TH", name: "Thailand",     flag: "🇹🇭" },
+    { code: "PH", name: "Philippines",  flag: "🇵🇭" },
+    { code: "MY", name: "Malaysia",     flag: "🇲🇾" },
+    { code: "SG", name: "Singapore",    flag: "🇸🇬" },
+    { code: "KR", name: "South Korea",  flag: "🇰🇷" },
+    { code: "JP", name: "Japan",        flag: "🇯🇵" },
+    { code: "TW", name: "Taiwan",       flag: "🇹🇼" },
+    { code: "CN", name: "China",        flag: "🇨🇳" },
+    { code: "SA", name: "Saudi Arabia", flag: "🇸🇦" },
+    { code: "BD", name: "Bangladesh",   flag: "🇧🇩" },
+    { code: "BR", name: "Brazil",       flag: "🇧🇷" },
+    { code: "DE", name: "Germany",      flag: "🇩🇪" },
+    { code: "FR", name: "France",       flag: "🇫🇷" },
+    { code: "ES", name: "Spain",        flag: "🇪🇸" },
+    { code: "US", name: "United States",flag: "🇺🇸" },
+    { code: "IN", name: "India",        flag: "🇮🇳" },
+  ];
+  interface LocalizeMarketResult { code: string; name: string; language: string; flag: string; headlines: string[]; descriptions: string[]; ctas: string[]; }
+  const [lcAppName, setLcAppName] = useState("");
+  const [lcHeadlines, setLcHeadlines] = useState("Download now and explore\nBoost your productivity\nTry it free today");
+  const [lcDescriptions, setLcDescriptions] = useState("The best app for your daily tasks\nMillions of users trust us every day");
+  const [lcCtas, setLcCtas] = useState("Install Free\nDownload Now\nGet Started");
+  const [lcSourceLang, setLcSourceLang] = useState("English");
+  const [lcMarkets, setLcMarkets] = useState<string[]>(["VN","ID","TH","PH","MY","SG","US"]);
+  const [lcLoading, setLcLoading] = useState(false);
+  const [lcResults, setLcResults] = useState<LocalizeMarketResult[]|null>(null);
+  const [lcError, setLcError] = useState("");
+  const [lcCopied, setLcCopied] = useState<string|null>(null);
+  const [lcActiveMarket, setLcActiveMarket] = useState<string|null>(null);
+
+  const lcToggleMarket = (code: string) => {
+    setLcMarkets(prev => prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]);
+  };
+  const lcSelectAll = () => setLcMarkets(LOCALIZE_MARKETS.map(m => m.code));
+  const lcSelectNone = () => setLcMarkets([]);
+
+  const lcCopyText = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setLcCopied(key);
+    setTimeout(() => setLcCopied(null), 2000);
+  };
+
+  const lcCopyAllForMarket = (market: LocalizeMarketResult) => {
+    const lines = [
+      `=== ${market.flag} ${market.name} (${market.language}) ===`,
+      "--- Headlines ---",
+      ...market.headlines.map((h, i) => `${i+1}. ${h}`),
+      "--- Descriptions ---",
+      ...market.descriptions.map((d, i) => `${i+1}. ${d}`),
+      "--- CTAs ---",
+      ...market.ctas.map((c, i) => `${i+1}. ${c}`),
+    ].join("\n");
+    navigator.clipboard.writeText(lines);
+    setLcCopied(`all-${market.code}`);
+    setTimeout(() => setLcCopied(null), 2000);
+  };
+
+  const lcCopyAll = () => {
+    if (!lcResults) return;
+    const text = lcResults.map(m => [
+      `=== ${m.flag} ${m.name} (${m.language}) ===`,
+      "Headlines: " + m.headlines.join(" | "),
+      "Descriptions: " + m.descriptions.join(" | "),
+      "CTAs: " + m.ctas.join(" | "),
+    ].join("\n")).join("\n\n");
+    navigator.clipboard.writeText(text);
+    setLcCopied("all");
+    setTimeout(() => setLcCopied(null), 2000);
+  };
+
+  const handleLocalize = async () => {
+    if (!lcAppName.trim()) return;
+    setLcLoading(true);
+    setLcError("");
+    setLcResults(null);
+    try {
+      const res = await fetch("/api/localize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appName: lcAppName,
+          headlines: lcHeadlines.split("\n").map(s => s.trim()).filter(Boolean),
+          descriptions: lcDescriptions.split("\n").map(s => s.trim()).filter(Boolean),
+          ctas: lcCtas.split("\n").map(s => s.trim()).filter(Boolean),
+          markets: lcMarkets,
+          sourceLanguage: lcSourceLang,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
+      setLcResults(data.results);
+      if (data.results?.length > 0) setLcActiveMarket(data.results[0].code);
+    } catch (e: unknown) {
+      setLcError(e instanceof Error ? e.message : "Translation failed");
+    } finally {
+      setLcLoading(false);
+    }
+  };
 
   const handleAdCopyGenerate = async () => {
     if (!adcopyAppName.trim()) return;
@@ -758,6 +861,7 @@ export default function Home() {
             ["autogen",  "⚡", "Auto Gen"],
             ["adcopy",   "✍️", "Ad Copy"],
             ["keywords", "🔑", "Keywords"],
+            ["localize", "🌏", "Localize"],
           ] as const).map(([page, icon, label]) => (
             <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } }}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
@@ -833,7 +937,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "⚡ Auto Gen từ URL" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "⚡ Auto Gen từ URL" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -2166,6 +2270,269 @@ export default function Home() {
         )}
 
       </main>
+
+      {/* LOCALIZE PAGE */}
+      {activePage === "localize" && (
+        <div className="space-y-6 max-w-5xl">
+          {/* Input Section */}
+          <div className="rounded-2xl border p-6 space-y-5" style={{...cardStyle}}>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center text-lg">🌏</div>
+              <div>
+                <div className="font-bold text-sm" style={{color: t.text}}>Multi-market Ad Copy Localizer</div>
+                <div className="text-xs" style={{color: t.textMuted}}>Dịch ad copy sang nhiều thị trường cùng lúc, tối ưu cho Google App Campaigns</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold mb-1.5 block" style={{color: t.textSub}}>Tên App *</label>
+                <input
+                  value={lcAppName} onChange={e => setLcAppName(e.target.value)}
+                  placeholder="VD: Photo Editor Pro"
+                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none"
+                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold mb-1.5 block" style={{color: t.textSub}}>Ngôn ngữ nguồn</label>
+                <select
+                  value={lcSourceLang} onChange={e => setLcSourceLang(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none"
+                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}>
+                  {["English","Vietnamese","Indonesian","Thai","Korean","Japanese","Chinese Simplified"].map(l => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
+                  <span>Headlines <span className="font-normal">(mỗi dòng 1 headline)</span></span>
+                  <span className="text-[10px]" style={{color: t.textMuted}}>≤30 ký tự/cái</span>
+                </label>
+                <textarea
+                  value={lcHeadlines} onChange={e => setLcHeadlines(e.target.value)}
+                  rows={4} placeholder={"Download now and explore\nBoost your productivity\nTry it free today"}
+                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
+                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
+                  <span>Descriptions</span>
+                  <span className="text-[10px]" style={{color: t.textMuted}}>≤90 ký tự/cái</span>
+                </label>
+                <textarea
+                  value={lcDescriptions} onChange={e => setLcDescriptions(e.target.value)}
+                  rows={4} placeholder={"The best app for your daily tasks\nMillions of users trust us every day"}
+                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
+                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
+                  <span>CTAs</span>
+                  <span className="text-[10px]" style={{color: t.textMuted}}>≤15 ký tự/cái</span>
+                </label>
+                <textarea
+                  value={lcCtas} onChange={e => setLcCtas(e.target.value)}
+                  rows={4} placeholder={"Install Free\nDownload Now\nGet Started"}
+                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
+                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
+                />
+              </div>
+            </div>
+
+            {/* Market selection */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold" style={{color: t.textSub}}>Chọn thị trường ({lcMarkets.length}/{LOCALIZE_MARKETS.length})</label>
+                <div className="flex gap-2">
+                  <button onClick={lcSelectAll} className="text-xs px-2 py-1 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>Tất cả</button>
+                  <button onClick={lcSelectNone} className="text-xs px-2 py-1 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>Bỏ chọn</button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {LOCALIZE_MARKETS.map(m => {
+                  const selected = lcMarkets.includes(m.code);
+                  return (
+                    <button key={m.code} onClick={() => lcToggleMarket(m.code)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all"
+                      style={selected
+                        ? {backgroundColor: "#7C3AED22", borderColor: "#7C3AED", color: "#A78BFA"}
+                        : {backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
+                      <span>{m.flag}</span> {m.code}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {lcError && <div className="text-xs px-4 py-2.5 rounded-xl" style={{backgroundColor: "#EF444420", color: "#EF4444"}}>{lcError}</div>}
+
+            <button
+              onClick={handleLocalize}
+              disabled={lcLoading || !lcAppName.trim() || lcMarkets.length === 0}
+              className="w-full py-3 rounded-xl font-semibold text-sm transition-all disabled:opacity-50"
+              style={{backgroundColor: "#7C3AED", color: "white"}}>
+              {lcLoading ? "⏳ Đang dịch..." : `🌏 Dịch sang ${lcMarkets.length} thị trường`}
+            </button>
+          </div>
+
+          {/* Results */}
+          {lcResults && lcResults.length > 0 && (
+            <div className="rounded-2xl border p-6 space-y-4" style={{...cardStyle}}>
+              <div className="flex items-center justify-between">
+                <div className="font-bold text-sm" style={{color: t.text}}>Kết quả — {lcResults.length} thị trường</div>
+                <button
+                  onClick={lcCopyAll}
+                  className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border transition-colors"
+                  style={{borderColor: t.border, color: lcCopied==="all" ? "#10B981" : t.textMuted}}>
+                  {lcCopied==="all" ? "✓ Đã copy" : "📋 Copy tất cả"}
+                </button>
+              </div>
+
+              {/* Market tabs */}
+              <div className="flex flex-wrap gap-2">
+                {lcResults.map(m => (
+                  <button key={m.code} onClick={() => setLcActiveMarket(m.code)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all"
+                    style={lcActiveMarket===m.code
+                      ? {backgroundColor: "#7C3AED22", borderColor: "#7C3AED", color: "#A78BFA"}
+                      : {backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
+                    <span>{m.flag}</span> {m.code}
+                  </button>
+                ))}
+              </div>
+
+              {/* Active market detail */}
+              {lcActiveMarket && (() => {
+                const m = lcResults.find(r => r.code === lcActiveMarket);
+                if (!m) return null;
+                return (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">{m.flag}</span>
+                        <div>
+                          <div className="font-semibold text-sm" style={{color: t.text}}>{m.name}</div>
+                          <div className="text-xs" style={{color: t.textMuted}}>{m.language}</div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => lcCopyAllForMarket(m)}
+                        className="text-xs px-3 py-1.5 rounded-lg border transition-colors"
+                        style={{borderColor: t.border, color: lcCopied===`all-${m.code}` ? "#10B981" : t.textMuted}}>
+                        {lcCopied===`all-${m.code}` ? "✓ Đã copy" : "📋 Copy market này"}
+                      </button>
+                    </div>
+
+                    {/* Headlines */}
+                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Headlines <span className="font-normal normal-case">(≤30 ký tự)</span></div>
+                      {m.headlines.map((h, i) => (
+                        <div key={i} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg" style={{backgroundColor: t.card}}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-[10px] w-4 flex-shrink-0" style={{color: t.textMuted}}>{i+1}.</span>
+                            <span className="text-sm font-medium truncate" style={{color: t.text}}>{h}</span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className="text-[10px]" style={{color: h.length > 30 ? "#EF4444" : t.textMuted}}>{h.length}/30</span>
+                            <button onClick={() => lcCopyText(h, `h-${m.code}-${i}`)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`h-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`h-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
+                              {lcCopied===`h-${m.code}-${i}` ? "✓" : "copy"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Descriptions */}
+                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Descriptions <span className="font-normal normal-case">(≤90 ký tự)</span></div>
+                      {m.descriptions.map((d, i) => (
+                        <div key={i} className="flex items-start justify-between gap-3 px-3 py-2 rounded-lg" style={{backgroundColor: t.card}}>
+                          <div className="flex items-start gap-2 min-w-0">
+                            <span className="text-[10px] w-4 flex-shrink-0 mt-0.5" style={{color: t.textMuted}}>{i+1}.</span>
+                            <span className="text-sm" style={{color: t.text}}>{d}</span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className="text-[10px]" style={{color: d.length > 90 ? "#EF4444" : t.textMuted}}>{d.length}/90</span>
+                            <button onClick={() => lcCopyText(d, `d-${m.code}-${i}`)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`d-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`d-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
+                              {lcCopied===`d-${m.code}-${i}` ? "✓" : "copy"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* CTAs */}
+                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>CTAs <span className="font-normal normal-case">(≤15 ký tự)</span></div>
+                      <div className="flex flex-wrap gap-2">
+                        {m.ctas.map((c, i) => (
+                          <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{backgroundColor: t.card, borderColor: t.border}}>
+                            <span className="text-sm font-medium" style={{color: t.text}}>{c}</span>
+                            <span className="text-[10px]" style={{color: c.length > 15 ? "#EF4444" : t.textMuted}}>{c.length}/15</span>
+                            <button onClick={() => lcCopyText(c, `c-${m.code}-${i}`)} className="text-xs px-1.5 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`c-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`c-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
+                              {lcCopied===`c-${m.code}-${i}` ? "✓" : "copy"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* All markets summary table */}
+              <div className="mt-4">
+                <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Tổng quan tất cả thị trường</div>
+                <div className="overflow-x-auto rounded-xl border" style={{borderColor: t.border}}>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr style={{backgroundColor: t.tabBg}}>
+                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Thị trường</th>
+                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Headline #1</th>
+                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Description #1</th>
+                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>CTA #1</th>
+                        <th className="px-3 py-2.5"/>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lcResults.map((m, idx) => (
+                        <tr key={m.code}
+                          onClick={() => setLcActiveMarket(m.code)}
+                          className="cursor-pointer transition-colors"
+                          style={{backgroundColor: lcActiveMarket===m.code ? "#7C3AED11" : idx%2===0 ? t.card : t.tabBg, borderTop: `1px solid ${t.border}`}}>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-1.5">
+                              <span>{m.flag}</span>
+                              <span className="font-medium" style={{color: t.text}}>{m.code}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 max-w-[160px] truncate" style={{color: t.textSub}}>{m.headlines[0]}</td>
+                          <td className="px-3 py-2.5 max-w-[200px] truncate" style={{color: t.textSub}}>{m.descriptions[0]}</td>
+                          <td className="px-3 py-2.5" style={{color: t.textSub}}>{m.ctas[0]}</td>
+                          <td className="px-3 py-2.5">
+                            <button onClick={e => { e.stopPropagation(); lcCopyAllForMarket(m); }}
+                              className="text-[10px] px-2 py-0.5 rounded transition-colors"
+                              style={{backgroundColor: lcCopied===`all-${m.code}` ? "#10B98122" : t.tabBg, color: lcCopied===`all-${m.code}` ? "#10B981" : t.textMuted}}>
+                              {lcCopied===`all-${m.code}` ? "✓" : "copy"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Lightbox */}
       {selectedPreview && (
