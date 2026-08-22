@@ -123,32 +123,6 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Divider */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px" style={{ backgroundColor: border }} />
-            <span className="text-xs" style={{ color: textMuted }}>hoặc</span>
-            <div className="flex-1 h-px" style={{ backgroundColor: border }} />
-          </div>
-
-          {/* Keycloak SSO */}
-          <button
-            onClick={handleKeycloakLogin}
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-xl font-semibold text-sm transition-all disabled:opacity-60 border"
-            style={{ backgroundColor: card, borderColor: border, color: text }}>
-            {loading ? (
-              <><span className="animate-spin">⏳</span> Đang chuyển hướng...</>
-            ) : (
-              <>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" stroke="#7C3AED" strokeWidth="2" opacity="0.6"/>
-                  <path d="M12 6v6l4 2" stroke="#7C3AED" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-                Đăng nhập với Apero SSO
-              </>
-            )}
-          </button>
-
           <p className="text-xs text-center" style={{ color: textMuted }}>
             Liên hệ admin để được cấp tài khoản
           </p>
