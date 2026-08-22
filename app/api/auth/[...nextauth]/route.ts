@@ -1,7 +1,9 @@
 import NextAuth from "next-auth";
 import KeycloakProvider from "next-auth/providers/keycloak";
+import CredentialsProvider from "next-auth/providers/credentials";
 import type { NextAuthOptions } from "next-auth";
 import { logLoginToSheet } from "@/lib/sheetsLogger";
+import { verifyCredentials } from "@/lib/sheetsUsers";
 import { headers } from "next/headers";
 
 export const authOptions: NextAuthOptions = {
@@ -11,12 +13,33 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.KEYCLOAK_CLIENT_SECRET!,
       issuer: process.env.KEYCLOAK_ISSUER!,
     }),
+    CredentialsProvider({
+      id: "credentials",
+      name: "Tài khoản",
+      credentials: {
+        username: { label: "Username", type: "text" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        if (!credentials?.username || !credentials?.password) return null;
+        try {
+          const user = await verifyCredentials(credentials.username, credentials.password);
+          return user;
+        } catch {
+          return null;
+        }
+      },
+    }),
   ],
   callbacks: {
-    async jwt({ token, account }) {
+    async jwt({ token, account, user }) {
       if (account) {
         token.accessToken = account.access_token;
         token.idToken = account.id_token;
+      }
+      if (user) {
+        token.name = user.name;
+        token.email = user.email;
       }
       return token;
     },
@@ -44,6 +67,9 @@ export const authOptions: NextAuthOptions = {
   },
   pages: {
     signIn: "/login",
+  },
+  session: {
+    strategy: "jwt",
   },
 };
 
