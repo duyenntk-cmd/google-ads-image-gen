@@ -311,7 +311,7 @@ export default function Home() {
     if (!agBrief) return;
     setAgStep("generating"); setAgError("");
     try {
-      const generated = await generateAllBanners(agBrief, agScreenshot || null);
+      const generated = await generateAllBanners(agBrief, agScreenshot || null, undefined, agIcon || null);
       setAgPreviews(generated);
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
@@ -668,7 +668,17 @@ export default function Home() {
     try {
       const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
       const bgDataUrl = frames[bestIdx]?.dataUrl || null;
-      const generated = await generateAllBanners(brief, bgDataUrl);
+      const allFrameDataUrls = frames.map((f: { dataUrl: string }) => f.dataUrl);
+      let iconDataUrl: string | null = null;
+      if (iconFile) {
+        iconDataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(iconFile);
+        });
+      }
+      const generated = await generateAllBanners(brief, bgDataUrl, allFrameDataUrls, iconDataUrl);
       setPreviews(generated);
 
       const JSZip = (await import("jszip")).default;

@@ -30,12 +30,12 @@ export async function POST(req: NextRequest) {
     }));
 
     const marketContext = mkt
-      ? `\nTarget market: ${mkt}. Adjust color palette, visual mood, and copywriting style to resonate with ${mkt} audiences. Consider local cultural preferences, popular color associations, and typical aesthetic trends in ${mkt}.`
+      ? `\nTarget market: ${mkt}. Localize copy to resonate with ${mkt} audiences — consider cultural tone, local idioms, and typical aesthetic preferences.`
       : "";
 
     const response = await client.messages.create({
       model: "claude-sonnet-4-5",
-      max_tokens: 1024,
+      max_tokens: 1500,
       messages: [
         {
           role: "user",
@@ -43,23 +43,42 @@ export async function POST(req: NextRequest) {
             ...imageBlocks,
             {
               type: "text",
-              text: `These are frames from a mobile app advertisement video for a ${niche || "mobile"} app.
-Analyze the visual style and return ONLY a JSON object with no markdown, no explanation:
+              text: `You are a senior Google App Campaign creative strategist. Analyze these video frames from a ${niche || "mobile"} app ad and generate optimal banner creative assets.
+
+GOOGLE ADS CREATIVE BEST PRACTICES to follow:
+- Headlines: Use AIDA formula (Attention → Interest → Desire → Action). Must be benefit-focused, not feature-focused.
+- Avoid generic phrases like "Download Now", "Best App", "Free App". Instead use specific benefits.
+- CTA should create urgency or reduce friction (e.g. "Try Free 7 Days", "Start for Free", "Get It Free")
+- Colors: Primary should be the dominant brand color. Accent (CTA) must have high contrast ratio (≥4.5:1) against primary for accessibility.
+- Mood must match niche: photo=vibrant/creative, tool=clean/professional, office=trustworthy/corporate
+- Subheadline: social proof or specific feature that supports headline
+
+CHARACTER LIMITS (strict):
+- headline: max 30 characters (shorter = better for small banner sizes)
+- subheadline: max 60 characters
+- cta_text: max 15 characters
+
+Return ONLY a valid JSON object, no markdown, no explanation:
 
 {
-  "app_name": "app name if visible, else empty string",
-  "primary_color": "#hex dominant background color",
-  "secondary_color": "#hex secondary color",
-  "accent_color": "#hex button/CTA color (bright, contrasting)",
+  "app_name": "app name visible in video, else empty string",
+  "primary_color": "#hex - dominant brand/background color from the video",
+  "secondary_color": "#hex - secondary brand color",
+  "accent_color": "#hex - high-contrast CTA color, must stand out strongly against primary",
   "background_style": "dark|light|gradient",
-  "headline": "short punchy headline (max 8 words) matching the app's benefit — write in ${lang}",
-  "subheadline": "supporting text (max 12 words) — write in ${lang}",
-  "cta_text": "CTA button text (2-4 words) — write in ${lang}",
+  "mood": "bold|minimal|professional|playful|vibrant",
+  "headline": "benefit-focused headline max 30 chars in ${lang}",
+  "subheadline": "supporting proof/feature max 60 chars in ${lang}",
+  "cta_text": "action CTA max 15 chars in ${lang}",
   "best_frame_index": 0,
-  "mood": "bold|minimal|professional|playful"
+  "layout_suggestion": "lifestyle|product|minimal|bold"
 }
 
-IMPORTANT: headline, subheadline, and cta_text must be written in ${lang}.${marketContext}${userPrompt ? `\nAdditional context from user: ${userPrompt}` : ""}`,
+layout_suggestion guide:
+- lifestyle: use when video shows people/lifestyle scenes (best for emotional connection)
+- product: use when video shows app UI/screenshots prominently
+- minimal: use when background is clean/simple
+- bold: use when video has strong colors and energy${marketContext}${userPrompt ? `\nAdditional context: ${userPrompt}` : ""}`,
             },
           ],
         },
@@ -69,6 +88,11 @@ IMPORTANT: headline, subheadline, and cta_text must be written in ${lang}.${mark
     const text = response.content[0].type === "text" ? response.content[0].text : "";
     const clean = text.replace(/```json|```/g, "").trim();
     const brief = JSON.parse(clean);
+
+    // Enforce character limits
+    if (brief.headline) brief.headline = brief.headline.slice(0, 30);
+    if (brief.subheadline) brief.subheadline = brief.subheadline.slice(0, 60);
+    if (brief.cta_text) brief.cta_text = brief.cta_text.slice(0, 15);
 
     return NextResponse.json({ success: true, brief });
   } catch (err) {
