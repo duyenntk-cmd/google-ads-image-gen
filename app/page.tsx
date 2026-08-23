@@ -143,6 +143,8 @@ export default function Home() {
   const [videoFile, setVideoFile] = useState<File|null>(null);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [iconFile, setIconFile] = useState<File|null>(null);
+  const [iconDataUrlFetched, setIconDataUrlFetched] = useState<string|null>(null);
+  const [iconFetching, setIconFetching] = useState(false);
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [extractProgress, setExtractProgress] = useState(0);
   const [brief, setBrief] = useState<Brief>({ app_name:"",headline:"",subheadline:"",cta_text:"",primary_color:"#7B2FBE",secondary_color:"#E91E8C",accent_color:"#FF6B35",background_style:"dark",mood:"bold",best_frame_index:0,niche:"photo",app_store_url:"",play_store_url:"" });
@@ -663,14 +665,28 @@ export default function Home() {
     } catch(e) { setError(String(e)); setStep("upload"); }
   };
 
+  const handleFetchIcon = async (url: string) => {
+    if (!url) return;
+    setIconFetching(true);
+    try {
+      const res = await fetch("/api/fetch-icon", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+      const data = await res.json();
+      if (data.iconDataUrl) {
+        setIconDataUrlFetched(data.iconDataUrl);
+        if (data.appName && !brief.app_name) setBrief(p => ({ ...p, app_name: data.appName }));
+      }
+    } catch { /* ignore */ }
+    setIconFetching(false);
+  };
+
   const handleGenerate = async () => {
     setStep("generating"); setError("");
     try {
       const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
       const bgDataUrl = frames[bestIdx]?.dataUrl || null;
       const allFrameDataUrls = frames.map((f: { dataUrl: string }) => f.dataUrl);
-      let iconDataUrl: string | null = null;
-      if (iconFile) {
+      let iconDataUrl: string | null = iconDataUrlFetched || null;
+      if (!iconDataUrl && iconFile) {
         iconDataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result as string);
@@ -1209,25 +1225,45 @@ export default function Home() {
                 <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>
                   Icon app <span className="font-normal normal-case" style={{color: t.textMuted}}>(tuỳ chọn)</span>
                 </label>
-                <div onClick={()=>iconInputRef.current?.click()}
-                  className={`border border-dashed rounded-xl p-5 text-center cursor-pointer transition-all h-[88px] flex flex-col items-center justify-center gap-1 ${iconFile?"border-violet-500/40 bg-violet-500/5":""}`}
-                  style={iconFile ? {} : {borderColor: t.border}}>
-                  {iconFile ? (
-                    <><div className="text-xl">🔷</div><div className="text-xs truncate max-w-[140px]" style={{color: t.text}}>{iconFile.name}</div></>
-                  ) : (
-                    <><div className="text-xl opacity-30">🔷</div><div className="text-xs" style={{color: t.textMuted}}>Upload icon PNG/JPG</div></>
-                  )}
-                  <input ref={iconInputRef} type="file" accept="image/*" className="hidden" onChange={e=>e.target.files?.[0]&&setIconFile(e.target.files[0])}/>
-                </div>
+                {iconDataUrlFetched ? (
+                  <div className="border border-violet-500/40 bg-violet-500/5 rounded-xl p-3 flex items-center gap-3 h-[88px]">
+                    <img src={iconDataUrlFetched} alt="icon" className="w-14 h-14 rounded-2xl object-cover flex-shrink-0 shadow"/>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium truncate" style={{color: t.text}}>Icon đã fetch ✓</div>
+                      <button onClick={()=>{ setIconDataUrlFetched(null); setIconFile(null); }} className="text-xs mt-1" style={{color: t.textMuted}}>Xoá</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div onClick={()=>iconInputRef.current?.click()}
+                    className={`border border-dashed rounded-xl p-5 text-center cursor-pointer transition-all h-[88px] flex flex-col items-center justify-center gap-1 ${iconFile?"border-violet-500/40 bg-violet-500/5":""}`}
+                    style={iconFile ? {} : {borderColor: t.border}}>
+                    {iconFile ? (
+                      <><div className="text-xl">🔷</div><div className="text-xs truncate max-w-[140px]" style={{color: t.text}}>{iconFile.name}</div></>
+                    ) : (
+                      <><div className="text-xl opacity-30">🔷</div><div className="text-xs" style={{color: t.textMuted}}>Upload icon PNG/JPG</div></>
+                    )}
+                    <input ref={iconInputRef} type="file" accept="image/*" className="hidden" onChange={e=>e.target.files?.[0]&&(setIconFile(e.target.files[0]),setIconDataUrlFetched(null))}/>
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
                 <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={labelStyle}>
-                  Store links <span className="font-normal normal-case" style={{color: t.textMuted}}>(tuỳ chọn)</span>
+                  Store links <span className="font-normal normal-case" style={{color: t.textMuted}}>(auto-fetch icon)</span>
                 </label>
-                <input type="url" placeholder="🍎 App Store URL" value={brief.app_store_url} onChange={e=>setBrief(p=>({...p,app_store_url:e.target.value}))}
-                  className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
-                <input type="url" placeholder="🤖 Google Play URL" value={brief.play_store_url} onChange={e=>setBrief(p=>({...p,play_store_url:e.target.value}))}
-                  className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
+                <div className="flex gap-1">
+                  <input type="url" placeholder="🍎 App Store URL" value={brief.app_store_url}
+                    onChange={e=>{setBrief(p=>({...p,app_store_url:e.target.value})); setIconDataUrlFetched(null);}}
+                    className="flex-1 rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
+                  {brief.app_store_url && <button onClick={()=>handleFetchIcon(brief.app_store_url)} disabled={iconFetching}
+                    className="px-2 py-1.5 rounded-lg text-xs font-medium bg-violet-600 text-white disabled:opacity-50 flex-shrink-0">{iconFetching?"⏳":"Fetch"}</button>}
+                </div>
+                <div className="flex gap-1">
+                  <input type="url" placeholder="🤖 Google Play URL" value={brief.play_store_url}
+                    onChange={e=>{setBrief(p=>({...p,play_store_url:e.target.value})); setIconDataUrlFetched(null);}}
+                    className="flex-1 rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
+                  {brief.play_store_url && <button onClick={()=>handleFetchIcon(brief.play_store_url)} disabled={iconFetching}
+                    className="px-2 py-1.5 rounded-lg text-xs font-medium bg-violet-600 text-white disabled:opacity-50 flex-shrink-0">{iconFetching?"⏳":"Fetch"}</button>}
+                </div>
               </div>
             </div>
 
