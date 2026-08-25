@@ -9,6 +9,7 @@ export async function proxy(req: NextRequest) {
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/google-ads") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
   ) {
