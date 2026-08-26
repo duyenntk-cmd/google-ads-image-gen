@@ -30,7 +30,8 @@ export async function GET(req: NextRequest) {
       ORDER BY campaign.id DESC LIMIT 20
     `);
 
-    const campaigns = results.map((r: { campaign: { id: string; name: string; status: string; start_date: string }; campaign_budget: { amount_micros: string } }) => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const campaigns = results.map((r: any) => ({
       id: r.campaign?.id,
       name: r.campaign?.name,
       status: r.campaign?.status,
@@ -154,8 +155,10 @@ export async function POST(req: NextRequest) {
     const result = await mutate(accessToken, customerId, operations);
 
     // Extract created campaign resource name
-    const campaignResource = result.mutateOperationResponses
-      ?.find((r: { campaignResult?: { resourceName: string } }) => r.campaignResult)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const campaignResource = (result as any).mutateOperationResponses
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ?.find((r: any) => r.campaignResult)
       ?.campaignResult?.resourceName;
 
     return NextResponse.json({

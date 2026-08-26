@@ -6,12 +6,6 @@
 const GOOGLE_ADS_API_VERSION = "v18";
 const BASE_URL = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
 
-export interface GoogleAdsTokens {
-  access_token: string;
-  refresh_token: string;
-  expiry: number; // unix ms
-}
-
 export async function refreshAccessToken(refreshToken: string): Promise<string> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -28,12 +22,15 @@ export async function refreshAccessToken(refreshToken: string): Promise<string> 
   return data.access_token;
 }
 
-export function adsHeaders(accessToken: string) {
-  return {
+export function adsHeaders(accessToken: string, loginCustomerId?: string) {
+  const h: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "developer-token": process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
     "Content-Type": "application/json",
   };
+  const mcc = loginCustomerId || process.env.GOOGLE_ADS_MCC_CUSTOMER_ID;
+  if (mcc) h["login-customer-id"] = mcc.replace(/-/g, "");
+  return h;
 }
 
 /** List accessible customers under MCC */
@@ -41,8 +38,10 @@ export async function listAccessibleCustomers(accessToken: string): Promise<stri
   const res = await fetch(`${BASE_URL}/customers:listAccessibleCustomers`, {
     headers: adsHeaders(accessToken),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(JSON.stringify(data));
+  const text = await res.text();
+  let data: { resourceNames?: string[]; error?: { message: string } };
+  try { data = JSON.parse(text); } catch { throw new Error(`Non-JSON response: ${text.slice(0, 300)}`); }
+  if (!res.ok) throw new Error(`Google Ads API error ${res.status}: ${JSON.stringify(data)}`);
   return (data.resourceNames || []).map((r: string) => r.replace("customers/", ""));
 }
 
@@ -50,29 +49,27 @@ export async function listAccessibleCustomers(accessToken: string): Promise<stri
 export async function queryCustomer(accessToken: string, customerId: string, gaql: string) {
   const res = await fetch(`${BASE_URL}/customers/${customerId}/googleAds:search`, {
     method: "POST",
-    headers: {
-      ...adsHeaders(accessToken),
-      "login-customer-id": process.env.GOOGLE_ADS_MCC_CUSTOMER_ID!,
-    },
+    headers: adsHeaders(accessToken),
     body: JSON.stringify({ query: gaql }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(JSON.stringify(data));
-  return data.results || [];
+  const text = await res.text();
+  let data: { results?: unknown[]; error?: { message: string } };
+  try { data = JSON.parse(text); } catch { throw new Error(`Non-JSON: ${text.slice(0, 300)}`); }
+  if (!res.ok) throw new Error(`Query error ${res.status}: ${JSON.stringify(data)}`);
+  return (data.results || []) as Record<string, Record<string, string>>[];
 }
 
-/** Create a mutate request (campaigns, ad groups, assets, etc.) */
+/** Create a mutate request */
 export async function mutate(accessToken: string, customerId: string, operations: object[]) {
   const res = await fetch(`${BASE_URL}/customers/${customerId}/googleAds:mutate`, {
     method: "POST",
-    headers: {
-      ...adsHeaders(accessToken),
-      "login-customer-id": process.env.GOOGLE_ADS_MCC_CUSTOMER_ID!,
-    },
+    headers: adsHeaders(accessToken),
     body: JSON.stringify({ mutateOperations: operations }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(JSON.stringify(data));
+  const text = await res.text();
+  let data: unknown;
+  try { data = JSON.parse(text); } catch { throw new Error(`Non-JSON: ${text.slice(0, 300)}`); }
+  if (!res.ok) throw new Error(`Mutate error ${res.status}: ${JSON.stringify(data)}`);
   return data;
 }
 
@@ -83,14 +80,10 @@ export async function uploadImageAsset(
   base64Data: string,
   name: string
 ): Promise<string> {
-  // Strip data URL prefix if present
   const imageData = base64Data.includes(",") ? base64Data.split(",")[1] : base64Data;
   const res = await fetch(`${BASE_URL}/customers/${customerId}/googleAds:mutate`, {
     method: "POST",
-    headers: {
-      ...adsHeaders(accessToken),
-      "login-customer-id": process.env.GOOGLE_ADS_MCC_CUSTOMER_ID!,
-    },
+    headers: adsHeaders(accessToken),
     body: JSON.stringify({
       mutateOperations: [{
         assetOperation: {
@@ -103,7 +96,9 @@ export async function uploadImageAsset(
       }],
     }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(JSON.stringify(data));
-  return data.mutateOperationResponses[0].assetResult.resourceName;
+  const text = await res.text();
+  let data: { mutateOperationResponses?: { assetResult?: { resourceName: string } }[] };
+  try { data = JSON.parse(text); } catch { throw new Error(`Non-JSON: ${text.slice(0, 300)}`); }
+  if (!res.ok) throw new Error(`Upload error ${res.status}: ${text.slice(0, 300)}`);
+  return data.mutateOperationResponses?.[0]?.assetResult?.resourceName || "";
 }
