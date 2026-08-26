@@ -589,6 +589,16 @@ export default function Home() {
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem("banner_history") || "[]")); } catch {}
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("google_ads_connected") === "1") {
+      setActivePage("launch");
+      checkAdsConnection();
+      // Clean up URL
+      window.history.replaceState({}, "", "/");
+    }
+  }, []);
   const saveHistory = (item: HistoryItem) => {
     setHistory(prev => {
       const next = [item, ...prev].slice(0, 20);
