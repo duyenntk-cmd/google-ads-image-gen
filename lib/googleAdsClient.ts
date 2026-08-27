@@ -1,10 +1,11 @@
-/**
+﻿/**
  * Google Ads API client helpers
  * Uses OAuth2 refresh token flow
  */
 
 const GOOGLE_ADS_API_VERSION = "v17";
 const BASE_URL = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
+const REST_BASE = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
 
 export async function refreshAccessToken(refreshToken: string): Promise<string> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -33,15 +34,34 @@ export function adsHeaders(accessToken: string, loginCustomerId?: string) {
   return h;
 }
 
-/** List accessible customers under MCC */
+/** List accessible customers - tries MCC account query first, falls back to listAccessibleCustomers */
 export async function listAccessibleCustomers(accessToken: string): Promise<string[]> {
+  const mccId = (process.env.GOOGLE_ADS_MCC_CUSTOMER_ID || "").replace(/-/g, "");
+
+  if (mccId) {
+    try {
+      const results = await queryCustomer(accessToken, mccId,
+        `SELECT customer_client.client_customer, customer_client.descriptive_name, customer_client.id, customer_client.level FROM customer_client WHERE customer_client.level = 1`
+      );
+      if (results.length > 0) {
+        return results.map((r) => String(r.customer_client?.id || "").replace("customers/", "")).filter(Boolean);
+      }
+    } catch {
+      // Fall through to listAccessibleCustomers
+    }
+  }
+
   const res = await fetch(`${BASE_URL}/customers:listAccessibleCustomers`, {
-    headers: adsHeaders(accessToken),
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "developer-token": process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
+    },
   });
   const text = await res.text();
-  let data: { resourceNames?: string[]; error?: { message: string } };
-  try { data = JSON.parse(text); } catch { throw new Error(`Non-JSON response: ${text.slice(0, 300)}`); }
-  if (!res.ok) throw new Error(`Google Ads API error ${res.status}: ${JSON.stringify(data)}`);
+  let data: { resourceNames?: string[]; error?: unknown };
+  try { data = JSON.parse(text); } catch { throw new Error(`Non-JSON (${res.status}): ${text.slice(0, 200)}`); }
+  if (!res.ok) throw new Error(`listAccessibleCustomers ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
   return (data.resourceNames || []).map((r: string) => r.replace("customers/", ""));
 }
 
