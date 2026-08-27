@@ -304,18 +304,31 @@ export default function Home() {
   const [adsLaunching, setAdsLaunching] = useState(false);
   const [adsResult, setAdsResult] = useState<{success:boolean;message?:string;error?:string}|null>(null);
   const [adsCampaigns, setAdsCampaigns] = useState<{id:string;name:string;status:string;budgetPerDay:number}[]>([]);
+  const [adsAccountsError, setAdsAccountsError] = useState<string|null>(null);
+  const [adsAccountsLoading, setAdsAccountsLoading] = useState(false);
 
   const checkAdsConnection = async () => {
-    const res = await fetch("/api/google-ads/auth?action=status");
-    const data = await res.json();
-    setAdsConnected(data.connected);
-    if (data.connected) loadAdsAccounts();
+    try {
+      const res = await fetch("/api/google-ads/auth?action=status");
+      if (!res.ok) { setAdsConnected(false); return; }
+      const data = await res.json();
+      setAdsConnected(data.connected);
+      if (data.connected) loadAdsAccounts();
+    } catch { setAdsConnected(false); }
   };
 
   const loadAdsAccounts = async () => {
-    const res = await fetch("/api/google-ads/accounts");
-    const data = await res.json();
-    if (data.success) setAdsAccounts(data.accounts || []);
+    setAdsAccountsLoading(true);
+    setAdsAccountsError(null);
+    try {
+      const res = await fetch("/api/google-ads/accounts");
+      const text = await res.text();
+      let data: {success:boolean;accounts?:{id:string;name:string;currency:string;status:string}[];error?:string};
+      try { data = JSON.parse(text); } catch { throw new Error(`Server returned HTML (middleware issue). Status: ${res.status}`); }
+      if (data.success) setAdsAccounts(data.accounts || []);
+      else setAdsAccountsError(data.error || "Unknown error");
+    } catch(e) { setAdsAccountsError(String(e)); }
+    setAdsAccountsLoading(false);
   };
 
   const loadAdsCampaigns = async (customerId: string) => {
@@ -2227,8 +2240,18 @@ export default function Home() {
                 {/* Select Account */}
                 <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
                   <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>Chọn tài khoản Google Ads</label>
-                  {adsAccounts.length === 0 ? (
-                    <div className="text-xs" style={{color:t.textMuted}}>Đang tải tài khoản...</div>
+                  {adsAccountsError ? (
+                    <div className="space-y-2">
+                      <div className="text-xs text-red-400 bg-red-400/10 rounded-lg px-3 py-2 break-all">{adsAccountsError}</div>
+                      <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">Thử lại</button>
+                    </div>
+                  ) : adsAccountsLoading ? (
+                    <div className="text-xs" style={{color:t.textMuted}}>⏳ Đang tải tài khoản...</div>
+                  ) : adsAccounts.length === 0 ? (
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs" style={{color:t.textMuted}}>Không có tài khoản nào</div>
+                      <button onClick={loadAdsAccounts} className="text-xs px-2 py-1 rounded-lg border" style={{borderColor:t.border,color:t.textMuted}}>Tải lại</button>
+                    </div>
                   ) : (
                     <select value={adsSelectedAccount} onChange={e=>{ setAdsSelectedAccount(e.target.value); if(e.target.value) loadAdsCampaigns(e.target.value); }}
                       className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none" style={inputStyle}>
