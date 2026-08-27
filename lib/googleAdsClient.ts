@@ -43,9 +43,7 @@ export async function listAccessibleCustomers(accessToken: string): Promise<stri
       const results = await queryCustomer(accessToken, mccId,
         `SELECT customer_client.client_customer, customer_client.descriptive_name, customer_client.id, customer_client.level FROM customer_client WHERE customer_client.level = 1`
       );
-      if (results.length > 0) {
-        return results.map((r) => String(r.customer_client?.id || "").replace("customers/", "")).filter(Boolean);
-      }
+      return results.map((r) => String(r.customer_client?.id || "").replace("customers/", "")).filter(Boolean);
     } catch {
       // Fall through to listAccessibleCustomers
     }
@@ -122,3 +120,4 @@ export async function uploadImageAsset(
   if (!res.ok) throw new Error(`Upload error ${res.status}: ${text.slice(0, 300)}`);
   return data.mutateOperationResponses?.[0]?.assetResult?.resourceName || "";
 }
+
