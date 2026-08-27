@@ -3,7 +3,7 @@
  * Uses OAuth2 refresh token flow
  */
 
-const GOOGLE_ADS_API_VERSION = "v18";
+const GOOGLE_ADS_API_VERSION = "v17";
 const BASE_URL = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
 
 export async function refreshAccessToken(refreshToken: string): Promise<string> {
