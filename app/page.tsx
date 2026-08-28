@@ -747,8 +747,18 @@ export default function Home() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       const defaults = NICHE_DEFAULTS[niche] || {};
+      const prevUrl = brief.app_store_url || brief.play_store_url;
       setBrief(prev => ({ ...prev, ...defaults, ...data.brief, niche, app_store_url: prev.app_store_url, play_store_url: prev.play_store_url }));
       setStep("brief");
+      // Auto-fetch app name from store URL if AI didn't get it
+      if (!data.brief?.app_name && prevUrl) {
+        try {
+          const iconRes = await fetch("/api/fetch-icon", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: prevUrl }) });
+          const iconData = await iconRes.json();
+          if (iconData.appName) setBrief(p => ({ ...p, app_name: p.app_name || iconData.appName }));
+          if (iconData.iconDataUrl) setIconDataUrlFetched(iconData.iconDataUrl);
+        } catch { /* ignore */ }
+      }
     } catch(e) { setError(String(e)); setStep("upload"); }
   };
 
