@@ -145,6 +145,9 @@ export default function Home() {
   const [iconFile, setIconFile] = useState<File|null>(null);
   const [iconDataUrlFetched, setIconDataUrlFetched] = useState<string|null>(null);
   const [iconFetching, setIconFetching] = useState(false);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [suggestResult, setSuggestResult] = useState<any>(null);
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [extractProgress, setExtractProgress] = useState(0);
   const [brief, setBrief] = useState<Brief>({ app_name:"",headline:"",subheadline:"",cta_text:"",primary_color:"#7B2FBE",secondary_color:"#E91E8C",accent_color:"#FF6B35",background_style:"dark",mood:"bold",best_frame_index:0,niche:"photo",app_store_url:"",play_store_url:"" });
@@ -1393,6 +1396,62 @@ export default function Home() {
 
             {/* Text fields */}
             <div className="p-5 border grid grid-cols-2 gap-4" style={cardStyle}>
+              <div className="col-span-2 flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold uppercase tracking-wider" style={labelStyle}>Nội dung</span>
+                <button onClick={async () => {
+                  if (!brief.app_name) { alert("Nhập tên app trước!"); return; }
+                  setSuggestLoading(true); setSuggestResult(null);
+                  try {
+                    const res = await fetch("/api/suggest-brief", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ app_name: brief.app_name, niche: brief.niche, headline: brief.headline, subheadline: brief.subheadline, cta_text: brief.cta_text }) });
+                    const data = await res.json();
+                    if (data.success) setSuggestResult(data);
+                  } catch {}
+                  setSuggestLoading(false);
+                }} disabled={suggestLoading}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all disabled:opacity-40"
+                  style={{borderColor:"rgba(139,92,246,0.5)", color:"#a78bfa", backgroundColor:"rgba(139,92,246,0.08)"}}>
+                  {suggestLoading ? <><span className="animate-spin">⏳</span> Đang suggest...</> : <>✨ AI Suggest</>}
+                </button>
+              </div>
+
+              {/* AI Suggestions */}
+              {suggestResult && (
+                <div className="col-span-2 space-y-2 mb-2">
+                  <p className="text-xs font-medium" style={{color: t.textMuted}}>Chọn 1 gợi ý bên dưới để áp dụng:</p>
+                  {suggestResult.suggestions.map((s: {label:string;headline:string;subheadline:string;cta:string}, i: number) => (
+                    <button key={i} onClick={() => { setBrief(p => ({...p, headline: s.headline, subheadline: s.subheadline, cta_text: s.cta})); setSuggestResult(null); }}
+                      className="w-full text-left p-3 rounded-lg border transition-all hover:border-violet-500/60"
+                      style={{borderColor: t.border, backgroundColor: t.input}}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{color:"#a78bfa"}}>{s.label || `Gợi ý ${i+1}`}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{backgroundColor:"rgba(139,92,246,0.15)", color:"#a78bfa"}}>Áp dụng →</span>
+                      </div>
+                      <p className="text-sm font-semibold" style={{color: t.text}}>{s.headline}</p>
+                      <p className="text-xs mt-0.5" style={{color: t.textMuted}}>{s.subheadline} · <span style={{color:"#34d399"}}>{s.cta}</span></p>
+                    </button>
+                  ))}
+                  {suggestResult.palettes && (
+                    <div>
+                      <p className="text-xs font-medium mt-3 mb-1.5" style={{color: t.textMuted}}>Bảng màu gợi ý:</p>
+                      <div className="flex gap-2">
+                        {suggestResult.palettes.map((p: {name:string;primary:string;secondary:string;accent:string}, i: number) => (
+                          <button key={i} onClick={() => { setBrief(prev => ({...prev, primary_color: p.primary, secondary_color: p.secondary, accent_color: p.accent})); }}
+                            className="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all hover:border-violet-500/60 flex-1"
+                            style={{borderColor: t.border, backgroundColor: t.input}}>
+                            <div className="flex gap-1">
+                              <div className="w-4 h-4 rounded-full" style={{backgroundColor: p.primary}}/>
+                              <div className="w-4 h-4 rounded-full" style={{backgroundColor: p.secondary}}/>
+                              <div className="w-4 h-4 rounded-full" style={{backgroundColor: p.accent}}/>
+                            </div>
+                            <span className="text-[10px]" style={{color: t.textMuted}}>{p.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {[{key:"app_name",label:"Tên app",placeholder:"e.g. PhotoPro"},{key:"cta_text",label:"CTA Button",placeholder:"e.g. Try Free"},{key:"headline",label:"Headline",placeholder:"e.g. Edit Photos Like a Pro",full:true},{key:"subheadline",label:"Subheadline",placeholder:"e.g. 100+ Filters & AI Tools",full:true}].map(field=>(
                 <div key={field.key} className={field.full?"col-span-2":""}>
                   <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>{field.label}</label>

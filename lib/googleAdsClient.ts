@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Google Ads API client helpers
  * Uses OAuth2 refresh token flow
  */
@@ -38,13 +38,21 @@ export function adsHeaders(accessToken: string, loginCustomerId?: string) {
 export async function listAccessibleCustomers(accessToken: string): Promise<string[]> {
   const mccId = (process.env.GOOGLE_ADS_MCC_CUSTOMER_ID || "").replace(/-/g, "");
 
+  // If we have MCC ID, query its child accounts via GAQL
   if (mccId) {
-    const results = await queryCustomer(accessToken, mccId,
-      `SELECT customer_client.client_customer, customer_client.descriptive_name, customer_client.id, customer_client.level FROM customer_client WHERE customer_client.level = 1`
-    );
-    return results.map((r) => String(r.customer_client?.id || "").replace("customers/", "")).filter(Boolean);
+    try {
+      const results = await queryCustomer(accessToken, mccId,
+        `SELECT customer_client.client_customer, customer_client.descriptive_name, customer_client.id, customer_client.level FROM customer_client WHERE customer_client.level = 1`
+      );
+      if (results.length > 0) {
+        return results.map((r) => String(r.customer_client?.id || "").replace("customers/", "")).filter(Boolean);
+      }
+    } catch {
+      // Fall through to listAccessibleCustomers
+    }
   }
 
+  // Fallback: listAccessibleCustomers REST endpoint
   const res = await fetch(`${BASE_URL}/customers:listAccessibleCustomers`, {
     method: "GET",
     headers: {
@@ -116,5 +124,3 @@ export async function uploadImageAsset(
   if (!res.ok) throw new Error(`Upload error ${res.status}: ${text.slice(0, 300)}`);
   return data.mutateOperationResponses?.[0]?.assetResult?.resourceName || "";
 }
-
-
