@@ -130,58 +130,62 @@ async function renderBanner(
   const clrShadow = () => { ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
 
   // ── BACKGROUND ──────────────────────────────────────────────────────────────
+  // All layouts use the video frame as background when available
+  ctx.fillStyle = primary;
+  ctx.fillRect(0, 0, w, h);
+  if (bgImg) {
+    const scale = Math.max(w / bgImg.width, h / bgImg.height);
+    const sw = bgImg.width * scale, sh = bgImg.height * scale;
+    ctx.drawImage(bgImg, (w - sw) / 2, (h - sh) / 2, sw, sh);
+  }
+
   if (layout === "minimal") {
-    // Clean solid or subtle gradient background
-    const grad = ctx.createLinearGradient(0, 0, w * 0.3, h);
-    grad.addColorStop(0, primary);
-    grad.addColorStop(1, secondary);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
-    // Subtle circle decoration
+    // Minimal: light color-tinted overlay to give branded feel while keeping image visible
     if (!isTiny) {
-      ctx.globalAlpha = 0.12;
+      const [pr, pg, pb] = hexToRgb(primary);
+      const overlay = ctx.createLinearGradient(0, 0, w * 0.4, h);
+      overlay.addColorStop(0, `rgba(${pr},${pg},${pb},0.72)`);
+      overlay.addColorStop(1, `rgba(${pr},${pg},${pb},0.35)`);
+      ctx.fillStyle = overlay;
+      ctx.fillRect(0, 0, w, h);
+      // Subtle accent circle
+      ctx.globalAlpha = 0.1;
       ctx.fillStyle = accent;
       ctx.beginPath();
-      ctx.arc(w * (isWide ? 0.15 : 0.85), h * 0.15, Math.min(w, h) * 0.55, 0, Math.PI * 2);
+      ctx.arc(w * (isWide ? 0.12 : 0.85), h * 0.12, Math.min(w, h) * 0.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, w, h);
     }
   } else if (layout === "bold") {
-    // Bold: full color + diagonal split
-    ctx.fillStyle = primary;
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = accent;
-    ctx.globalAlpha = 0.18;
-    ctx.beginPath();
-    if (isWide) {
-      ctx.moveTo(0, 0); ctx.lineTo(w * 0.45, 0); ctx.lineTo(w * 0.3, h); ctx.lineTo(0, h);
-    } else {
-      ctx.moveTo(0, 0); ctx.lineTo(w, 0); ctx.lineTo(w, h * 0.38); ctx.lineTo(0, h * 0.55);
-    }
-    ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = 1;
-    // Noise texture via tiny dots
-    ctx.globalAlpha = 0.04;
-    for (let i = 0; i < 60; i++) {
-      ctx.fillStyle = "#ffffff";
+    // Bold: strong bottom gradient + diagonal accent stripe
+    if (!isTiny) {
+      const [pr, pg, pb] = hexToRgb(primary);
+      const scrim = ctx.createLinearGradient(0, 0, 0, h);
+      scrim.addColorStop(0, `rgba(${pr},${pg},${pb},0.3)`);
+      scrim.addColorStop(0.5, `rgba(${pr},${pg},${pb},0.7)`);
+      scrim.addColorStop(1, `rgba(${pr},${pg},${pb},0.95)`);
+      ctx.fillStyle = scrim;
+      ctx.fillRect(0, 0, w, h);
+      // Diagonal accent stripe
+      ctx.globalAlpha = 0.15;
+      ctx.fillStyle = accent;
       ctx.beginPath();
-      ctx.arc(Math.random() * w, Math.random() * h, Math.random() * 3 + 1, 0, Math.PI * 2);
-      ctx.fill();
+      if (isWide) {
+        ctx.moveTo(0, 0); ctx.lineTo(w * 0.4, 0); ctx.lineTo(w * 0.25, h); ctx.lineTo(0, h);
+      } else {
+        ctx.moveTo(0, 0); ctx.lineTo(w, 0); ctx.lineTo(w, h * 0.35); ctx.lineTo(0, h * 0.52);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, w, h);
     }
-    ctx.globalAlpha = 1;
   } else {
-    // lifestyle / product: video frame full bleed
-    ctx.fillStyle = primary;
-    ctx.fillRect(0, 0, w, h);
-    if (bgImg) {
-      const scale = Math.max(w / bgImg.width, h / bgImg.height);
-      const sw = bgImg.width * scale, sh = bgImg.height * scale;
-      ctx.drawImage(bgImg, (w - sw) / 2, (h - sh) / 2, sw, sh);
-    }
-    // Scrim
+    // lifestyle / product: cinematic scrim over image
     if (!isTiny) {
       if (layout === "product") {
-        // Product: stronger vignette + gradient on bottom
         const scrim = ctx.createLinearGradient(0, h * 0.2, 0, h);
         scrim.addColorStop(0, "rgba(0,0,0,0.1)");
         scrim.addColorStop(0.5, "rgba(0,0,0,0.6)");
