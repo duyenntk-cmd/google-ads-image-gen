@@ -6,6 +6,8 @@ interface Brief {
   best_frame_index?: number; niche?: string;
   app_store_url?: string; play_store_url?: string;
   layout_suggestion?: string;
+  subject_position?: string;
+  text_zone?: string;
 }
 
 export interface GeneratedBanner {
@@ -130,13 +132,33 @@ async function renderBanner(
   const clrShadow = () => { ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
 
   // ── BACKGROUND ──────────────────────────────────────────────────────────────
-  // All layouts use the video frame as background when available
+  // Smart background: blur-fill so subject is never cropped
   ctx.fillStyle = primary;
   ctx.fillRect(0, 0, w, h);
   if (bgImg) {
-    const scale = Math.max(w / bgImg.width, h / bgImg.height);
-    const sw = bgImg.width * scale, sh = bgImg.height * scale;
-    ctx.drawImage(bgImg, (w - sw) / 2, (h - sh) / 2, sw, sh);
+    // Step 1: blurred cover fill as background (fills the whole canvas)
+    ctx.save();
+    ctx.filter = "blur(18px)";
+    ctx.globalAlpha = 0.7;
+    const coverScale = Math.max(w / bgImg.width, h / bgImg.height);
+    const csw = bgImg.width * coverScale, csh = bgImg.height * coverScale;
+    ctx.drawImage(bgImg, (w - csw) / 2, (h - csh) / 2, csw, csh);
+    ctx.restore();
+    // Darken the blur layer
+    ctx.fillStyle = `rgba(${hexToRgb(primary).join(",")},0.45)`;
+    ctx.fillRect(0, 0, w, h);
+
+    // Step 2: sharp image with contain scaling — nothing gets cropped
+    const containScale = Math.min(w / bgImg.width, h / bgImg.height);
+    const sw = bgImg.width * containScale, sh = bgImg.height * containScale;
+    // Vertical offset: push image up so subject stays in upper area, text goes bottom
+    const textZone = brief.text_zone || "bottom";
+    let oy = (h - sh) / 2;
+    if (!isTiny) {
+      if (textZone === "bottom") oy = Math.max(0, (h - sh) / 2 - sh * 0.08);
+      else if (textZone === "top") oy = Math.min(h - sh, (h - sh) / 2 + sh * 0.08);
+    }
+    ctx.drawImage(bgImg, (w - sw) / 2, oy, sw, sh);
   }
 
   if (layout === "minimal") {

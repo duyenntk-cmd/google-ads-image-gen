@@ -58,6 +58,14 @@ CHARACTER LIMITS (strict):
 - subheadline: max 60 characters
 - cta_text: max 15 characters
 
+FRAME SELECTION: Analyze ALL provided frames and select the BEST one for advertising. Best frame criteria:
+- Clear, well-lit subject (person or app UI)
+- Emotionally engaging or visually striking
+- Not blurry, not mid-transition, not too dark
+- Shows the app benefit clearly
+
+SUBJECT POSITION: Identify where the main subject (person/UI) is located in the best frame.
+
 Return ONLY a valid JSON object, no markdown, no explanation:
 
 {
@@ -70,15 +78,20 @@ Return ONLY a valid JSON object, no markdown, no explanation:
   "headline": "benefit-focused headline max 30 chars in ${lang}",
   "subheadline": "supporting proof/feature max 60 chars in ${lang}",
   "cta_text": "action CTA max 15 chars in ${lang}",
-  "best_frame_index": 0,
-  "layout_suggestion": "lifestyle|product|minimal|bold"
+  "best_frame_index": <index 0-N of the best frame for advertising>,
+  "layout_suggestion": "lifestyle|product|minimal|bold",
+  "subject_position": "top|center|bottom|left|right|top-left|top-right|bottom-left|bottom-right",
+  "text_zone": "bottom|top|left|right"
 }
 
 layout_suggestion guide:
 - lifestyle: use when video shows people/lifestyle scenes (best for emotional connection)
 - product: use when video shows app UI/screenshots prominently
 - minimal: use when background is clean/simple
-- bold: use when video has strong colors and energy${marketContext}${userPrompt ? `\nAdditional context: ${userPrompt}` : ""}`,
+- bold: use when video has strong colors and energy
+
+text_zone: where to place the text overlay so it does NOT cover the main subject.
+If subject is at top → text_zone = "bottom". If subject fills frame → text_zone = "bottom".${marketContext}${userPrompt ? `\nAdditional context: ${userPrompt}` : ""}`,
             },
           ],
         },

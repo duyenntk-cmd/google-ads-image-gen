@@ -11,6 +11,7 @@ interface Brief {
   primary_color: string; secondary_color: string; accent_color: string;
   background_style: string; mood: string; best_frame_index: number;
   niche: string; app_store_url: string; play_store_url: string;
+  subject_position?: string; text_zone?: string;
 }
 interface Preview { key: string; width: number; height: number; label: string; isTop5: boolean; dataUrl: string; }
 type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
