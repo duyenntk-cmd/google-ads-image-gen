@@ -149,6 +149,7 @@ export default function Home() {
   const [suggestLoading, setSuggestLoading] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [suggestResult, setSuggestResult] = useState<any>(null);
+  const [lightboxFrame, setLightboxFrame] = useState<string|null>(null);
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [extractProgress, setExtractProgress] = useState(0);
   const [brief, setBrief] = useState<Brief>({ app_name:"",headline:"",subheadline:"",cta_text:"",primary_color:"#7B2FBE",secondary_color:"#E91E8C",accent_color:"#FF6B35",background_style:"dark",mood:"bold",best_frame_index:0,niche:"photo",app_store_url:"",play_store_url:"" });
@@ -1385,14 +1386,19 @@ export default function Home() {
               </div>
               <div className="flex gap-2 overflow-x-auto pb-2">
                 {frames.map((f,i)=>(
-                  <button key={i} onClick={()=>setBrief(p=>({...p,best_frame_index:i}))}
-                    className={`flex-shrink-0 rounded-lg overflow-hidden border-2 transition-all ${brief.best_frame_index===i?"border-violet-500 scale-105":""}`}
-                    style={brief.best_frame_index===i ? {} : {borderColor: t.border, opacity: 0.6}}>
-                    <img src={f.dataUrl} alt={`Frame ${i}`} className="w-24 h-14 object-cover"/>
-                  </button>
+                  <div key={i} className="relative flex-shrink-0 group">
+                    <button onClick={()=>setBrief(p=>({...p,best_frame_index:i}))}
+                      className={`rounded-lg overflow-hidden border-2 transition-all block ${brief.best_frame_index===i?"border-violet-500 scale-105":""}`}
+                      style={brief.best_frame_index===i ? {} : {borderColor: t.border, opacity: 0.6}}>
+                      <img src={f.dataUrl} alt={`Frame ${i}`} className="w-24 h-14 object-cover"/>
+                    </button>
+                    <button onClick={e=>{e.stopPropagation();setLightboxFrame(f.dataUrl);}}
+                      className="absolute top-1 right-1 w-5 h-5 rounded flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{backgroundColor:"rgba(0,0,0,0.7)",color:"white"}} title="Xem to">🔍</button>
+                  </div>
                 ))}
               </div>
-              <p className="text-xs mt-2" style={{color: t.textMuted}}>Chọn frame → click "Xóa text gốc" để AI xóa text trong ảnh đó (~$0.04)</p>
+              <p className="text-xs mt-2" style={{color: t.textMuted}}>Click chọn frame · Hover → 🔍 để xem to · "Xóa text gốc" dùng AI xóa text (~$0.04)</p>
             </div>
 
             {/* Text fields */}
@@ -2912,6 +2918,16 @@ export default function Home() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Frame Lightbox */}
+      {lightboxFrame && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-6" onClick={()=>setLightboxFrame(null)}>
+          <div className="relative max-w-4xl w-full" onClick={e=>e.stopPropagation()}>
+            <button onClick={()=>setLightboxFrame(null)} className="absolute -top-10 right-0 text-white/70 hover:text-white text-2xl">✕</button>
+            <img src={lightboxFrame} alt="Frame preview" className="w-full rounded-xl shadow-2xl" style={{maxHeight:"80vh",objectFit:"contain"}}/>
+          </div>
         </div>
       )}
 
