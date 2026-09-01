@@ -27,10 +27,63 @@ async function fetchImageAsBase64(url: string): Promise<string | null> {
   }
 }
 
-async function fetchIosData(id: string) {
-  const res = await fetch(`https://itunes.apple.com/lookup?id=${id}`);
-  const data = await res.json();
-  const app = data.results?.[0];
+// Map country name → iTunes country code + Play Store hl/gl
+const COUNTRY_LOCALE: Record<string, { itunes: string; hl: string; gl: string }> = {
+  "Vietnam":        { itunes: "vn", hl: "vi",    gl: "VN" },
+  "Indonesia":      { itunes: "id", hl: "id",    gl: "ID" },
+  "Thailand":       { itunes: "th", hl: "th",    gl: "TH" },
+  "Philippines":    { itunes: "ph", hl: "tl",    gl: "PH" },
+  "Malaysia":       { itunes: "my", hl: "ms",    gl: "MY" },
+  "Singapore":      { itunes: "sg", hl: "en",    gl: "SG" },
+  "Myanmar":        { itunes: "mm", hl: "my",    gl: "MM" },
+  "Cambodia":       { itunes: "kh", hl: "km",    gl: "KH" },
+  "Japan":          { itunes: "jp", hl: "ja",    gl: "JP" },
+  "South Korea":    { itunes: "kr", hl: "ko",    gl: "KR" },
+  "China":          { itunes: "cn", hl: "zh-CN", gl: "CN" },
+  "Taiwan":         { itunes: "tw", hl: "zh-TW", gl: "TW" },
+  "Hong Kong":      { itunes: "hk", hl: "zh-HK", gl: "HK" },
+  "India":          { itunes: "in", hl: "hi",    gl: "IN" },
+  "Pakistan":       { itunes: "pk", hl: "ur",    gl: "PK" },
+  "Bangladesh":     { itunes: "bd", hl: "bn",    gl: "BD" },
+  "Sri Lanka":      { itunes: "lk", hl: "si",    gl: "LK" },
+  "Saudi Arabia":   { itunes: "sa", hl: "ar",    gl: "SA" },
+  "UAE":            { itunes: "ae", hl: "ar",    gl: "AE" },
+  "Egypt":          { itunes: "eg", hl: "ar",    gl: "EG" },
+  "Turkey":         { itunes: "tr", hl: "tr",    gl: "TR" },
+  "Israel":         { itunes: "il", hl: "he",    gl: "IL" },
+  "Iraq":           { itunes: "iq", hl: "ar",    gl: "IQ" },
+  "USA":            { itunes: "us", hl: "en",    gl: "US" },
+  "Canada":         { itunes: "ca", hl: "en",    gl: "CA" },
+  "Mexico":         { itunes: "mx", hl: "es",    gl: "MX" },
+  "Brazil":         { itunes: "br", hl: "pt-BR", gl: "BR" },
+  "Argentina":      { itunes: "ar", hl: "es",    gl: "AR" },
+  "Colombia":       { itunes: "co", hl: "es",    gl: "CO" },
+  "Chile":          { itunes: "cl", hl: "es",    gl: "CL" },
+  "Peru":           { itunes: "pe", hl: "es",    gl: "PE" },
+  "Germany":        { itunes: "de", hl: "de",    gl: "DE" },
+  "France":         { itunes: "fr", hl: "fr",    gl: "FR" },
+  "United Kingdom": { itunes: "gb", hl: "en-GB", gl: "GB" },
+  "Italy":          { itunes: "it", hl: "it",    gl: "IT" },
+  "Spain":          { itunes: "es", hl: "es",    gl: "ES" },
+  "Netherlands":    { itunes: "nl", hl: "nl",    gl: "NL" },
+  "Poland":         { itunes: "pl", hl: "pl",    gl: "PL" },
+  "Russia":         { itunes: "ru", hl: "ru",    gl: "RU" },
+  "Australia":      { itunes: "au", hl: "en-AU", gl: "AU" },
+  "Nigeria":        { itunes: "ng", hl: "en",    gl: "NG" },
+  "South Africa":   { itunes: "za", hl: "en",    gl: "ZA" },
+};
+const DEFAULT_LOCALE = { itunes: "us", hl: "en", gl: "US" };
+
+async function fetchIosData(id: string, country = "Global") {
+  const locale = COUNTRY_LOCALE[country] || DEFAULT_LOCALE;
+  // Try localized first, fallback to US if no results
+  const tryFetch = async (cc: string) => {
+    const res = await fetch(`https://itunes.apple.com/lookup?id=${id}&country=${cc}&entity=software`);
+    const data = await res.json();
+    return data.results?.[0] || null;
+  };
+  let app = await tryFetch(locale.itunes);
+  if (!app && locale.itunes !== "us") app = await tryFetch("us");
   if (!app) return null;
   // Phone screenshots only — ipadScreenshotUrls often includes ESRB/rating badges
   const allScreenshots: string[] = (app.screenshotUrls || []).slice(0, 6);
@@ -43,19 +96,21 @@ async function fetchIosData(id: string) {
     rating: (app.averageUserRating || 0) as number,
     ratingCount: (app.userRatingCount || 0) as number,
     platform: "iOS",
+    locale,
   };
 }
 
-async function fetchAndroidData(pkg: string) {
+async function fetchAndroidData(pkg: string, country = "Global") {
+  const locale = COUNTRY_LOCALE[country] || DEFAULT_LOCALE;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 12000);
     const res = await fetch(
-      `https://play.google.com/store/apps/details?id=${pkg}&hl=en&gl=US`,
+      `https://play.google.com/store/apps/details?id=${pkg}&hl=${locale.hl}&gl=${locale.gl}`,
       {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Language": `${locale.hl},en;q=0.8`,
         },
         signal: controller.signal,
       }
@@ -99,10 +154,11 @@ async function fetchAndroidData(pkg: string) {
       rating: 0,
       ratingCount: 0,
       platform: "Android",
+      locale,
     };
   } catch {
     const name = pkg.split(".").pop()?.replace(/_/g, " ") || pkg;
-    return { name, description: "", category: "", iconUrl: "", screenshotUrls: [] as string[], rating: 0, ratingCount: 0, platform: "Android" };
+    return { name, description: "", category: "", iconUrl: "", screenshotUrls: [] as string[], rating: 0, ratingCount: 0, platform: "Android", locale: DEFAULT_LOCALE };
   }
 }
 
@@ -124,9 +180,9 @@ export async function POST(req: NextRequest) {
     let appMeta: { name: string; description: string; category: string; iconUrl: string; screenshotUrls: string[]; rating: number; ratingCount: number; platform: string; } | null = null;
 
     if (iosMatch) {
-      appMeta = await fetchIosData(iosMatch[1]);
+      appMeta = await fetchIosData(iosMatch[1], country);
     } else if (androidMatch) {
-      appMeta = await fetchAndroidData(androidMatch[1]);
+      appMeta = await fetchAndroidData(androidMatch[1], country);
     }
 
     if (!appMeta) {
