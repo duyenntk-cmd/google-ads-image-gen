@@ -250,7 +250,10 @@ export async function POST(req: NextRequest) {
     const userContent: Anthropic.ContentBlockParam[] = [];
     for (const s of screenshotsB64) {
       const rawB64 = s.split(",")[1] || s;
-      const mtype: "image/jpeg" | "image/png" = s.includes("image/png") ? "image/png" : "image/jpeg";
+      const ctMatch = s.match(/^data:([^;]+);base64,/);
+      const detectedMime = ctMatch?.[1] || "image/jpeg";
+      const mtype = (["image/jpeg","image/png","image/webp","image/gif"].includes(detectedMime)
+        ? detectedMime : "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" | "image/gif";
       userContent.push({ type: "image", source: { type: "base64", media_type: mtype, data: rawB64 } });
     }
 
