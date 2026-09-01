@@ -151,27 +151,34 @@ async function fetchAndroidData(pkg: string, country = "Global") {
     clearTimeout(timer);
     const html = res.ok ? await res.text() : "";
 
-    const titleMatch = html.match(/<title>([^<]+) - Apps on Google Play<\/title>/);
+    // Title can be in any language (Hindi, Vietnamese, etc.) — og:title is more reliable
     const ogMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
-    const name = titleMatch?.[1]?.trim() || ogMatch?.[1]?.trim() || pkg.split(".").pop()?.replace(/_/g, " ") || pkg;
+    const titleMatch = html.match(/<title>([^<]+?)\s*[-–|]\s*(?:Apps on Google Play|Google Play|एप्लिकेशन|ऐप्लिकेशन|Приложения|Aplicativos)/);
+    const name = ogMatch?.[1]?.trim() || titleMatch?.[1]?.trim() || pkg.split(".").pop()?.replace(/_/g, " ") || pkg;
 
     // Extract icon URL
     const iconMatch = html.match(/src="(https:\/\/play-lh\.googleusercontent\.com\/[^"=]+)" [^>]*itemprop="image"/);
     const iconUrl = iconMatch?.[1] || "";
 
-    // Extract screenshot URLs — Play Store embeds them as play-lh.googleusercontent.com images
-    const screenshotMatches = [...html.matchAll(/https:\/\/play-lh\.googleusercontent\.com\/[A-Za-z0-9_\-]+=w\d+/g)];
-    // Filter unique, skip icon-sized, take up to 5
+    // Extract screenshot URLs — Play Store embeds them in HTML/JSON in various formats:
+    // "https://play-lh.../ABC=w526-h296-rw"  (in JSON arrays)
+    // src="https://play-lh.../ABC=w240-h480"  (in img tags)
+    // "https://play-lh.../ABC"                (bare, no size suffix)
+    const allPlayLhUrls = [...html.matchAll(/https:\/\/play-lh\.googleusercontent\.com\/([A-Za-z0-9_\-]{20,})[^\s"'\\]*/g)];
+    const iconBase = iconUrl?.split("=")?.[0] || "";
     const seen = new Set<string>();
     const screenshotUrls: string[] = [];
-    for (const m of screenshotMatches) {
-      const base = m[0].split("=")[0];
-      if (!seen.has(base) && base !== iconUrl?.split("=")?.[0]) {
-        seen.add(base);
-        // Force high resolution
-        screenshotUrls.push(`${base}=w1080`);
-        if (screenshotUrls.length >= 5) break;
-      }
+    for (const m of allPlayLhUrls) {
+      const full = m[0];
+      const base = full.split("=")[0];
+      if (seen.has(base) || base === iconBase) continue;
+      // Skip obvious small/icon sizes (e.g. =w40, =w32, =s32)
+      const sizeMatch = full.match(/=(?:w|s)(\d+)/);
+      if (sizeMatch && parseInt(sizeMatch[1]) < 100) continue;
+      seen.add(base);
+      // Force high resolution portrait-friendly size
+      screenshotUrls.push(`${base}=w1080-h1920-rw`);
+      if (screenshotUrls.length >= 8) break;
     }
 
     // Try description from og:description
