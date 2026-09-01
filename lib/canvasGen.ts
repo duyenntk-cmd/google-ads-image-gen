@@ -421,31 +421,53 @@ async function renderBanner(
 
   // ── PORTRAIT / SQUARE ───────────────────────────────────────────────────────
   } else {
-    const maxTW = w - pad * 2;
-    const hlLines = wrapText(headline, maxTW, 3, hlSize);
-    const hlBlockH = hlLines.length * hlSize * 1.15;
     const gap = Math.round(h * 0.025);
     const showSub = !!subline && h > 380 && layout !== "bold";
-    const subBlockH = showSub ? subSize * 1.5 : 0;
-    const totalH = hlBlockH + (showSub ? gap + subBlockH : 0) + gap * 2 + ctaH;
     const bottomPad = Math.round(h * 0.07);
 
-    // If there's a usable bottom margin (image doesn't fill to bottom), use it
-    // Otherwise keep text at bottom with extra scrim
-    const hasBottomMargin = bottomMarginH > totalH + pad;
-    if (hasBottomMargin && bgImg) {
-      // Draw extra scrim below image for readability
+    // For square canvas with portrait image: use the side (left) margin just like wide layout
+    const squareHasSideMargin = !isWide && isPortraitImg && leftMarginW > w * 0.18;
+
+    let maxTW: number, textX_sq: number, startY: number;
+
+    if (squareHasSideMargin) {
+      // Text in the left blurred margin — never overlaps the image
+      maxTW = leftMarginW;
+      textX_sq = pad;
+      // Add side scrim for readability
       const [pr, pg, pb] = hexToRgb(primary);
-      const scrim = ctx.createLinearGradient(0, imgBoundsY1 - pad * 2, 0, h);
-      scrim.addColorStop(0, `rgba(${pr},${pg},${pb},0)`);
-      scrim.addColorStop(1, `rgba(${pr},${pg},${pb},0.92)`);
-      ctx.fillStyle = scrim;
-      ctx.fillRect(0, imgBoundsY1 - pad * 2, w, h - imgBoundsY1 + pad * 2);
+      const marginScrim = ctx.createLinearGradient(0, 0, imgBoundsX0 + pad * 2, 0);
+      marginScrim.addColorStop(0, `rgba(${pr},${pg},${pb},0.88)`);
+      marginScrim.addColorStop(1, `rgba(${pr},${pg},${pb},0)`);
+      ctx.fillStyle = marginScrim;
+      ctx.fillRect(0, 0, imgBoundsX0 + pad * 2, h);
+      startY = h * 0.2; // start text from 20% down
+    } else {
+      maxTW = w - pad * 2;
+      textX_sq = pad;
+      // If there's a usable bottom margin (image doesn't fill to bottom), use it
+      const hlLinesCount = wrapText(headline, maxTW, 3, hlSize).length;
+      const estTotalH = hlLinesCount * hlSize * 1.15 + (showSub ? gap + subSize * 1.5 : 0) + gap * 2 + ctaH;
+      const hasBottomMargin = bottomMarginH > estTotalH + pad;
+      if (hasBottomMargin && bgImg) {
+        const [pr, pg, pb] = hexToRgb(primary);
+        const scrim = ctx.createLinearGradient(0, imgBoundsY1 - pad * 2, 0, h);
+        scrim.addColorStop(0, `rgba(${pr},${pg},${pb},0)`);
+        scrim.addColorStop(1, `rgba(${pr},${pg},${pb},0.92)`);
+        ctx.fillStyle = scrim;
+        ctx.fillRect(0, imgBoundsY1 - pad * 2, w, h - imgBoundsY1 + pad * 2);
+        startY = Math.round(imgBoundsY1) + pad;
+      } else {
+        startY = h - bottomPad - (hlLinesCount * hlSize * 1.15 + (showSub ? gap + subSize * 1.5 : 0) + gap * 2 + ctaH);
+      }
     }
 
-    const startY = hasBottomMargin
-      ? Math.round(imgBoundsY1) + pad     // text starts just below the image
-      : h - bottomPad - totalH;           // text starts from bottom
+    const hlLines = wrapText(headline, maxTW, squareHasSideMargin ? 4 : 3, hlSize);
+    const hlBlockH = hlLines.length * hlSize * 1.15;
+    const subBlockH = showSub ? subSize * 1.5 : 0;
+    const totalH = hlBlockH + (showSub ? gap + subBlockH : 0) + gap * 2 + ctaH;
+    // Re-center vertically when using side margin
+    if (squareHasSideMargin) startY = (h - totalH) / 2;
 
     if (layout === "minimal" || layout === "bold") {
       // Top: icon left + app name right
@@ -481,7 +503,7 @@ async function renderBanner(
     ctx.font = `800 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
     ctx.fillStyle = "white";
     ctx.shadowColor = "rgba(0,0,0,0.85)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 2;
-    hlLines.forEach((l, i) => ctx.fillText(l, pad, startY + hlSize * 0.6 + i * hlSize * 1.15));
+    hlLines.forEach((l, i) => ctx.fillText(l, textX_sq, startY + hlSize * 0.6 + i * hlSize * 1.15));
     clrShadow();
 
     let curY = startY + hlBlockH;
@@ -493,11 +515,13 @@ async function renderBanner(
       ctx.shadowColor = "rgba(0,0,0,0.7)"; ctx.shadowBlur = 6;
       let sub = subline;
       while (sub.length > 0 && ctx.measureText(sub).width > maxTW) sub = sub.slice(0, -1);
-      ctx.fillText(sub, pad, curY + subSize * 0.6); clrShadow();
+      ctx.fillText(sub, textX_sq, curY + subSize * 0.6); clrShadow();
       curY += subBlockH;
     }
 
-    drawCta(w / 2, curY + gap * 2 + ctaH / 2);
+    // CTA: center within text zone
+    const ctaCx = squareHasSideMargin ? textX_sq + Math.min(ctaW, maxTW) / 2 : w / 2;
+    drawCta(ctaCx, curY + gap * 2 + ctaH / 2);
   }
 
   // Subtle border
