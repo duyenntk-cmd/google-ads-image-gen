@@ -2010,18 +2010,23 @@ export default function Home() {
                         {agScreenshots.map((s, i) => {
                           const selected = agSelectedScreenshots.has(i);
                           return (
-                            <div key={i} className="relative cursor-pointer group"
-                              onClick={() => setAgSelectedScreenshots(prev => {
-                                const next = new Set(prev);
-                                if (next.has(i)) next.delete(i); else next.add(i);
-                                return next;
-                              })}>
+                            <div key={i} className="relative group flex-shrink-0">
+                              {/* Click ảnh → lightbox */}
                               <img src={s} alt={`screenshot ${i+1}`}
-                                className={`h-20 w-auto rounded-lg object-cover border-2 shadow-sm transition-all ${selected ? "opacity-100" : "opacity-30 grayscale"}`}
+                                onClick={() => setLightboxFrame(s)}
+                                className={`h-20 w-auto rounded-lg object-cover border-2 shadow-sm transition-all cursor-zoom-in ${selected ? "opacity-100" : "opacity-30 grayscale"}`}
                                 style={{borderColor: selected ? "#7C3AED" : t.border}}/>
-                              <span className={`absolute top-1 left-1 text-[9px] font-bold rounded px-1 ${selected ? "bg-violet-600 text-white" : "bg-black/60 text-white"}`}>#{i+1}</span>
-                              {selected && <span className="absolute top-1 right-1 text-[10px] bg-violet-600 text-white rounded-full w-4 h-4 flex items-center justify-center">✓</span>}
-                              {!selected && <span className="absolute inset-0 flex items-center justify-center text-xs text-white font-bold opacity-0 group-hover:opacity-100 transition-all">Bỏ qua</span>}
+                              <span className={`absolute top-1 left-1 text-[9px] font-bold rounded px-1 pointer-events-none ${selected ? "bg-violet-600 text-white" : "bg-black/60 text-white"}`}>#{i+1}</span>
+                              {/* Nút toggle chọn/bỏ */}
+                              <button
+                                onClick={() => setAgSelectedScreenshots(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(i)) next.delete(i); else next.add(i);
+                                  return next;
+                                })}
+                                className={`absolute bottom-1 right-1 text-[9px] font-bold rounded px-1 py-0.5 transition-all ${selected ? "bg-violet-600 text-white opacity-0 group-hover:opacity-100" : "bg-red-500 text-white opacity-100"}`}>
+                                {selected ? "✕ bỏ" : "+ chọn"}
+                              </button>
                             </div>
                           );
                         })}
