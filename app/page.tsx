@@ -287,7 +287,7 @@ export default function Home() {
   const agLangRef = useRef<HTMLDivElement>(null);
   const [agError, setAgError] = useState("");
   const [agBrief, setAgBrief] = useState<Brief|null>(null);
-  const [agScreenshot, setAgScreenshot] = useState<string|null>(null);
+  const [agScreenshots, setAgScreenshots] = useState<string[]>([]);
   const [agIcon, setAgIcon] = useState<string|null>(null);
   interface AgAppMeta { name: string; category: string; rating: number; ratingCount: number; platform: string; screenshotCount: number; }
   const [agAppMeta, setAgAppMeta] = useState<AgAppMeta|null>(null);
@@ -382,7 +382,7 @@ export default function Home() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       setAgBrief(data.brief);
-      setAgScreenshot(data.screenshotBase64 || null);
+      setAgScreenshots(data.screenshotsBase64 || (data.screenshotBase64 ? [data.screenshotBase64] : []));
       setAgIcon(data.iconBase64 || null);
       setAgAppMeta(data.appMeta);
       setAgStep("brief");
@@ -393,7 +393,7 @@ export default function Home() {
     if (!agBrief) return;
     setAgStep("generating"); setAgError("");
     try {
-      const generated = await generateAllBanners(agBrief, agScreenshot || null, undefined, agIcon || null);
+      const generated = await generateAllBanners(agBrief, agScreenshots[0] || null, agScreenshots.length > 0 ? agScreenshots : undefined, agIcon || null);
       setAgPreviews(generated);
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
@@ -415,7 +415,7 @@ export default function Home() {
 
   const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
   const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
-  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshot(null); setAgError(""); };
+  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgError(""); };
 
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
@@ -1952,7 +1952,7 @@ export default function Home() {
                       <div className="font-bold text-sm" style={{color: t.text}}>{agAppMeta.name}</div>
                       <div className="text-xs mt-0.5" style={{color: t.textMuted}}>{agAppMeta.category} · {agAppMeta.platform}</div>
                       {agAppMeta.rating > 0 && <div className="text-xs mt-0.5" style={{color: t.textMuted}}>⭐ {agAppMeta.rating.toFixed(1)} ({agAppMeta.ratingCount?.toLocaleString()} ratings)</div>}
-                      {agScreenshot && <div className="text-xs mt-0.5 text-emerald-500">✓ Screenshot tải thành công</div>}
+                      {agScreenshots.length > 0 && <div className="text-xs mt-0.5 text-emerald-500">✓ {agScreenshots.length} screenshot đã tải — mỗi banner dùng 1 ảnh khác nhau</div>}
                     </div>
                   </div>
                 )}
@@ -1985,11 +1985,18 @@ export default function Home() {
                       </div>
                     ))}
                   </div>
-                  {/* Screenshot preview */}
-                  {agScreenshot && (
+                  {/* Screenshots preview */}
+                  {agScreenshots.length > 0 && (
                     <div>
-                      <div className="text-xs mb-1.5" style={{color: t.textMuted}}>Background (screenshot app)</div>
-                      <img src={agScreenshot} alt="" className="h-24 rounded-xl object-cover border" style={{borderColor: t.border}}/>
+                      <div className="text-xs mb-2 font-medium" style={{color: t.textMuted}}>📸 {agScreenshots.length} screenshot sẽ được dùng làm background</div>
+                      <div className="flex gap-2 flex-wrap">
+                        {agScreenshots.map((s, i) => (
+                          <div key={i} className="relative">
+                            <img src={s} alt={`screenshot ${i+1}`} className="h-20 w-auto rounded-lg object-cover border shadow-sm" style={{borderColor: t.border}}/>
+                            <span className="absolute top-1 left-1 text-[9px] font-bold bg-black/60 text-white rounded px-1">#{i+1}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

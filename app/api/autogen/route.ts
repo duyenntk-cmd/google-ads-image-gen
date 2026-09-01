@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 
-export const maxDuration = 45;
+export const maxDuration = 60;
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -9,7 +9,10 @@ async function fetchImageAsBase64(url: string): Promise<string | null> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
+    });
     clearTimeout(timer);
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
@@ -29,12 +32,17 @@ async function fetchIosData(id: string) {
   const data = await res.json();
   const app = data.results?.[0];
   if (!app) return null;
+  // Get all screenshot URLs (phone screenshots, up to 5)
+  const allScreenshots: string[] = [
+    ...(app.screenshotUrls || []),
+    ...(app.ipadScreenshotUrls || []),
+  ].slice(0, 5);
   return {
     name: app.trackName as string,
     description: ((app.description as string) || "").slice(0, 500),
     category: (app.primaryGenreName as string) || "",
     iconUrl: (app.artworkUrl512 || app.artworkUrl100 || "") as string,
-    screenshotUrls: (app.screenshotUrls || []) as string[],
+    screenshotUrls: allScreenshots,
     rating: (app.averageUserRating || 0) as number,
     ratingCount: (app.userRatingCount || 0) as number,
     platform: "iOS",
@@ -44,26 +52,53 @@ async function fetchIosData(id: string) {
 async function fetchAndroidData(pkg: string) {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), 12000);
     const res = await fetch(
-      `https://play.google.com/store/apps/details?id=${pkg}&hl=en`,
+      `https://play.google.com/store/apps/details?id=${pkg}&hl=en&gl=US`,
       {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36" },
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
         signal: controller.signal,
       }
     );
     clearTimeout(timer);
     const html = res.ok ? await res.text() : "";
+
     const titleMatch = html.match(/<title>([^<]+) - Apps on Google Play<\/title>/);
     const ogMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
-    const iconMatch = html.match(/src="(https:\/\/play-lh\.googleusercontent\.com\/[^"]+)" [^>]*itemprop="image"/);
     const name = titleMatch?.[1]?.trim() || ogMatch?.[1]?.trim() || pkg.split(".").pop()?.replace(/_/g, " ") || pkg;
+
+    // Extract icon URL
+    const iconMatch = html.match(/src="(https:\/\/play-lh\.googleusercontent\.com\/[^"=]+)" [^>]*itemprop="image"/);
+    const iconUrl = iconMatch?.[1] || "";
+
+    // Extract screenshot URLs — Play Store embeds them as play-lh.googleusercontent.com images
+    const screenshotMatches = [...html.matchAll(/https:\/\/play-lh\.googleusercontent\.com\/[A-Za-z0-9_\-]+=w\d+/g)];
+    // Filter unique, skip icon-sized, take up to 5
+    const seen = new Set<string>();
+    const screenshotUrls: string[] = [];
+    for (const m of screenshotMatches) {
+      const base = m[0].split("=")[0];
+      if (!seen.has(base) && base !== iconUrl?.split("=")?.[0]) {
+        seen.add(base);
+        // Force high resolution
+        screenshotUrls.push(`${base}=w1080`);
+        if (screenshotUrls.length >= 5) break;
+      }
+    }
+
+    // Try description from og:description
+    const descMatch = html.match(/<meta name="description" content="([^"]+)"/);
+    const description = (descMatch?.[1] || "").slice(0, 500);
+
     return {
       name,
-      description: "",
+      description,
       category: "",
-      iconUrl: iconMatch?.[1] || "",
-      screenshotUrls: [] as string[],
+      iconUrl,
+      screenshotUrls,
       rating: 0,
       ratingCount: 0,
       platform: "Android",
@@ -101,18 +136,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Không thể lấy thông tin app. Kiểm tra lại URL App Store hoặc Play Store." }, { status: 400 });
     }
 
-    // Fetch screenshot + icon in parallel
-    const [screenshotB64, iconB64] = await Promise.all([
-      appMeta.screenshotUrls?.[0] ? fetchImageAsBase64(appMeta.screenshotUrls[0]) : Promise.resolve(null),
+    // Fetch all screenshots + icon in parallel (up to 5 screenshots)
+    const screenshotUrls = appMeta.screenshotUrls.slice(0, 5);
+    const [screenshotsResults, iconB64] = await Promise.all([
+      Promise.all(screenshotUrls.map(u => fetchImageAsBase64(u))),
       appMeta.iconUrl ? fetchImageAsBase64(appMeta.iconUrl) : Promise.resolve(null),
     ]);
+    const screenshotsB64 = screenshotsResults.filter((s): s is string => s !== null);
 
     const marketCtx = country && country !== "Global" ? `Target market: ${country}.` : "Global market.";
     const kwCtx = keywords?.trim() ? `Key selling points / keywords: ${keywords}` : "";
     const ratingCtx = appMeta.rating ? `App rating: ${appMeta.rating.toFixed(1)}/5 (${appMeta.ratingCount.toLocaleString()} ratings).` : "";
     const langOut = language || "English";
 
-    // Build prompt text
+    // Build image blocks for Claude — send all screenshots for richer analysis
+    const userContent: Anthropic.ContentBlockParam[] = [];
+    for (const s of screenshotsB64) {
+      const rawB64 = s.split(",")[1] || s;
+      const mtype: "image/jpeg" | "image/png" = s.includes("image/png") ? "image/png" : "image/jpeg";
+      userContent.push({ type: "image", source: { type: "base64", media_type: mtype, data: rawB64 } });
+    }
+
     const promptText = `You are a Google Ads creative director for mobile apps.
 
 App: ${appMeta.name}
@@ -123,37 +167,33 @@ ${kwCtx}
 Description: ${appMeta.description}
 ${marketCtx}
 Language for ad copy: ${langOut}
-${screenshotB64 ? "An app screenshot was provided above — analyze its colors and visual style." : "No screenshot available."}
+${screenshotsB64.length > 0 ? `${screenshotsB64.length} app screenshot(s) provided above. Analyze them for dominant colors, visual style, mood, and which screenshot would make the best ad background (most visually striking, clearest subject, not cluttered).` : "No screenshots available."}
 
-Generate a complete Google Ads creative brief. Return ONLY valid JSON:
+Generate a complete Google Ads creative brief. Return ONLY valid JSON, no markdown:
 {
   "app_name": "${appMeta.name}",
   "headline": "punchy headline MAX 30 chars in ${langOut}",
   "subheadline": "supporting line MAX 50 chars in ${langOut}",
   "cta_text": "CTA MAX 12 chars in ${langOut}",
-  "primary_color": "#hexcode",
+  "primary_color": "#hexcode — dominant background/brand color from screenshots",
   "secondary_color": "#hexcode",
-  "accent_color": "#hexcode",
-  "background_style": "dark",
-  "mood": "bold",
-  "best_frame_index": 0,
+  "accent_color": "#hexcode — high-contrast CTA color",
+  "background_style": "dark|light|gradient",
+  "mood": "bold|minimal|professional|playful|vibrant",
+  "layout_suggestion": "lifestyle|product|minimal|bold",
+  "best_frame_index": <0-based index of best screenshot for ads, 0 if unsure>,
+  "subject_position": "top|center|bottom|left|right|top-left|top-right|bottom-left|bottom-right",
+  "text_zone": "bottom|top|left|right",
   "niche": "${niche || "photo"}",
   "app_store_url": "${appMeta.platform === "iOS" ? url : ""}",
   "play_store_url": "${appMeta.platform === "Android" ? url : ""}"
 }`;
 
-    // Build messages — include screenshot if available
-    const userContent: Anthropic.ContentBlockParam[] = [];
-    if (screenshotB64) {
-      const rawB64 = screenshotB64.split(",")[1] || screenshotB64;
-      const mtype: "image/jpeg" | "image/png" = screenshotB64.includes("image/png") ? "image/png" : "image/jpeg";
-      userContent.push({ type: "image", source: { type: "base64", media_type: mtype, data: rawB64 } });
-    }
     userContent.push({ type: "text", text: promptText });
 
     const response = await client.messages.create({
       model: "claude-sonnet-4-5",
-      max_tokens: 600,
+      max_tokens: 700,
       messages: [{ role: "user", content: userContent }],
     });
 
@@ -162,11 +202,16 @@ Generate a complete Google Ads creative brief. Return ONLY valid JSON:
     if (!jsonMatch) throw new Error("Claude did not return valid JSON");
 
     const brief = JSON.parse(jsonMatch[0]);
+    // Enforce char limits
+    if (brief.headline) brief.headline = brief.headline.slice(0, 30);
+    if (brief.subheadline) brief.subheadline = brief.subheadline.slice(0, 50);
+    if (brief.cta_text) brief.cta_text = brief.cta_text.slice(0, 12);
 
     return NextResponse.json({
       success: true,
       brief,
-      screenshotBase64: screenshotB64 || null,
+      screenshotsBase64: screenshotsB64,       // array of all screenshots
+      screenshotBase64: screenshotsB64[0] || null, // backward compat
       iconBase64: iconB64 || null,
       appMeta: {
         name: appMeta.name,
@@ -174,7 +219,7 @@ Generate a complete Google Ads creative brief. Return ONLY valid JSON:
         rating: appMeta.rating,
         ratingCount: appMeta.ratingCount,
         platform: appMeta.platform,
-        screenshotCount: appMeta.screenshotUrls?.length || 0,
+        screenshotCount: screenshotsB64.length,
       },
     });
   } catch (err) {
