@@ -2010,23 +2010,27 @@ export default function Home() {
                         {agScreenshots.map((s, i) => {
                           const selected = agSelectedScreenshots.has(i);
                           return (
-                            <div key={i} className="relative group flex-shrink-0">
-                              {/* Click ảnh → lightbox */}
+                            <div key={i} className="relative flex-shrink-0 cursor-pointer"
+                              onClick={() => setAgSelectedScreenshots(prev => {
+                                const next = new Set(prev);
+                                if (next.has(i)) next.delete(i); else next.add(i);
+                                return next;
+                              })}>
+                              {/* Ảnh — click để toggle chọn, click icon zoom để xem to */}
                               <img src={s} alt={`screenshot ${i+1}`}
-                                onClick={() => setLightboxFrame(s)}
-                                className={`h-20 w-auto rounded-lg object-cover border-2 shadow-sm transition-all cursor-zoom-in ${selected ? "opacity-100" : "opacity-30 grayscale"}`}
+                                className={`h-20 w-auto rounded-lg object-cover border-2 shadow-sm transition-all ${selected ? "opacity-100" : "opacity-40 grayscale"}`}
                                 style={{borderColor: selected ? "#7C3AED" : t.border}}/>
+                              {/* Label số thứ tự */}
                               <span className={`absolute top-1 left-1 text-[9px] font-bold rounded px-1 pointer-events-none ${selected ? "bg-violet-600 text-white" : "bg-black/60 text-white"}`}>#{i+1}</span>
-                              {/* Nút toggle chọn/bỏ */}
+                              {/* Checkbox tick — luôn hiển thị */}
+                              <span className={`absolute bottom-1 right-1 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold shadow transition-all pointer-events-none ${selected ? "bg-violet-600 text-white" : "bg-black/40 text-white/60 border border-white/40"}`}>
+                                {selected ? "✓" : ""}
+                              </span>
+                              {/* Nút zoom */}
                               <button
-                                onClick={() => setAgSelectedScreenshots(prev => {
-                                  const next = new Set(prev);
-                                  if (next.has(i)) next.delete(i); else next.add(i);
-                                  return next;
-                                })}
-                                className={`absolute bottom-1 right-1 text-[9px] font-bold rounded px-1 py-0.5 transition-all ${selected ? "bg-violet-600 text-white opacity-0 group-hover:opacity-100" : "bg-red-500 text-white opacity-100"}`}>
-                                {selected ? "✕ bỏ" : "+ chọn"}
-                              </button>
+                                onClick={e => { e.stopPropagation(); setLightboxFrame(s); }}
+                                className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/50 text-white text-[9px] flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity"
+                                title="Xem to">🔍</button>
                             </div>
                           );
                         })}
