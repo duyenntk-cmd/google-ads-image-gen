@@ -32,11 +32,8 @@ async function fetchIosData(id: string) {
   const data = await res.json();
   const app = data.results?.[0];
   if (!app) return null;
-  // Get all screenshot URLs (phone screenshots, up to 5)
-  const allScreenshots: string[] = [
-    ...(app.screenshotUrls || []),
-    ...(app.ipadScreenshotUrls || []),
-  ].slice(0, 5);
+  // Phone screenshots only — ipadScreenshotUrls often includes ESRB/rating badges
+  const allScreenshots: string[] = (app.screenshotUrls || []).slice(0, 6);
   return {
     name: app.trackName as string,
     description: ((app.description as string) || "").slice(0, 500),
@@ -137,12 +134,16 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch all screenshots + icon in parallel (up to 5 screenshots)
-    const screenshotUrls = appMeta.screenshotUrls.slice(0, 5);
+    const screenshotUrls = appMeta.screenshotUrls.slice(0, 6);
     const [screenshotsResults, iconB64] = await Promise.all([
       Promise.all(screenshotUrls.map(u => fetchImageAsBase64(u))),
       appMeta.iconUrl ? fetchImageAsBase64(appMeta.iconUrl) : Promise.resolve(null),
     ]);
-    const screenshotsB64 = screenshotsResults.filter((s): s is string => s !== null);
+    // Filter out null and tiny images (badges/logos are usually < 15KB = ~20000 base64 chars)
+    const MIN_B64_LEN = 20000;
+    const screenshotsB64 = screenshotsResults.filter(
+      (s): s is string => s !== null && s.length > MIN_B64_LEN
+    ).slice(0, 5);
 
     const marketCtx = country && country !== "Global" ? `Target market: ${country}.` : "Global market.";
     const kwCtx = keywords?.trim() ? `Key selling points / keywords: ${keywords}` : "";
