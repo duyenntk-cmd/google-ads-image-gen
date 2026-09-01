@@ -273,7 +273,10 @@ export default function Home() {
 
   // Auto Gen from URL state
   type AutoGenStep = "input" | "analyzing" | "brief" | "generating" | "preview";
+  type GenEngine = "canvas" | "ideogram";
   const [agStep, setAgStep] = useState<AutoGenStep>("input");
+  const [agEngine, setAgEngine] = useState<GenEngine>("canvas");
+  const [agIdeogramImages, setAgIdeogramImages] = useState<{landscape:string;square:string;portrait:string}|null>(null);
   const [agUrl, setAgUrl] = useState("");
   const [agCountry, setAgCountry] = useState("Global");
   const [agLang, setAgLang] = useState("English");
@@ -392,8 +395,25 @@ export default function Home() {
     if (!agBrief) return;
     setAgStep("generating"); setAgError("");
     try {
+      if (agEngine === "ideogram") {
+        // Call Ideogram API
+        const res = await fetch("/api/ideogram", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brief: agBrief }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        setAgIdeogramImages(data.images);
+        setAgPreviews([]); // clear canvas previews
+        setAgStep("preview");
+        return;
+      }
+
+      // Canvas generation
       const generated = await generateAllBanners(agBrief, agScreenshots[0] || null, agScreenshots.length > 0 ? agScreenshots : undefined, agIcon || null);
       setAgPreviews(generated);
+      setAgIdeogramImages(null);
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
       const top5 = zip.folder("top5")!;
@@ -414,7 +434,7 @@ export default function Home() {
 
   const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
   const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
-  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgError(""); };
+  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgIdeogramImages(null); setAgError(""); };
 
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
@@ -1992,10 +2012,36 @@ export default function Home() {
 
                 {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
 
+                {/* Engine selector */}
+                <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                  <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>⚙️ Chọn engine tạo ảnh</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={()=>setAgEngine("canvas")}
+                      className={`flex flex-col items-start gap-1 p-3 rounded-xl border-2 transition-all text-left ${agEngine==="canvas"?"border-violet-500 bg-violet-500/10":"border-transparent"}`}
+                      style={agEngine!=="canvas"?{borderColor:t.border}:{}}>
+                      <div className="text-base">🎨</div>
+                      <div className="text-xs font-semibold" style={{color:t.text}}>Canvas</div>
+                      <div className="text-[10px]" style={{color:t.textMuted}}>20 banner · miễn phí · dùng screenshot thật</div>
+                    </button>
+                    <button onClick={()=>setAgEngine("ideogram")}
+                      className={`flex flex-col items-start gap-1 p-3 rounded-xl border-2 transition-all text-left ${agEngine==="ideogram"?"border-violet-500 bg-violet-500/10":"border-transparent"}`}
+                      style={agEngine!=="ideogram"?{borderColor:t.border}:{}}>
+                      <div className="text-base">✨</div>
+                      <div className="text-xs font-semibold" style={{color:t.text}}>Ideogram v2 <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-500 ml-1">AI</span></div>
+                      <div className="text-[10px]" style={{color:t.textMuted}}>3 ảnh · ~$0.24 · AI tạo hoàn toàn</div>
+                    </button>
+                  </div>
+                  {agEngine==="ideogram" && (
+                    <div className="text-[10px] text-amber-400/80 bg-amber-500/10 rounded-lg px-3 py-2">
+                      ⚠️ Cần thêm <code className="bg-black/20 px-1 rounded">IDEOGRAM_API_KEY</code> vào Vercel env trước khi dùng
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex gap-3">
                   <button onClick={resetAg} className="px-4 py-3 rounded-xl border text-sm transition-colors" style={{borderColor: t.border, color: t.textMuted}}>← Nhập lại</button>
                   <button onClick={handleAgGenerate} className="flex-1 py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 transition-all text-white">
-                    Gen {AD_SIZES.length} banner PNG →
+                    {agEngine==="ideogram" ? "✨ Gen với Ideogram v2 (3 ảnh) →" : `🎨 Gen ${AD_SIZES.length} banner PNG →`}
                   </button>
                 </div>
               </div>
@@ -2004,8 +2050,11 @@ export default function Home() {
             {/* STEP 4: Generating */}
             {agStep === "generating" && (
               <div className="text-center py-20 space-y-6">
-                <div className="text-5xl animate-pulse">🎨</div>
-                <div className="text-xl font-bold" style={{color: t.text}}>Đang tạo {AD_SIZES.length} banner...</div>
+                <div className="text-5xl animate-pulse">{agEngine==="ideogram"?"✨":"🎨"}</div>
+                <div className="text-xl font-bold" style={{color: t.text}}>
+                  {agEngine==="ideogram" ? "Ideogram v2 đang tạo ảnh AI..." : `Đang tạo ${AD_SIZES.length} banner...`}
+                </div>
+                {agEngine==="ideogram" && <div className="text-sm" style={{color:t.textMuted}}>Tạo 3 ảnh (landscape · square · portrait) — khoảng 15–30 giây</div>}
                 <div className="w-48 h-1 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
                   <div className="h-full bg-violet-500 animate-pulse w-2/3"/>
                 </div>
@@ -2017,50 +2066,84 @@ export default function Home() {
               <div className="space-y-5">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-lg font-bold" style={{color: t.text}}>✅ {agPreviews.length} banner đã sẵn sàng</div>
+                    <div className="text-lg font-bold" style={{color: t.text}}>
+                      {agIdeogramImages ? "✨ Ideogram v2 — 3 ảnh AI" : `✅ ${agPreviews.length} banner canvas`}
+                    </div>
                     <div className="text-xs mt-0.5" style={{color: t.textMuted}}>{agBrief?.app_name} · {agCountry}</div>
                   </div>
                   <div className="flex gap-2">
                     <button onClick={resetAg} className="text-xs px-3 py-2 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Gen lại</button>
-                    <button onClick={handleAgDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all">
-                      ⬇ Tải tất cả (.zip)
-                    </button>
+                    {!agIdeogramImages && (
+                      <button onClick={handleAgDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all">
+                        ⬇ Tải tất cả (.zip)
+                      </button>
+                    )}
                   </div>
                 </div>
-                <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
-                  {([["top5","⭐ Top 5"],["all",`Tất cả (${agPreviews.length})`]] as const).map(([tab,label])=>(
-                    <button key={tab} onClick={() => setAgActiveTab(tab)}
-                      className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
-                      style={agActiveTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {agDisplayed.map(p => {
-                    const scale = Math.min(1, 340/Math.max(p.width, p.height));
-                    return (
-                      <div key={p.key} onClick={() => setSelectedPreview(p)}
-                        className="group rounded-2xl p-4 cursor-pointer transition-all border"
-                        style={cardStyle}
-                        onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
-                        <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
-                          <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
-                            <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
+
+                {/* Ideogram preview */}
+                {agIdeogramImages ? (
+                  <div className="space-y-4">
+                    <div className="text-xs p-3 rounded-xl bg-violet-500/10 border border-violet-500/20" style={{color:t.textMuted}}>
+                      💡 Ideogram tạo 3 ảnh theo 3 tỉ lệ chuẩn Google UAC. Tải từng ảnh và dùng cho đúng loại banner.
+                    </div>
+                    {([
+                      { key: "landscape", label: "Landscape 16:9", sub: "Dùng cho 1200×628", w: 340, h: 191 },
+                      { key: "square",    label: "Square 1:1",     sub: "Dùng cho 1200×1200", w: 240, h: 240 },
+                      { key: "portrait",  label: "Portrait 9:16",  sub: "Dùng cho 1080×1920", w: 135, h: 240 },
+                    ] as const).map(({ key, label, sub, w, h }) => {
+                      const src = agIdeogramImages[key];
+                      return (
+                        <div key={key} className="flex items-center gap-4 p-4 border rounded-2xl" style={cardStyle}>
+                          <img src={src} alt={label} style={{width:w,height:h}} className="rounded-xl object-cover flex-shrink-0 shadow-lg"/>
+                          <div className="flex-1 min-w-0 space-y-2">
+                            <div className="font-semibold text-sm" style={{color:t.text}}>{label}</div>
+                            <div className="text-xs" style={{color:t.textMuted}}>{sub}</div>
+                            <button onClick={()=>{ const a=document.createElement("a"); a.href=src; a.download=`ideogram-${key}-${agBrief?.app_name||"banner"}.jpg`; a.click(); }}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white font-medium">⬇ Tải {label}</button>
                           </div>
-                          <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
-                            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
-                            style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
+                      {([["top5","⭐ Top 5"],["all",`Tất cả (${agPreviews.length})`]] as const).map(([tab,label])=>(
+                        <button key={tab} onClick={() => setAgActiveTab(tab)}
+                          className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
+                          style={agActiveTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      {agDisplayed.map(p => {
+                        const scale = Math.min(1, 340/Math.max(p.width, p.height));
+                        return (
+                          <div key={p.key} onClick={() => setSelectedPreview(p)}
+                            className="group rounded-2xl p-4 cursor-pointer transition-all border"
+                            style={cardStyle}
+                            onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
+                            <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
+                              <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
+                                <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
+                              </div>
+                              <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
+                                className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
+                                style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
