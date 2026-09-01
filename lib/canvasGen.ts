@@ -312,6 +312,22 @@ async function renderBanner(
 
   ctx.textBaseline = "middle";
 
+  // ── IMAGE BOUNDS (after contain-scale) ──────────────────────────────────────
+  // Used to place text in the unoccupied blurred margin so it never overlaps image
+  let imgBoundsX0 = 0, imgBoundsX1 = w, imgBoundsY0 = 0, imgBoundsY1 = h;
+  if (bgImg) {
+    const cs = Math.min(w / bgImg.width, h / bgImg.height);
+    const imgW = bgImg.width * cs, imgH = bgImg.height * cs;
+    imgBoundsX0 = (w - imgW) / 2;
+    imgBoundsX1 = imgBoundsX0 + imgW;
+    imgBoundsY0 = (h - imgH) / 2;
+    imgBoundsY1 = imgBoundsY0 + imgH;
+  }
+  const isPortraitImg = bgImg && bgImg.height > bgImg.width * 1.2;
+  const leftMarginW = imgBoundsX0 - pad * 2;   // usable left blur zone width
+  const rightMarginW = w - imgBoundsX1 - pad * 2; // usable right blur zone width
+  const bottomMarginH = h - imgBoundsY1 - pad; // usable bottom blur zone height
+
   // ── TINY ────────────────────────────────────────────────────────────────────
   if (isTiny) {
     let tx = pad;
@@ -335,14 +351,42 @@ async function renderBanner(
 
   // ── WIDE ────────────────────────────────────────────────────────────────────
   } else if (isWide) {
-    const textX = Math.round(w * 0.5);
-    const textMaxW = w - textX - pad * 1.5;
+    // Smart text placement: use the blurred margin (left or right) when image is portrait
+    // so text never overlaps the actual sharp image
+    const useLeftMargin = isPortraitImg && leftMarginW > w * 0.22;
+    const useRightMargin = isPortraitImg && !useLeftMargin && rightMarginW > w * 0.22;
+    let textX: number, textMaxW: number;
+    if (useLeftMargin) {
+      textX = pad;
+      textMaxW = leftMarginW;
+      // Stronger scrim on left margin so text is readable
+      const [pr, pg, pb] = hexToRgb(primary);
+      const marginScrim = ctx.createLinearGradient(0, 0, imgBoundsX0 + pad * 2, 0);
+      marginScrim.addColorStop(0, `rgba(${pr},${pg},${pb},0.88)`);
+      marginScrim.addColorStop(1, `rgba(${pr},${pg},${pb},0)`);
+      ctx.fillStyle = marginScrim;
+      ctx.fillRect(0, 0, imgBoundsX0 + pad * 2, h);
+    } else if (useRightMargin) {
+      textX = Math.round(imgBoundsX1) + pad;
+      textMaxW = w - textX - pad;
+      const [pr, pg, pb] = hexToRgb(primary);
+      const marginScrim = ctx.createLinearGradient(imgBoundsX1 - pad * 2, 0, w, 0);
+      marginScrim.addColorStop(0, `rgba(${pr},${pg},${pb},0)`);
+      marginScrim.addColorStop(1, `rgba(${pr},${pg},${pb},0.88)`);
+      ctx.fillStyle = marginScrim;
+      ctx.fillRect(imgBoundsX1 - pad * 2, 0, w, h);
+    } else {
+      textX = Math.round(w * 0.5);
+      textMaxW = w - textX - pad * 1.5;
+    }
+
     const midY = h / 2;
 
-    // Left side: icon or app tag
+    // Icon or app tag on the opposite side from text
+    const iconSide = useLeftMargin ? imgBoundsX1 + pad : pad;
     if (iconImg) {
-      drawIcon(pad, h / 2, iconSize);
-    } else if (appName) {
+      drawIcon(iconSide, h / 2, iconSize);
+    } else if (appName && !useLeftMargin) {
       drawAppBadge(pad, pad + nameSize);
     }
 
@@ -354,9 +398,8 @@ async function renderBanner(
     const startY = midY - totalH / 2;
 
     // Headline
-    const hlColor = layout === "minimal" ? "white" : "white";
     ctx.font = `800 ${hlSize}px "${fontFamily}", Arial, sans-serif`;
-    ctx.fillStyle = hlColor;
+    ctx.fillStyle = "white";
     ctx.shadowColor = "rgba(0,0,0,0.8)"; ctx.shadowBlur = 10;
     hlLines.forEach((l, i) => ctx.fillText(l, textX, startY + hlSize * 0.6 + i * hlSize * 1.2));
     clrShadow();
@@ -386,7 +429,23 @@ async function renderBanner(
     const subBlockH = showSub ? subSize * 1.5 : 0;
     const totalH = hlBlockH + (showSub ? gap + subBlockH : 0) + gap * 2 + ctaH;
     const bottomPad = Math.round(h * 0.07);
-    const startY = h - bottomPad - totalH;
+
+    // If there's a usable bottom margin (image doesn't fill to bottom), use it
+    // Otherwise keep text at bottom with extra scrim
+    const hasBottomMargin = bottomMarginH > totalH + pad;
+    if (hasBottomMargin && bgImg) {
+      // Draw extra scrim below image for readability
+      const [pr, pg, pb] = hexToRgb(primary);
+      const scrim = ctx.createLinearGradient(0, imgBoundsY1 - pad * 2, 0, h);
+      scrim.addColorStop(0, `rgba(${pr},${pg},${pb},0)`);
+      scrim.addColorStop(1, `rgba(${pr},${pg},${pb},0.92)`);
+      ctx.fillStyle = scrim;
+      ctx.fillRect(0, imgBoundsY1 - pad * 2, w, h - imgBoundsY1 + pad * 2);
+    }
+
+    const startY = hasBottomMargin
+      ? Math.round(imgBoundsY1) + pad     // text starts just below the image
+      : h - bottomPad - totalH;           // text starts from bottom
 
     if (layout === "minimal" || layout === "bold") {
       // Top: icon left + app name right
