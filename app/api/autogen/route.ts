@@ -5,7 +5,29 @@ export const maxDuration = 60;
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-async function fetchImageAsBase64(url: string): Promise<string | null> {
+/** Read image dimensions from raw bytes (PNG/JPEG header only) */
+function getImageDimensions(buf: ArrayBuffer): { w: number; h: number } | null {
+  const v = new DataView(buf);
+  // PNG: signature 8 bytes, then IHDR chunk: 4 len + 4 "IHDR" + 4w + 4h
+  if (v.byteLength > 24 && v.getUint32(0) === 0x89504e47) {
+    return { w: v.getUint32(16), h: v.getUint32(20) };
+  }
+  // JPEG: scan for SOF0/SOF2 marker (FF C0 / FF C2)
+  if (v.byteLength > 4 && v.getUint16(0) === 0xFFD8) {
+    let off = 2;
+    while (off + 4 < v.byteLength) {
+      const marker = v.getUint16(off);
+      const len = v.getUint16(off + 2);
+      if ((marker & 0xFFF0) === 0xFFC0 && marker !== 0xFFC4 && marker !== 0xFFC8) {
+        if (off + 9 < v.byteLength) return { h: v.getUint16(off + 5), w: v.getUint16(off + 7) };
+      }
+      off += 2 + len;
+    }
+  }
+  return null;
+}
+
+async function fetchImageAsBase64(url: string, rejectSquare = false): Promise<string | null> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
@@ -16,6 +38,16 @@ async function fetchImageAsBase64(url: string): Promise<string | null> {
     clearTimeout(timer);
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
+
+    // Reject square/near-square images (icons) when requested
+    if (rejectSquare) {
+      const dim = getImageDimensions(buf);
+      if (dim) {
+        const ratio = Math.max(dim.w, dim.h) / Math.min(dim.w, dim.h);
+        if (ratio < 1.3) return null; // square or near-square → likely icon/badge
+      }
+    }
+
     const bytes = new Uint8Array(buf);
     let binary = "";
     for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
@@ -76,7 +108,6 @@ const DEFAULT_LOCALE = { itunes: "us", hl: "en", gl: "US" };
 
 async function fetchIosData(id: string, country = "Global") {
   const locale = COUNTRY_LOCALE[country] || DEFAULT_LOCALE;
-  // Try localized first, fallback to US if no results
   const tryFetch = async (cc: string) => {
     const res = await fetch(`https://itunes.apple.com/lookup?id=${id}&country=${cc}&entity=software`);
     const data = await res.json();
@@ -85,8 +116,23 @@ async function fetchIosData(id: string, country = "Global") {
   let app = await tryFetch(locale.itunes);
   if (!app && locale.itunes !== "us") app = await tryFetch("us");
   if (!app) return null;
+
   // Phone screenshots only — ipadScreenshotUrls often includes ESRB/rating badges
-  const allScreenshots: string[] = (app.screenshotUrls || []).slice(0, 6);
+  let allScreenshots: string[] = (app.screenshotUrls || []).slice(0, 6);
+
+  // If local market has < 4 screenshots, supplement with US store screenshots
+  if (allScreenshots.length < 4 && locale.itunes !== "us") {
+    const usApp = await tryFetch("us");
+    if (usApp?.screenshotUrls?.length > allScreenshots.length) {
+      // Merge: local first (for language), fill rest from US
+      const usShots: string[] = usApp.screenshotUrls || [];
+      const combined = [...allScreenshots];
+      for (const s of usShots) {
+        if (!combined.includes(s) && combined.length < 6) combined.push(s);
+      }
+      allScreenshots = combined;
+    }
+  }
   return {
     name: app.trackName as string,
     description: ((app.description as string) || "").slice(0, 500),
@@ -192,7 +238,7 @@ export async function POST(req: NextRequest) {
     // Fetch all screenshots + icon in parallel (up to 5 screenshots)
     const screenshotUrls = appMeta.screenshotUrls.slice(0, 6);
     const [screenshotsResults, iconB64] = await Promise.all([
-      Promise.all(screenshotUrls.map(u => fetchImageAsBase64(u))),
+      Promise.all(screenshotUrls.map(u => fetchImageAsBase64(u, true))), // rejectSquare=true
       appMeta.iconUrl ? fetchImageAsBase64(appMeta.iconUrl) : Promise.resolve(null),
     ]);
     // Filter out null and tiny images (badges/logos are usually < 15KB = ~20000 base64 chars)
