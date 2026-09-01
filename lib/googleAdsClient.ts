@@ -34,6 +34,13 @@ export function adsHeaders(accessToken: string, loginCustomerId?: string) {
   return h;
 }
 
+export class NeedsBasicAccessError extends Error {
+  constructor() {
+    super("NEEDS_BASIC_ACCESS");
+    this.name = "NeedsBasicAccessError";
+  }
+}
+
 /** List accessible customers - tries MCC account query first, falls back to listAccessibleCustomers */
 export async function listAccessibleCustomers(accessToken: string): Promise<string[]> {
   const mccId = (process.env.GOOGLE_ADS_MCC_CUSTOMER_ID || "").replace(/-/g, "");
@@ -47,8 +54,11 @@ export async function listAccessibleCustomers(accessToken: string): Promise<stri
       if (results.length > 0) {
         return results.map((r) => String(r.customer_client?.id || "").replace("customers/", "")).filter(Boolean);
       }
-    } catch {
-      // Fall through to listAccessibleCustomers
+    } catch (e) {
+      const msg = String(e);
+      // 404 = developer token in Explorer/Test mode, can't access real production accounts
+      if (msg.includes("404") || msg.includes("Non-JSON")) throw new NeedsBasicAccessError();
+      // Fall through to listAccessibleCustomers for other errors
     }
   }
 
@@ -61,8 +71,9 @@ export async function listAccessibleCustomers(accessToken: string): Promise<stri
     },
   });
   const text = await res.text();
+  if (res.status === 404 || !text.startsWith("{")) throw new NeedsBasicAccessError();
   let data: { resourceNames?: string[]; error?: unknown };
-  try { data = JSON.parse(text); } catch { throw new Error(`Non-JSON (${res.status}): ${text.slice(0, 200)}`); }
+  try { data = JSON.parse(text); } catch { throw new NeedsBasicAccessError(); }
   if (!res.ok) throw new Error(`listAccessibleCustomers ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
   return (data.resourceNames || []).map((r: string) => r.replace("customers/", ""));
 }

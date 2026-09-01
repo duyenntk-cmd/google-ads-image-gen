@@ -310,6 +310,7 @@ export default function Home() {
   const [adsResult, setAdsResult] = useState<{success:boolean;message?:string;error?:string}|null>(null);
   const [adsCampaigns, setAdsCampaigns] = useState<{id:string;name:string;status:string;budgetPerDay:number}[]>([]);
   const [adsAccountsError, setAdsAccountsError] = useState<string|null>(null);
+  const [adsNeedsBasicAccess, setAdsNeedsBasicAccess] = useState(false);
   const [adsAccountsLoading, setAdsAccountsLoading] = useState(false);
 
   const checkAdsConnection = async () => {
@@ -325,12 +326,14 @@ export default function Home() {
   const loadAdsAccounts = async () => {
     setAdsAccountsLoading(true);
     setAdsAccountsError(null);
+    setAdsNeedsBasicAccess(false);
     try {
       const res = await fetch("/api/google-ads/accounts");
       const text = await res.text();
-      let data: {success:boolean;accounts?:{id:string;name:string;currency:string;status:string}[];error?:string};
+      let data: {success:boolean;accounts?:{id:string;name:string;currency:string;status:string}[];error?:string;needs_basic_access?:boolean};
       try { data = JSON.parse(text); } catch { throw new Error(`Server returned HTML (middleware issue). Status: ${res.status}`); }
       if (data.success) setAdsAccounts(data.accounts || []);
+      else if (data.needs_basic_access) setAdsNeedsBasicAccess(true);
       else setAdsAccountsError(data.error || "Unknown error");
     } catch(e) { setAdsAccountsError(String(e)); }
     setAdsAccountsLoading(false);
@@ -2316,7 +2319,30 @@ export default function Home() {
                 {/* Select Account */}
                 <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
                   <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>Chọn tài khoản Google Ads</label>
-                  {adsAccountsError ? (
+                  {adsNeedsBasicAccess ? (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <span className="text-2xl">⏳</span>
+                        <div>
+                          <div className="text-sm font-semibold text-amber-400 mb-1">Đang chờ phê duyệt Basic Access</div>
+                          <div className="text-xs text-amber-300/80 leading-relaxed">
+                            Developer Token hiện ở chế độ <b>Explorer (Test)</b> — không thể truy cập tài khoản Google Ads thật.<br/>
+                            Bạn đã nộp đơn xin <b>Basic Access</b>. Google thường phê duyệt trong <b>3–5 ngày làm việc</b>.
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-amber-300/70 bg-amber-500/10 rounded-lg px-3 py-2 space-y-1">
+                        <div>✅ Đơn đã được gửi đến Google Ads API Center</div>
+                        <div>📧 Bạn sẽ nhận email khi được phê duyệt</div>
+                        <div>🔄 Sau khi được duyệt, nhấn <b>Thử lại</b> để tải tài khoản</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-black font-semibold">🔄 Thử lại</button>
+                        <a href="https://ads.google.com/nav/selectaccount?dst=/aw/apicenter" target="_blank" rel="noreferrer"
+                          className="text-xs px-3 py-1.5 rounded-lg border border-amber-500/50 text-amber-400">Kiểm tra trạng thái →</a>
+                      </div>
+                    </div>
+                  ) : adsAccountsError ? (
                     <div className="space-y-2">
                       <div className="text-xs text-red-400 bg-red-400/10 rounded-lg px-3 py-2 break-all">{adsAccountsError}</div>
                       <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">Thử lại</button>

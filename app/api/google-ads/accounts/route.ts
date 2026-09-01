@@ -1,6 +1,6 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { refreshAccessToken, listAccessibleCustomers, queryCustomer } from "@/lib/googleAdsClient";
+import { refreshAccessToken, listAccessibleCustomers, queryCustomer, NeedsBasicAccessError } from "@/lib/googleAdsClient";
 
 export const maxDuration = 30;
 
@@ -29,6 +29,13 @@ export async function GET(req: NextRequest) {
       customerIds = await listAccessibleCustomers(accessToken);
     } catch (e) {
       console.error("listAccessibleCustomers error:", e);
+      if (e instanceof NeedsBasicAccessError) {
+        return NextResponse.json({
+          success: false,
+          needs_basic_access: true,
+          error: "Developer token đang ở chế độ Explorer (Test). Cần nâng lên Basic Access để truy cập tài khoản thật.",
+        }, { status: 403 });
+      }
       return NextResponse.json({ success: false, error: `listAccessibleCustomers failed: ${String(e)}` }, { status: 500 });
     }
 
