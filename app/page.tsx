@@ -275,7 +275,6 @@ export default function Home() {
   type AutoGenStep = "input" | "analyzing" | "brief" | "generating" | "preview";
   const [agStep, setAgStep] = useState<AutoGenStep>("input");
   const [agUrl, setAgUrl] = useState("");
-  const [agKeywords, setAgKeywords] = useState("");
   const [agCountry, setAgCountry] = useState("Global");
   const [agLang, setAgLang] = useState("English");
   const [agNiche, setAgNiche] = useState<"photo"|"tool"|"office">("tool");
@@ -377,7 +376,7 @@ export default function Home() {
       const res = await fetch("/api/autogen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appUrl: agUrl, keywords: agKeywords, country: agCountry, language: agLang, niche: agNiche }),
+        body: JSON.stringify({ appUrl: agUrl, country: agCountry, language: agLang, niche: agNiche }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -1846,16 +1845,6 @@ export default function Home() {
                     className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
                     style={inputStyle}/>
                   <p className="text-xs mt-1.5" style={{color: t.textMuted}}>AI sẽ tự lấy tên app, mô tả, screenshot và icon từ URL này</p>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
-                    🎯 Keywords / điểm bán hàng
-                  </label>
-                  <input value={agKeywords} onChange={e => setAgKeywords(e.target.value)}
-                    placeholder="VD: AI photo editor, remove background, free filters..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                    style={inputStyle}/>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
