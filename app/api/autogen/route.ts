@@ -39,12 +39,13 @@ async function fetchImageAsBase64(url: string, rejectSquare = false): Promise<st
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
 
-    // Reject square/near-square images (icons) when requested
+    // Reject square/near-square/landscape images (icons, feature graphics) when requested
     if (rejectSquare) {
       const dim = getImageDimensions(buf);
       if (dim) {
-        const ratio = Math.max(dim.w, dim.h) / Math.min(dim.w, dim.h);
-        if (ratio < 1.3) return null; // square or near-square → likely icon/badge
+        if (dim.w >= dim.h) return null; // landscape or square → promotional artwork / icon / badge
+        const ratio = dim.h / dim.w;
+        if (ratio < 1.3) return null; // near-square → likely icon/badge
       }
     }
 
