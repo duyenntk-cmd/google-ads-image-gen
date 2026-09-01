@@ -1349,22 +1349,29 @@ export default function Home() {
               </div>
               <div className="space-y-2">
                 <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={labelStyle}>
-                  Store links <span className="font-normal normal-case" style={{color: t.textMuted}}>(auto-fetch icon)</span>
+                  Store links <span className="font-normal normal-case" style={{color: t.textMuted}}>(tự động lấy icon)</span>
                 </label>
-                <div className="flex gap-1">
+                <div className="relative">
                   <input type="url" placeholder="🍎 App Store URL" value={brief.app_store_url}
                     onChange={e=>{setBrief(p=>({...p,app_store_url:e.target.value})); setIconDataUrlFetched(null);}}
-                    className="flex-1 rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
-                  {brief.app_store_url && <button onClick={()=>handleFetchIcon(brief.app_store_url)} disabled={iconFetching}
-                    className="px-2 py-1.5 rounded-lg text-xs font-medium bg-violet-600 text-white disabled:opacity-50 flex-shrink-0">{iconFetching?"⏳":"Fetch"}</button>}
+                    onBlur={e=>{ if(e.target.value && !iconDataUrlFetched) handleFetchIcon(e.target.value); }}
+                    className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors pr-16" style={inputStyle}/>
+                  {iconFetching
+                    ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs">⏳</span>
+                    : brief.app_store_url && !iconDataUrlFetched && <button onClick={()=>handleFetchIcon(brief.app_store_url)}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded text-xs font-medium bg-violet-600 text-white">Fetch</button>}
                 </div>
-                <div className="flex gap-1">
+                <div className="relative">
                   <input type="url" placeholder="🤖 Google Play URL" value={brief.play_store_url}
                     onChange={e=>{setBrief(p=>({...p,play_store_url:e.target.value})); setIconDataUrlFetched(null);}}
-                    className="flex-1 rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors" style={inputStyle}/>
-                  {brief.play_store_url && <button onClick={()=>handleFetchIcon(brief.play_store_url)} disabled={iconFetching}
-                    className="px-2 py-1.5 rounded-lg text-xs font-medium bg-violet-600 text-white disabled:opacity-50 flex-shrink-0">{iconFetching?"⏳":"Fetch"}</button>}
+                    onBlur={e=>{ if(e.target.value && !iconDataUrlFetched) handleFetchIcon(e.target.value); }}
+                    className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors pr-16" style={inputStyle}/>
+                  {iconFetching
+                    ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs">⏳</span>
+                    : brief.play_store_url && !iconDataUrlFetched && <button onClick={()=>handleFetchIcon(brief.play_store_url)}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded text-xs font-medium bg-violet-600 text-white">Fetch</button>}
                 </div>
+                <div className="text-xs" style={{color:t.textMuted}}>💡 Paste URL → icon tự lấy khi rời ô nhập</div>
               </div>
             </div>
 
