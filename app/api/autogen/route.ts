@@ -120,19 +120,6 @@ async function fetchIosData(id: string, country = "Global") {
   // Phone screenshots only — ipadScreenshotUrls often includes ESRB/rating badges
   let allScreenshots: string[] = (app.screenshotUrls || []).slice(0, 6);
 
-  // If local market has < 4 screenshots, supplement with US store screenshots
-  if (allScreenshots.length < 4 && locale.itunes !== "us") {
-    const usApp = await tryFetch("us");
-    if (usApp?.screenshotUrls?.length > allScreenshots.length) {
-      // Merge: local first (for language), fill rest from US
-      const usShots: string[] = usApp.screenshotUrls || [];
-      const combined = [...allScreenshots];
-      for (const s of usShots) {
-        if (!combined.includes(s) && combined.length < 6) combined.push(s);
-      }
-      allScreenshots = combined;
-    }
-  }
   return {
     name: app.trackName as string,
     description: ((app.description as string) || "").slice(0, 500),
