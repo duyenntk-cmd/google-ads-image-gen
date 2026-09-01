@@ -290,6 +290,7 @@ export default function Home() {
   const [agError, setAgError] = useState("");
   const [agBrief, setAgBrief] = useState<Brief|null>(null);
   const [agScreenshots, setAgScreenshots] = useState<string[]>([]);
+  const [agSelectedScreenshots, setAgSelectedScreenshots] = useState<Set<number>>(new Set());
   const [agIcon, setAgIcon] = useState<string|null>(null);
   interface AgAppMeta { name: string; category: string; rating: number; ratingCount: number; platform: string; screenshotCount: number; }
   const [agAppMeta, setAgAppMeta] = useState<AgAppMeta|null>(null);
@@ -384,7 +385,10 @@ export default function Home() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       setAgBrief(data.brief);
-      setAgScreenshots(data.screenshotsBase64 || (data.screenshotBase64 ? [data.screenshotBase64] : []));
+      const shots = data.screenshotsBase64 || (data.screenshotBase64 ? [data.screenshotBase64] : []);
+      setAgScreenshots(shots);
+      // Select all by default
+      setAgSelectedScreenshots(new Set(shots.map((_: string, i: number) => i)));
       setAgIcon(data.iconBase64 || null);
       setAgAppMeta(data.appMeta);
       setAgStep("brief");
@@ -410,8 +414,9 @@ export default function Home() {
         return;
       }
 
-      // Canvas generation
-      const generated = await generateAllBanners(agBrief, agScreenshots[0] || null, agScreenshots.length > 0 ? agScreenshots : undefined, agIcon || null);
+      // Canvas generation — only use selected screenshots
+      const activeShots = agScreenshots.filter((_, i) => agSelectedScreenshots.has(i));
+      const generated = await generateAllBanners(agBrief, activeShots[0] || null, activeShots.length > 0 ? activeShots : undefined, agIcon || null);
       setAgPreviews(generated);
       setAgIdeogramImages(null);
       const JSZip = (await import("jszip")).default;
@@ -434,7 +439,7 @@ export default function Home() {
 
   const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
   const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
-  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgIdeogramImages(null); setAgError(""); };
+  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgSelectedScreenshots(new Set()); setAgIdeogramImages(null); setAgError(""); };
 
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
@@ -1997,14 +2002,29 @@ export default function Home() {
                   {/* Screenshots preview */}
                   {agScreenshots.length > 0 && (
                     <div>
-                      <div className="text-xs mb-2 font-medium" style={{color: t.textMuted}}>📸 {agScreenshots.length} screenshot sẽ được dùng làm background</div>
+                      <div className="text-xs mb-2 font-medium flex items-center gap-2" style={{color: t.textMuted}}>
+                        📸 Click để bỏ/chọn screenshot làm background
+                        <span className="text-emerald-500 font-semibold">{agSelectedScreenshots.size}/{agScreenshots.length} đã chọn</span>
+                      </div>
                       <div className="flex gap-2 flex-wrap">
-                        {agScreenshots.map((s, i) => (
-                          <div key={i} className="relative">
-                            <img src={s} alt={`screenshot ${i+1}`} className="h-20 w-auto rounded-lg object-cover border shadow-sm" style={{borderColor: t.border}}/>
-                            <span className="absolute top-1 left-1 text-[9px] font-bold bg-black/60 text-white rounded px-1">#{i+1}</span>
-                          </div>
-                        ))}
+                        {agScreenshots.map((s, i) => {
+                          const selected = agSelectedScreenshots.has(i);
+                          return (
+                            <div key={i} className="relative cursor-pointer group"
+                              onClick={() => setAgSelectedScreenshots(prev => {
+                                const next = new Set(prev);
+                                if (next.has(i)) next.delete(i); else next.add(i);
+                                return next;
+                              })}>
+                              <img src={s} alt={`screenshot ${i+1}`}
+                                className={`h-20 w-auto rounded-lg object-cover border-2 shadow-sm transition-all ${selected ? "opacity-100" : "opacity-30 grayscale"}`}
+                                style={{borderColor: selected ? "#7C3AED" : t.border}}/>
+                              <span className={`absolute top-1 left-1 text-[9px] font-bold rounded px-1 ${selected ? "bg-violet-600 text-white" : "bg-black/60 text-white"}`}>#{i+1}</span>
+                              {selected && <span className="absolute top-1 right-1 text-[10px] bg-violet-600 text-white rounded-full w-4 h-4 flex items-center justify-center">✓</span>}
+                              {!selected && <span className="absolute inset-0 flex items-center justify-center text-xs text-white font-bold opacity-0 group-hover:opacity-100 transition-all">Bỏ qua</span>}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
