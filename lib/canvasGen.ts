@@ -324,9 +324,10 @@ async function renderBanner(
     imgBoundsY1 = imgBoundsY0 + imgH;
   }
   const isPortraitImg = bgImg && bgImg.height > bgImg.width * 1.2;
-  const leftMarginW = imgBoundsX0 - pad * 2;   // usable left blur zone width
-  const rightMarginW = w - imgBoundsX1 - pad * 2; // usable right blur zone width
-  const bottomMarginH = h - imgBoundsY1 - pad; // usable bottom blur zone height
+  // Use imgBoundsX0 - pad (one side gap) so narrow blur zones still qualify
+  const leftMarginW = imgBoundsX0 - pad;        // usable left blur zone width (text starts at pad, ends pad before image)
+  const rightMarginW = w - imgBoundsX1 - pad;   // usable right blur zone width
+  const bottomMarginH = h - imgBoundsY1 - pad;  // usable bottom blur zone height
 
   // ── TINY ────────────────────────────────────────────────────────────────────
   if (isTiny) {
@@ -353,8 +354,8 @@ async function renderBanner(
   } else if (isWide) {
     // Smart text placement: use the blurred margin (left or right) when image is portrait
     // so text never overlaps the actual sharp image
-    const useLeftMargin = isPortraitImg && leftMarginW > w * 0.22;
-    const useRightMargin = isPortraitImg && !useLeftMargin && rightMarginW > w * 0.22;
+    const useLeftMargin = isPortraitImg && leftMarginW > w * 0.12;
+    const useRightMargin = isPortraitImg && !useLeftMargin && rightMarginW > w * 0.12;
     let textX: number, textMaxW: number;
     if (useLeftMargin) {
       textX = pad;
@@ -426,21 +427,22 @@ async function renderBanner(
     const bottomPad = Math.round(h * 0.07);
 
     // For square canvas with portrait image: use the side (left) margin just like wide layout
-    const squareHasSideMargin = !isWide && isPortraitImg && leftMarginW > w * 0.18;
+    // Threshold 5%: even a 60px usable zone is better than overlapping the subject
+    const squareHasSideMargin = !isWide && isPortraitImg && leftMarginW > w * 0.05;
 
     let maxTW: number, textX_sq: number, startY: number;
 
     if (squareHasSideMargin) {
       // Text in the left blurred margin — never overlaps the image
-      maxTW = leftMarginW;
+      maxTW = leftMarginW; // = imgBoundsX0 - pad (text from x=pad to just before the image)
       textX_sq = pad;
       // Add side scrim for readability
       const [pr, pg, pb] = hexToRgb(primary);
-      const marginScrim = ctx.createLinearGradient(0, 0, imgBoundsX0 + pad * 2, 0);
-      marginScrim.addColorStop(0, `rgba(${pr},${pg},${pb},0.88)`);
+      const marginScrim = ctx.createLinearGradient(0, 0, imgBoundsX0 + pad, 0);
+      marginScrim.addColorStop(0, `rgba(${pr},${pg},${pb},0.92)`);
       marginScrim.addColorStop(1, `rgba(${pr},${pg},${pb},0)`);
       ctx.fillStyle = marginScrim;
-      ctx.fillRect(0, 0, imgBoundsX0 + pad * 2, h);
+      ctx.fillRect(0, 0, imgBoundsX0 + pad, h);
       startY = h * 0.2; // start text from 20% down
     } else {
       maxTW = w - pad * 2;
