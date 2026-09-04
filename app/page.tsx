@@ -517,7 +517,7 @@ export default function Home() {
       const res = await fetch("/api/adcopy/regen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, appName: adcopyAppName, message: adcopyMessage, country: adcopyCountry, language: adcopyLang, existing }),
+        body: JSON.stringify({ type, appName: adcopyMessage, message: adcopyMessage, country: adcopyCountry, language: adcopyLang, existing }),
       });
       const data = await res.json();
       if (data.success && data.text) {
@@ -640,13 +640,13 @@ export default function Home() {
   };
 
   const handleAdCopyGenerate = async () => {
-    if (!adcopyAppName.trim()) return;
+    if (!adcopyMessage.trim()) return;
     setAdcopyLoading(true); setAdcopyResult(null);
     try {
       const res = await fetch("/api/adcopy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appName: adcopyAppName, message: adcopyMessage, country: adcopyCountry, language: adcopyLang }),
+        body: JSON.stringify({ appName: adcopyMessage, message: adcopyMessage, country: adcopyCountry, language: adcopyLang }),
       });
       const data = await res.json();
       if (data.success) setAdcopyResult(data.result);
@@ -1747,14 +1747,9 @@ export default function Home() {
         {/* AD COPY PAGE */}
         {activePage === "adcopy" && (
           <div className="max-w-xl space-y-4">
-            <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Tên app / sản phẩm *</div>
-            <input value={adcopyAppName} onChange={e => setAdcopyAppName(e.target.value)}
-              placeholder="VD: Canva, PhotoRoom..."
-              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500"
-              style={inputStyle}/>
             <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Key message</div>
             <textarea value={adcopyMessage} onChange={e => setAdcopyMessage(e.target.value)}
-              placeholder="VD: Chỉnh ảnh chuyên nghiệp, miễn phí..." rows={3}
+              placeholder="VD: Canva - chỉnh ảnh chuyên nghiệp, miễn phí, AI filters..." rows={3}
               className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500 resize-none"
               style={inputStyle}/>
             <div className="grid grid-cols-2 gap-3">
@@ -1823,7 +1818,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-            <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyAppName.trim()}
+            <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyMessage.trim()}
               className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm py-3 px-4 rounded-xl transition-all font-semibold flex items-center justify-center gap-2">
               {adcopyLoading ? <><span className="animate-spin">⏳</span> Đang tạo...</> : <>✨ Generate Ad Copy</>}
             </button>
