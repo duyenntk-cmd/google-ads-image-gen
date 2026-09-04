@@ -504,6 +504,37 @@ export default function Home() {
   interface AdCopyResult { headlines: string[]; descriptions: string[]; ctas: string[]; }
   const [adcopyResult, setAdcopyResult] = useState<AdCopyResult|null>(null);
   const [adcopyCopied, setAdcopyCopied] = useState<string|null>(null);
+  const [adcopyRegening, setAdcopyRegening] = useState<Set<string>>(new Set());
+
+  const handleRegenItem = async (type: "headline" | "description" | "cta", index: number) => {
+    if (!adcopyResult) return;
+    const key = `${type[0]}-${index}`;
+    setAdcopyRegening(prev => new Set(prev).add(key));
+    try {
+      const existing = type === "headline" ? adcopyResult.headlines
+        : type === "description" ? adcopyResult.descriptions
+        : adcopyResult.ctas;
+      const res = await fetch("/api/adcopy/regen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, appName: adcopyAppName, message: adcopyMessage, country: adcopyCountry, language: adcopyLang, existing }),
+      });
+      const data = await res.json();
+      if (data.success && data.text) {
+        setAdcopyResult(prev => {
+          if (!prev) return prev;
+          if (type === "headline") {
+            const h = [...prev.headlines]; h[index] = data.text; return { ...prev, headlines: h };
+          } else if (type === "description") {
+            const d = [...prev.descriptions]; d[index] = data.text; return { ...prev, descriptions: d };
+          } else {
+            const c = [...prev.ctas]; c[index] = data.text; return { ...prev, ctas: c };
+          }
+        });
+      }
+    } catch { /* ignore */ }
+    finally { setAdcopyRegening(prev => { const n = new Set(prev); n.delete(key); return n; }); }
+  };
 
   // Localize state
   const LOCALIZE_MARKETS = [
@@ -1803,27 +1834,63 @@ export default function Home() {
                   <div className="px-4 py-3 text-xs font-bold border-b flex items-center gap-2" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
                     📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(≤30 ký tự)</span>
                   </div>
-                  {adcopyResult.headlines.map((h, i) => (
-                    <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
-                      <span className="text-sm flex-1" style={{color: t.text}}>{h}</span>
-                      <button onClick={() => copyText(h)} className="text-xs px-2 py-0.5 rounded flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===h ? "#10B98122" : t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
-                        {adcopyCopied===h ? "✓" : "copy"}
-                      </button>
-                    </div>
-                  ))}
+                  {adcopyResult.headlines.map((h, i) => {
+                    const over = h.length > 30;
+                    const rkey = `h-${i}`;
+                    const spinning = adcopyRegening.has(rkey);
+                    return (
+                      <div key={i} className={`flex items-center justify-between px-4 py-2.5 gap-2 border-b last:border-0 ${over ? "bg-red-500/5" : ""}`} style={{borderColor: t.border}}>
+                        <span className="text-sm flex-1" style={{color: over ? "#EF4444" : t.text}}>
+                          {h}
+                          {over && <span className="ml-1.5 text-[10px] font-semibold text-red-400">{h.length}/30</span>}
+                        </span>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          {over && (
+                            <button onClick={() => handleRegenItem("headline", i)} disabled={spinning}
+                              className="text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50"
+                              style={{borderColor:"#F59E0B44",color:"#F59E0B",backgroundColor:"#F59E0B11"}}
+                              title="Gen lại dòng này">
+                              {spinning ? "⏳" : "🔄"}
+                            </button>
+                          )}
+                          <button onClick={() => copyText(h)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: adcopyCopied===h ? "#10B98122" : t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
+                            {adcopyCopied===h ? "✓" : "copy"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
                   <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
                     📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(≤90 ký tự)</span>
                   </div>
-                  {adcopyResult.descriptions.map((d, i) => (
-                    <div key={i} className="flex items-start justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
-                      <span className="text-sm leading-relaxed flex-1" style={{color: t.text}}>{d}</span>
-                      <button onClick={() => copyText(d)} className="text-xs px-2 py-0.5 rounded mt-0.5 flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===d ? "#10B98122" : t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
-                        {adcopyCopied===d ? "✓" : "copy"}
-                      </button>
-                    </div>
-                  ))}
+                  {adcopyResult.descriptions.map((d, i) => {
+                    const over = d.length > 90;
+                    const rkey = `d-${i}`;
+                    const spinning = adcopyRegening.has(rkey);
+                    return (
+                      <div key={i} className={`flex items-start justify-between px-4 py-2.5 gap-2 border-b last:border-0 ${over ? "bg-red-500/5" : ""}`} style={{borderColor: t.border}}>
+                        <span className="text-sm leading-relaxed flex-1" style={{color: over ? "#EF4444" : t.text}}>
+                          {d}
+                          {over && <span className="ml-1.5 text-[10px] font-semibold text-red-400">{d.length}/90</span>}
+                        </span>
+                        <div className="flex items-start gap-1 flex-shrink-0 mt-0.5">
+                          {over && (
+                            <button onClick={() => handleRegenItem("description", i)} disabled={spinning}
+                              className="text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50"
+                              style={{borderColor:"#F59E0B44",color:"#F59E0B",backgroundColor:"#F59E0B11"}}
+                              title="Gen lại dòng này">
+                              {spinning ? "⏳" : "🔄"}
+                            </button>
+                          )}
+                          <button onClick={() => copyText(d)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: adcopyCopied===d ? "#10B98122" : t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
+                            {adcopyCopied===d ? "✓" : "copy"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
                   <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>🎯 Call to Action</div>
