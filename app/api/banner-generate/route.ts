@@ -66,12 +66,17 @@ export async function POST(req: NextRequest) {
           prompt,
           size: size.dalle,
           quality,
-          response_format: "b64_json",
           n: 1,
         });
-        const b64 = res.data?.[0]?.b64_json;
-        if (!b64) throw new Error(`No image for ${size.key}`);
-        return { key: size.key, label: size.label, dataUrl: `data:image/png;base64,${b64}` };
+        const imgUrl = res.data?.[0]?.url;
+        if (!imgUrl) throw new Error(`No image URL for ${size.key}`);
+        // Fetch and convert to base64 so the client doesn't need to hit OpenAI URLs
+        const imgRes = await fetch(imgUrl);
+        if (!imgRes.ok) throw new Error(`Failed to fetch image for ${size.key}`);
+        const buf = await imgRes.arrayBuffer();
+        const b64 = Buffer.from(buf).toString("base64");
+        const ct = imgRes.headers.get("content-type") || "image/png";
+        return { key: size.key, label: size.label, dataUrl: `data:${ct};base64,${b64}` };
       })
     );
 
