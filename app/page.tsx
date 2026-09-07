@@ -1040,7 +1040,7 @@ export default function Home() {
           {([
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
-            ["autogen",  "⚡", "Auto Gen"],
+            ["autogen",  "📐", "Resize"],
             ["adcopy",   "✍️", "Ad Copy"],
             ["keywords", "🔑", "Keywords"],
             ["localize", "🌏", "Localize"],
@@ -1120,7 +1120,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "⚡ Auto Gen từ URL" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "📐 Resize Screenshot" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -1905,7 +1905,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* AUTO GEN PAGE */}
+        {/* RESIZE SCREENSHOT PAGE */}
         {activePage === "autogen" && (
           <div className="space-y-6 max-w-2xl">
 
