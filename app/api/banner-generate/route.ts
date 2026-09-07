@@ -11,10 +11,11 @@ interface Brief {
   mood: string; niche: string;
 }
 
+// gpt-image-1 supported sizes
 const SIZES = [
-  { key: "portrait",  w: 1024, h: 1792, dalle: "1024x1792" as const, label: "9:16 Portrait" },
-  { key: "square",    w: 1024, h: 1024, dalle: "1024x1024" as const, label: "1:1 Square"   },
-  { key: "landscape", w: 1792, h: 1024, dalle: "1792x1024" as const, label: "16:9 Landscape"},
+  { key: "portrait",  dalle: "1024x1536" as const, label: "9:16 Portrait" },
+  { key: "square",    dalle: "1024x1024" as const, label: "1:1 Square"   },
+  { key: "landscape", dalle: "1536x1024" as const, label: "16:9 Landscape"},
 ] as const;
 
 function buildDallePrompt(brief: Brief, ratio: "portrait" | "square" | "landscape", userPrompt: string): string {
@@ -50,8 +51,10 @@ export async function POST(req: NextRequest) {
     const { brief, userPrompt, quality = "standard" } = await req.json() as {
       brief: Brief;
       userPrompt?: string;
-      quality?: "standard" | "hd";
+      quality?: "standard" | "hd" | "low" | "medium" | "high" | "auto";
     };
+    // gpt-image-1 uses low/medium/high; map standard→medium, hd→high
+    const gptQuality = (quality === "standard" ? "medium" : quality === "hd" ? "high" : quality) as "low" | "medium" | "high" | "auto";
 
     if (!brief?.app_name) {
       return NextResponse.json({ success: false, error: "Missing brief" }, { status: 400 });
@@ -62,21 +65,25 @@ export async function POST(req: NextRequest) {
       SIZES.map(async (size) => {
         const prompt = buildDallePrompt(brief, size.key, userPrompt || "");
         const res = await openai.images.generate({
-          model: "dall-e-3",
+          model: "gpt-image-1",
           prompt,
           size: size.dalle,
-          quality,
+          quality: gptQuality,
           n: 1,
         });
+        // gpt-image-1 always returns b64_json
+        const b64 = res.data?.[0]?.b64_json;
+        if (b64) {
+          return { key: size.key, label: size.label, dataUrl: `data:image/png;base64,${b64}` };
+        }
+        // Fallback: url
         const imgUrl = res.data?.[0]?.url;
-        if (!imgUrl) throw new Error(`No image URL for ${size.key}`);
-        // Fetch and convert to base64 so the client doesn't need to hit OpenAI URLs
+        if (!imgUrl) throw new Error(`No image for ${size.key}`);
         const imgRes = await fetch(imgUrl);
         if (!imgRes.ok) throw new Error(`Failed to fetch image for ${size.key}`);
         const buf = await imgRes.arrayBuffer();
-        const b64 = Buffer.from(buf).toString("base64");
-        const ct = imgRes.headers.get("content-type") || "image/png";
-        return { key: size.key, label: size.label, dataUrl: `data:${ct};base64,${b64}` };
+        const b64url = Buffer.from(buf).toString("base64");
+        return { key: size.key, label: size.label, dataUrl: `data:image/png;base64,${b64url}` };
       })
     );
 
