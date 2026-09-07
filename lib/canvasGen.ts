@@ -133,13 +133,23 @@ async function renderBanner(
   const clrShadow = () => { ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
 
   // ── NO TEXT / PURE RESIZE MODE ──────────────────────────────────────────────
-  // Just cover-crop the image to fill the canvas — no overlay, no blur, no text
+  // Blur-extend background + sharp contain foreground — no color overlay, no text
   if (noText) {
     if (bgImg) {
-      // Cover scaling: fill entire canvas, crop excess (no distortion, no letterbox)
+      // Layer 1: blurred cover fill (extends background naturally, no bars)
+      ctx.save();
+      ctx.filter = "blur(24px)";
       const coverScale = Math.max(w / bgImg.width, h / bgImg.height);
       const csw = bgImg.width * coverScale, csh = bgImg.height * coverScale;
       ctx.drawImage(bgImg, (w - csw) / 2, (h - csh) / 2, csw, csh);
+      ctx.restore();
+      // Very slight darken so edges feel natural (not pure white/blown-out)
+      ctx.fillStyle = "rgba(0,0,0,0.08)";
+      ctx.fillRect(0, 0, w, h);
+      // Layer 2: sharp image with contain scaling — full image visible, no crop, no distortion
+      const containScale = Math.min(w / bgImg.width, h / bgImg.height);
+      const sw = bgImg.width * containScale, sh = bgImg.height * containScale;
+      ctx.drawImage(bgImg, (w - sw) / 2, (h - sh) / 2, sw, sh);
     } else {
       ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
     }
