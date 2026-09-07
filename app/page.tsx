@@ -2046,17 +2046,20 @@ export default function Home() {
                     {agScreenshots.map((s, i) => {
                       const selected = agSelectedScreenshots.has(i);
                       return (
-                        <div key={i} className="relative flex-shrink-0 cursor-pointer"
-                          onClick={() => setAgSelectedScreenshots(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; })}>
+                        <div key={i} className="relative flex-shrink-0 group">
+                          {/* Click ảnh → lightbox */}
                           <img src={s} alt={`#${i+1}`}
-                            className={`h-24 w-auto rounded-lg object-cover border-2 shadow-sm transition-all ${selected ? "opacity-100" : "opacity-40 grayscale"}`}
+                            onClick={() => setLightboxFrame(s)}
+                            className={`h-24 w-auto rounded-lg object-cover border-2 shadow-sm transition-all cursor-zoom-in ${selected ? "opacity-100" : "opacity-40 grayscale"}`}
                             style={{borderColor: selected ? "#7C3AED" : t.border}}/>
+                          {/* Label số */}
                           <span className={`absolute top-1 left-1 text-[9px] font-bold rounded px-1 pointer-events-none ${selected ? "bg-violet-600 text-white" : "bg-black/60 text-white"}`}>#{i+1}</span>
-                          <span className={`absolute bottom-1 right-1 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold shadow pointer-events-none ${selected ? "bg-violet-600 text-white" : "bg-black/40 text-white/60 border border-white/40"}`}>
-                            {selected ? "✓" : ""}
-                          </span>
-                          <button onClick={e => { e.stopPropagation(); setLightboxFrame(s); }}
-                            className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/50 text-white text-[9px] flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">🔍</button>
+                          {/* Tick toggle — click để chọn/bỏ */}
+                          <button
+                            onClick={() => setAgSelectedScreenshots(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; })}
+                            className={`absolute bottom-1 right-1 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shadow transition-all ${selected ? "bg-violet-600 text-white" : "bg-black/50 text-white/70 border border-white/40"}`}>
+                            {selected ? "✓" : "+"}
+                          </button>
                         </div>
                       );
                     })}
