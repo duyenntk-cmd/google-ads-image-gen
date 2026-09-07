@@ -132,6 +132,20 @@ async function renderBanner(
   const pad       = Math.max(12, Math.round(Math.min(w, h) * 0.055));
   const clrShadow = () => { ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; };
 
+  // ── NO TEXT / PURE RESIZE MODE ──────────────────────────────────────────────
+  // Just cover-crop the image to fill the canvas — no overlay, no blur, no text
+  if (noText) {
+    if (bgImg) {
+      // Cover scaling: fill entire canvas, crop excess (no distortion, no letterbox)
+      const coverScale = Math.max(w / bgImg.width, h / bgImg.height);
+      const csw = bgImg.width * coverScale, csh = bgImg.height * coverScale;
+      ctx.drawImage(bgImg, (w - csw) / 2, (h - csh) / 2, csw, csh);
+    } else {
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
+    }
+    return canvas.toDataURL("image/png");
+  }
+
   // ── BACKGROUND ──────────────────────────────────────────────────────────────
   // Smart background: blur-fill so subject is never cropped
   ctx.fillStyle = primary;
@@ -234,14 +248,6 @@ async function renderBanner(
     } else {
       ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, w, h);
     }
-  }
-
-  // ── NO TEXT MODE: just the image, no overlays ───────────────────────────────
-  if (noText) {
-    // Subtle border only
-    ctx.strokeStyle = "rgba(255,255,255,0.07)"; ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
-    return canvas.toDataURL("image/png");
   }
 
   // ── SIZES ───────────────────────────────────────────────────────────────────
