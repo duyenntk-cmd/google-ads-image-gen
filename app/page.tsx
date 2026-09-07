@@ -271,17 +271,15 @@ export default function Home() {
     setYtAuthenticated(false); setYtAccessToken(""); setYtVideos([]);
   };
 
-  // Resize Screenshot state
-  type AgStep = "input" | "fetching" | "pick" | "resizing" | "preview";
-  type GenEngine = "canvas" | "ideogram";
+  // AI Banner Design state
+  type AgStep = "input" | "generating" | "preview";
   const [agStep, setAgStep] = useState<AgStep>("input");
-  const [agEngine, setAgEngine] = useState<GenEngine>("canvas");
-  const [agNoText, setAgNoText] = useState(true); // default: resize only, no text overlay
-  const [agIdeogramImages, setAgIdeogramImages] = useState<{landscape:string;square:string;portrait:string}|null>(null);
+  const [agNoText] = useState(false);
+  const [agIdeogramImages] = useState<{landscape:string;square:string;portrait:string}|null>(null);
   const [agUrl, setAgUrl] = useState("");
+  const [agPrompt, setAgPrompt] = useState("");
   const [agCountry, setAgCountry] = useState("Global");
   const [agLang, setAgLang] = useState("English");
-  const [agNiche, setAgNiche] = useState<"photo"|"tool"|"office">("tool");
   const [agCountrySearch, setAgCountrySearch] = useState("");
   const [agCountryOpen, setAgCountryOpen] = useState(false);
   const agCountryRef = useRef<HTMLDivElement>(null);
@@ -291,10 +289,8 @@ export default function Home() {
   const [agError, setAgError] = useState("");
   const [agBrief, setAgBrief] = useState<Brief|null>(null);
   const [agScreenshots, setAgScreenshots] = useState<string[]>([]);
-  const [agSelectedScreenshots, setAgSelectedScreenshots] = useState<Set<number>>(new Set());
   const [agIcon, setAgIcon] = useState<string|null>(null);
-  interface AgAppMeta { name: string; category: string; rating: number; ratingCount: number; platform: string; screenshotCount: number; }
-  const [agAppMeta, setAgAppMeta] = useState<AgAppMeta|null>(null);
+  const [agGenStatus, setAgGenStatus] = useState("");
   const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
   const [agZipBase64, setAgZipBase64] = useState("");
   const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
@@ -376,71 +372,64 @@ export default function Home() {
 
   const handleAgAnalyze = async () => {
     if (!agUrl.trim()) return;
-    setAgStep("fetching"); setAgError("");
+    setAgStep("generating"); setAgError(""); setAgGenStatus("📱 Đang lấy thông tin app...");
     try {
-      const res = await fetch("/api/screenshots", {
+      // Step 1: fetch screenshots
+      const ssRes = await fetch("/api/screenshots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ appUrl: agUrl, country: agCountry }),
       });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      const shots: string[] = data.screenshots || [];
+      const ssData = await ssRes.json();
+      if (!ssData.success) throw new Error(ssData.error);
+      const shots: string[] = ssData.screenshots || [];
+      const appName: string = ssData.appName || "";
+      const iconB64: string | null = ssData.iconBase64 || null;
       setAgScreenshots(shots);
-      setAgSelectedScreenshots(new Set(shots.map((_: string, i: number) => i)));
-      setAgIcon(data.iconBase64 || null);
-      setAgAppMeta(data.appName ? { name: data.appName, category: "", rating: 0, ratingCount: 0, platform: "", screenshotCount: shots.length } : null);
-      // create a minimal brief for canvas (just colors/no text if noText)
-      setAgBrief({ app_name: data.appName || "", headline: "", subheadline: "", cta_text: "", primary_color: "#0A0A14", secondary_color: "#1A1A2E", accent_color: "#FF6B35", background_style: "blur", mood: "bold", best_frame_index: 0, niche: "photo", app_store_url: "", play_store_url: "" });
-      setAgStep("pick");
-    } catch (e) { setAgError(String(e)); setAgStep("input"); }
-  };
+      setAgIcon(iconB64);
 
-  const handleAgGenerate = async () => {
-    if (!agBrief) return;
-    setAgStep("resizing"); setAgError("");
-    try {
-      if (agEngine === "ideogram") {
-        // Call Ideogram API
-        const res = await fetch("/api/ideogram", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ brief: agBrief }),
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error);
-        setAgIdeogramImages(data.images);
-        setAgPreviews([]); // clear canvas previews
-        setAgStep("preview");
-        return;
-      }
+      // Step 2: call GPT-4o to generate design concept
+      setAgGenStatus("🤖 GPT-4o đang phân tích và tạo concept...");
+      const conceptRes = await fetch("/api/banner-concept", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appName, prompt: agPrompt, country: agCountry, language: agLang,
+          screenshots: shots.slice(0, 3), appUrl: agUrl,
+        }),
+      });
+      const conceptData = await conceptRes.json();
+      if (!conceptData.success) throw new Error(conceptData.error);
+      const brief: Brief = conceptData.brief;
+      setAgBrief(brief);
 
-      // Canvas generation — only use selected screenshots
-      const activeShots = agScreenshots.filter((_, i) => agSelectedScreenshots.has(i));
-      const generated = await generateAllBanners(agBrief, activeShots[0] || null, activeShots.length > 0 ? activeShots : undefined, agIcon || null, agNoText);
+      // Step 3: render 20 banners on canvas
+      setAgGenStatus(`🎨 Đang render ${shots.length > 0 ? shots.length : 1} ảnh × ${(await import("@/lib/adSizes")).AD_SIZES.length} kích thước...`);
+      const generated = await generateAllBanners(brief, shots[0] || null, shots.length > 0 ? shots : undefined, iconB64, false);
       setAgPreviews(generated);
-      setAgIdeogramImages(null);
+
+      // Build zip
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
       const top5 = zip.folder("top5")!;
-      const all = zip.folder("all_sizes")!;
+      const allFolder = zip.folder("all_sizes")!;
       for (const b of generated) {
         const base64 = b.dataUrl.split(",")[1];
         const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
         if (b.isTop5) top5.file(`${b.key}.png`, bytes);
-        all.file(`${b.key}.png`, bytes);
+        allFolder.file(`${b.key}.png`, bytes);
       }
       const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
       const reader = new FileReader();
       reader.onload = () => setAgZipBase64((reader.result as string).split(",")[1]);
       reader.readAsDataURL(blob);
       setAgStep("preview");
-    } catch (e) { setAgError(String(e)); setAgStep("pick"); }
+    } catch (e) { setAgError(String(e)); setAgStep("input"); }
   };
 
   const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
   const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
-  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgSelectedScreenshots(new Set()); setAgIdeogramImages(null); setAgError(""); setAgNoText(false); };
+  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgError(""); setAgGenStatus(""); };
 
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
@@ -1040,7 +1029,7 @@ export default function Home() {
           {([
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
-            ["autogen",  "📐", "Resize"],
+            ["autogen",  "✨", "AI Banner"],
             ["adcopy",   "✍️", "Ad Copy"],
             ["keywords", "🔑", "Keywords"],
             ["localize", "🌏", "Localize"],
@@ -1120,7 +1109,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "📐 Resize Screenshot" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "✨ AI Banner Design" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -1905,16 +1894,16 @@ export default function Home() {
           </div>
         )}
 
-        {/* RESIZE SCREENSHOT PAGE */}
+        {/* AI BANNER DESIGN PAGE */}
         {activePage === "autogen" && (
           <div className="space-y-6 max-w-2xl">
 
-            {/* Step indicator — 3 steps */}
+            {/* Step indicator */}
             <div className="flex items-center gap-2 text-xs" style={{color: t.textMuted}}>
-              {([["input","1","Nhập URL"],["pick","2","Chọn ảnh"],["preview","3","Kết quả"]] as const).map(([s, n, label], i) => {
-                const order = ["input","fetching","pick","resizing","preview"];
-                const cur = order.indexOf(agStep); const own = order.indexOf(s === "pick" ? "pick" : s === "preview" ? "preview" : "input");
-                const done = cur > own; const active = s === "pick" ? (agStep === "pick" || agStep === "resizing") : agStep === s;
+              {([["input","1","Nhập thông tin"],["generating","2","AI phân tích"],["preview","3","Kết quả"]] as [AgStep,string,string][]).map(([s, n, label], i) => {
+                const order: AgStep[] = ["input","generating","preview"];
+                const cur = order.indexOf(agStep); const own = order.indexOf(s);
+                const done = cur > own; const active = agStep === s;
                 return (
                   <div key={s} className="flex items-center gap-2">
                     <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${active?"bg-violet-600 text-white":done?"bg-violet-600/40 text-violet-400":""}`}
@@ -1937,7 +1926,17 @@ export default function Home() {
                     placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
                     className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
                     style={inputStyle}/>
-                  <p className="text-xs mt-1.5" style={{color: t.textMuted}}>Tự động lấy screenshot theo thị trường đã chọn</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
+                    💡 Design Brief / Prompt
+                  </label>
+                  <textarea value={agPrompt} onChange={e => setAgPrompt(e.target.value)} rows={3}
+                    placeholder="VD: Tạo banner nhấn mạnh tính năng học ngôn ngữ bằng AI, tone màu tím hiện đại, đối tượng 18-35 tuổi..."
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-none"
+                    style={inputStyle}/>
+                  <p className="text-xs mt-1" style={{color: t.textMuted}}>GPT-4o sẽ phân tích app + prompt để tạo concept màu sắc, copy và layout</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -1971,7 +1970,7 @@ export default function Home() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</label>
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
                     <div ref={agLangRef} className="relative">
                       <button type="button" onClick={() => { setAgLangOpen(o => !o); setAgLangSearch(""); }}
                         className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
@@ -2005,174 +2004,98 @@ export default function Home() {
 
                 <button onClick={handleAgAnalyze} disabled={!agUrl.trim()}
                   className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
-                  📱 Lấy screenshot →
+                  ✨ Tạo banner AI →
                 </button>
               </div>
             )}
 
-            {/* STEP fetching */}
-            {agStep === "fetching" && (
-              <div className="text-center py-20 space-y-4">
-                <div className="text-5xl animate-pulse">📱</div>
-                <div className="text-lg font-bold" style={{color: t.text}}>Đang lấy screenshot...</div>
-                <div className="text-sm space-y-1" style={{color: t.textMuted}}>
-                  <div>🌏 Kết nối App Store / Play Store...</div>
-                  <div>🖼️ Tải screenshot theo thị trường...</div>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 2: Pick screenshots */}
-            {agStep === "pick" && (
-              <div className="space-y-4">
-                {/* App info */}
-                {agAppMeta && (
-                  <div className="flex items-center gap-3 p-4 rounded-2xl border" style={cardStyle}>
-                    {agIcon && <img src={agIcon} alt="" className="w-12 h-12 rounded-xl flex-shrink-0 shadow"/>}
-                    <div>
-                      <div className="font-bold text-sm" style={{color: t.text}}>{agAppMeta.name}</div>
-                      <div className="text-xs text-emerald-500 mt-0.5">✓ {agScreenshots.length} screenshot · {agCountry}</div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Screenshot picker */}
-                <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>📸 Chọn screenshot để resize</span>
-                    <span className="text-xs font-semibold text-emerald-500">{agSelectedScreenshots.size}/{agScreenshots.length} đã chọn</span>
-                  </div>
-                  <div className="flex gap-2 flex-wrap">
-                    {agScreenshots.map((s, i) => {
-                      const selected = agSelectedScreenshots.has(i);
-                      return (
-                        <div key={i} className="relative flex-shrink-0 group">
-                          {/* Click ảnh → lightbox */}
-                          <img src={s} alt={`#${i+1}`}
-                            onClick={() => setLightboxFrame(s)}
-                            className={`h-24 w-auto rounded-lg object-cover border-2 shadow-sm transition-all cursor-zoom-in ${selected ? "opacity-100" : "opacity-40 grayscale"}`}
-                            style={{borderColor: selected ? "#7C3AED" : t.border}}/>
-                          {/* Label số */}
-                          <span className={`absolute top-1 left-1 text-[9px] font-bold rounded px-1 pointer-events-none ${selected ? "bg-violet-600 text-white" : "bg-black/60 text-white"}`}>#{i+1}</span>
-                          {/* Tick toggle — click để chọn/bỏ */}
-                          <button
-                            onClick={() => setAgSelectedScreenshots(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; })}
-                            className={`absolute bottom-1 right-1 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shadow transition-all ${selected ? "bg-violet-600 text-white" : "bg-black/50 text-white/70 border border-white/40"}`}>
-                            {selected ? "✓" : "+"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
-
-                <div className="flex gap-3">
-                  <button onClick={resetAg} className="px-4 py-3 rounded-xl border text-sm transition-colors flex-shrink-0" style={{borderColor: t.border, color: t.textMuted}}>← Nhập lại</button>
-                  <button onClick={handleAgGenerate} disabled={agSelectedScreenshots.size === 0}
-                    className="flex-1 py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 transition-all text-white">
-                    📐 Resize {agSelectedScreenshots.size} ảnh → {AD_SIZES.length} banner →
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* STEP resizing */}
-            {agStep === "resizing" && (
+            {/* STEP generating */}
+            {agStep === "generating" && (
               <div className="text-center py-20 space-y-6">
-                <div className="text-5xl animate-pulse">📐</div>
-                <div className="text-xl font-bold" style={{color: t.text}}>Đang resize {AD_SIZES.length} kích thước...</div>
-                <div className="text-sm" style={{color:t.textMuted}}>Blur-fill + contain-scale cho từng banner</div>
-                <div className="w-48 h-1 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
-                  <div className="h-full bg-violet-500 animate-pulse w-2/3"/>
+                <div className="text-5xl animate-pulse">✨</div>
+                <div className="text-lg font-bold" style={{color: t.text}}>Đang tạo banner AI...</div>
+                <div className="text-sm font-medium" style={{color: "#A78BFA"}}>{agGenStatus}</div>
+                <div className="space-y-1.5 text-xs" style={{color: t.textMuted}}>
+                  <div>📱 Lấy screenshot từ App Store / Play Store</div>
+                  <div>🤖 GPT-4o phân tích app và tạo concept</div>
+                  <div>🎨 Render {AD_SIZES.length} kích thước chuẩn Google Ads</div>
+                </div>
+                <div className="w-56 h-1.5 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
+                  <div className="h-full bg-gradient-to-r from-violet-500 to-purple-400 animate-pulse" style={{width:"70%"}}/>
                 </div>
               </div>
             )}
 
-            {/* STEP 5: Preview */}
+            {/* STEP preview */}
             {agStep === "preview" && (
               <div className="space-y-5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <div>
-                    <div className="text-lg font-bold" style={{color: t.text}}>
-                      {agIdeogramImages ? "✨ Ideogram v2 — 3 ảnh AI" : `✅ ${agPreviews.length} banner canvas`}
+                    <div className="text-lg font-bold" style={{color: t.text}}>✅ {agPreviews.length} banner sẵn sàng</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>
+                      {agBrief?.app_name} · {agCountry}
+                      {agBrief?.headline && <span> · &ldquo;{agBrief.headline}&rdquo;</span>}
                     </div>
-                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>{agBrief?.app_name} · {agCountry}</div>
                   </div>
                   <div className="flex gap-2">
                     <button onClick={resetAg} className="text-xs px-3 py-2 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Gen lại</button>
-                    {!agIdeogramImages && (
-                      <button onClick={handleAgDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all">
-                        ⬇ Tải tất cả (.zip)
-                      </button>
-                    )}
+                    <button onClick={handleAgDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all">
+                      ⬇ Tải tất cả (.zip)
+                    </button>
                   </div>
                 </div>
 
-                {/* Ideogram preview */}
-                {agIdeogramImages ? (
-                  <div className="space-y-4">
-                    <div className="text-xs p-3 rounded-xl bg-violet-500/10 border border-violet-500/20" style={{color:t.textMuted}}>
-                      💡 Ideogram tạo 3 ảnh theo 3 tỉ lệ chuẩn Google UAC. Tải từng ảnh và dùng cho đúng loại banner.
+                {/* Concept summary */}
+                {agBrief && (
+                  <div className="p-3 rounded-xl border text-xs flex flex-wrap gap-3 items-center" style={{...cardStyle, borderColor: "#7C3AED44"}}>
+                    {agIcon && <img src={agIcon} alt="" className="w-8 h-8 rounded-lg flex-shrink-0"/>}
+                    <div className="flex flex-wrap gap-2 flex-1 min-w-0">
+                      <span className="px-2 py-0.5 rounded-full font-medium" style={{backgroundColor:"#7C3AED22",color:"#A78BFA"}}>H: {agBrief.headline}</span>
+                      <span className="px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>CTA: {agBrief.cta_text}</span>
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>
+                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:agBrief.primary_color}}/>
+                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:agBrief.accent_color}}/>
+                        {agBrief.mood}
+                      </span>
                     </div>
-                    {([
-                      { key: "landscape", label: "Landscape 16:9", sub: "Dùng cho 1200×628", w: 340, h: 191 },
-                      { key: "square",    label: "Square 1:1",     sub: "Dùng cho 1200×1200", w: 240, h: 240 },
-                      { key: "portrait",  label: "Portrait 9:16",  sub: "Dùng cho 1080×1920", w: 135, h: 240 },
-                    ] as const).map(({ key, label, sub, w, h }) => {
-                      const src = agIdeogramImages[key];
-                      return (
-                        <div key={key} className="flex items-center gap-4 p-4 border rounded-2xl" style={cardStyle}>
-                          <img src={src} alt={label} style={{width:w,height:h}} className="rounded-xl object-cover flex-shrink-0 shadow-lg"/>
-                          <div className="flex-1 min-w-0 space-y-2">
-                            <div className="font-semibold text-sm" style={{color:t.text}}>{label}</div>
-                            <div className="text-xs" style={{color:t.textMuted}}>{sub}</div>
-                            <button onClick={()=>{ const a=document.createElement("a"); a.href=src; a.download=`ideogram-${key}-${agBrief?.app_name||"banner"}.jpg`; a.click(); }}
-                              className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white font-medium">⬇ Tải {label}</button>
-                          </div>
-                        </div>
-                      );
-                    })}
                   </div>
-                ) : (
-                  <>
-                    <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
-                      {([["top5","⭐ Top 5"],["all",`Tất cả (${agPreviews.length})`]] as const).map(([tab,label])=>(
-                        <button key={tab} onClick={() => setAgActiveTab(tab)}
-                          className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
-                          style={agActiveTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                      {agDisplayed.map(p => {
-                        const scale = Math.min(1, 340/Math.max(p.width, p.height));
-                        return (
-                          <div key={p.key} onClick={() => setSelectedPreview(p)}
-                            className="group rounded-2xl p-4 cursor-pointer transition-all border"
-                            style={cardStyle}
-                            onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                            onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
-                            <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
-                              <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
-                                <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
-                              </div>
-                              <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
-                                className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
-                                style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
                 )}
+
+                <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
+                  {([["top5","⭐ Top 5"],["all",`Tất cả (${agPreviews.length})`]] as const).map(([tab,label])=>(
+                    <button key={tab} onClick={() => setAgActiveTab(tab)}
+                      className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
+                      style={agActiveTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {agDisplayed.map(p => {
+                    const scale = Math.min(1, 340/Math.max(p.width, p.height));
+                    return (
+                      <div key={p.key} onClick={() => setSelectedPreview(p)}
+                        className="group rounded-2xl p-4 cursor-pointer transition-all border"
+                        style={cardStyle}
+                        onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
+                        <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
+                          <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
+                            <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
+                          </div>
+                          <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
+                            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
+                            style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
