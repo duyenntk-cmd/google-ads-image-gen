@@ -276,6 +276,7 @@ export default function Home() {
   type GenEngine = "canvas" | "ideogram";
   const [agStep, setAgStep] = useState<AutoGenStep>("input");
   const [agEngine, setAgEngine] = useState<GenEngine>("canvas");
+  const [agNoText, setAgNoText] = useState(false);
   const [agIdeogramImages, setAgIdeogramImages] = useState<{landscape:string;square:string;portrait:string}|null>(null);
   const [agUrl, setAgUrl] = useState("");
   const [agCountry, setAgCountry] = useState("Global");
@@ -416,7 +417,7 @@ export default function Home() {
 
       // Canvas generation — only use selected screenshots
       const activeShots = agScreenshots.filter((_, i) => agSelectedScreenshots.has(i));
-      const generated = await generateAllBanners(agBrief, activeShots[0] || null, activeShots.length > 0 ? activeShots : undefined, agIcon || null);
+      const generated = await generateAllBanners(agBrief, activeShots[0] || null, activeShots.length > 0 ? activeShots : undefined, agIcon || null, agNoText);
       setAgPreviews(generated);
       setAgIdeogramImages(null);
       const JSZip = (await import("jszip")).default;
@@ -2126,6 +2127,20 @@ export default function Home() {
                     <div className="text-[10px] text-amber-400/80 bg-amber-500/10 rounded-lg px-3 py-2">
                       ⚠️ Cần thêm <code className="bg-black/20 px-1 rounded">IDEOGRAM_API_KEY</code> vào Vercel env trước khi dùng
                     </div>
+                  )}
+                  {agEngine==="canvas" && (
+                    <button onClick={() => setAgNoText(v => !v)}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl border transition-all text-left"
+                      style={{borderColor: agNoText ? "#7C3AED" : t.border, backgroundColor: agNoText ? "#7C3AED11" : "transparent"}}>
+                      <span className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold flex-shrink-0 transition-colors ${agNoText ? "bg-violet-600 text-white" : "border"}`}
+                        style={!agNoText ? {borderColor: t.border} : {}}>
+                        {agNoText ? "✓" : ""}
+                      </span>
+                      <div>
+                        <div className="text-xs font-medium" style={{color: t.text}}>Chỉ ảnh, không có text</div>
+                        <div className="text-[10px]" style={{color: t.textMuted}}>Bỏ headline, subheadline và nút CTA — chỉ resize/crop screenshot</div>
+                      </div>
+                    </button>
                   )}
                 </div>
 

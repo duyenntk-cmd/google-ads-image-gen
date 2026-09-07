@@ -112,7 +112,8 @@ async function renderBanner(
   bgImg: HTMLImageElement | null,
   iconImg: HTMLImageElement | null,
   fontFamily: string,
-  layout: Layout
+  layout: Layout,
+  noText = false
 ): Promise<string> {
   const { width: w, height: h } = size;
   const canvas = document.createElement("canvas");
@@ -233,6 +234,14 @@ async function renderBanner(
     } else {
       ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, w, h);
     }
+  }
+
+  // ── NO TEXT MODE: just the image, no overlays ───────────────────────────────
+  if (noText) {
+    // Subtle border only
+    ctx.strokeStyle = "rgba(255,255,255,0.07)"; ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+    return canvas.toDataURL("image/png");
   }
 
   // ── SIZES ───────────────────────────────────────────────────────────────────
@@ -537,7 +546,8 @@ export async function generateAllBanners(
   brief: Brief,
   bgDataUrl: string | null,
   allFrameDataUrls?: string[],
-  iconDataUrl?: string | null
+  iconDataUrl?: string | null,
+  noText = false
 ): Promise<GeneratedBanner[]> {
   const fontFamily = await ensureFontsLoaded();
 
@@ -567,7 +577,7 @@ export async function generateAllBanners(
     const vBrief = variantBrief(brief, vi);
     const layout = getLayout(brief, vi);
 
-    const dataUrl = await renderBanner(size, vBrief, frameImg, iconImg, fontFamily, layout);
+    const dataUrl = await renderBanner(size, vBrief, frameImg, iconImg, fontFamily, layout, noText);
     results.push({ key: size.key, width: size.width, height: size.height, label: size.label, isTop5: size.isTop5, dataUrl });
   }
   return results;
