@@ -291,6 +291,8 @@ export default function Home() {
   const [agScreenshots, setAgScreenshots] = useState<string[]>([]);
   const [agIcon, setAgIcon] = useState<string|null>(null);
   const [agGenStatus, setAgGenStatus] = useState("");
+  const [agDalleImages, setAgDalleImages] = useState<{key:string;label:string;dataUrl:string}[]>([]);
+  const [agQuality, setAgQuality] = useState<"standard"|"hd">("standard");
   const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
   const [agZipBase64, setAgZipBase64] = useState("");
   const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
@@ -374,7 +376,7 @@ export default function Home() {
     if (!agUrl.trim()) return;
     setAgStep("generating"); setAgError(""); setAgGenStatus("📱 Đang lấy thông tin app...");
     try {
-      // Step 1: fetch screenshots
+      // Step 1: fetch app info + screenshots for GPT-4o analysis
       const ssRes = await fetch("/api/screenshots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -388,8 +390,8 @@ export default function Home() {
       setAgScreenshots(shots);
       setAgIcon(iconB64);
 
-      // Step 2: call GPT-4o to generate design concept
-      setAgGenStatus("🤖 GPT-4o đang phân tích và tạo concept...");
+      // Step 2: GPT-4o analyzes app + prompt → design brief
+      setAgGenStatus("🤖 GPT-4o đang phân tích app và tạo concept thiết kế...");
       const conceptRes = await fetch("/api/banner-concept", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -403,22 +405,72 @@ export default function Home() {
       const brief: Brief = conceptData.brief;
       setAgBrief(brief);
 
-      // Step 3: render 20 banners on canvas
-      setAgGenStatus(`🎨 Đang render ${shots.length > 0 ? shots.length : 1} ảnh × ${(await import("@/lib/adSizes")).AD_SIZES.length} kích thước...`);
-      const generated = await generateAllBanners(brief, shots[0] || null, shots.length > 0 ? shots : undefined, iconB64, false);
-      setAgPreviews(generated);
+      // Step 3: DALL-E 3 generates 3 base images (portrait / square / landscape)
+      setAgGenStatus("🎨 DALL-E 3 đang thiết kế 3 ảnh base (portrait · square · landscape)...");
+      const genRes = await fetch("/api/banner-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brief, userPrompt: agPrompt, quality: agQuality }),
+      });
+      const genData = await genRes.json();
+      if (!genData.success) throw new Error(genData.error);
+      const dalleImages: {key:string;label:string;dataUrl:string}[] = genData.images;
+      setAgDalleImages(dalleImages);
 
-      // Build zip
-      const JSZip = (await import("jszip")).default;
-      const zip = new JSZip();
-      const top5 = zip.folder("top5")!;
-      const allFolder = zip.folder("all_sizes")!;
-      for (const b of generated) {
-        const base64 = b.dataUrl.split(",")[1];
-        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-        if (b.isTop5) top5.file(`${b.key}.png`, bytes);
-        allFolder.file(`${b.key}.png`, bytes);
+      // Step 4: resize 3 DALL-E images → 20 Google Ads sizes via canvas (blur-extend, no text)
+      setAgGenStatus("📐 Resize ra 20 kích thước chuẩn Google Ads...");
+      // Map each ad size to nearest DALL-E aspect ratio
+      const { AD_SIZES } = await import("@/lib/adSizes");
+      const imgByKey: Record<string, string> = {};
+      for (const img of dalleImages) imgByKey[img.key] = img.dataUrl;
+      const getBestBase = (w: number, h: number) => {
+        const ratio = w / h;
+        if (ratio > 1.4) return imgByKey["landscape"] || dalleImages[0]?.dataUrl;
+        if (ratio < 0.8) return imgByKey["portrait"]  || dalleImages[0]?.dataUrl;
+        return imgByKey["square"] || dalleImages[0]?.dataUrl;
+      };
+      const generated = await generateAllBanners(
+        brief,
+        null, // no single bg — each size picks its own base below
+        undefined,
+        iconB64,
+        true // noText: pure resize of DALL-E image
+      );
+      // Override each banner with the correct DALL-E base resized
+      const { default: JSZipMod } = await import("jszip");
+      const zip = new JSZipMod();
+      const top5Folder = zip.folder("top5")!;
+      const allFolder   = zip.folder("all_sizes")!;
+      const finalPreviews: typeof generated = [];
+      for (const sz of AD_SIZES) {
+        const baseDataUrl = getBestBase(sz.width, sz.height);
+        const canvas = document.createElement("canvas");
+        canvas.width = sz.width; canvas.height = sz.height;
+        const ctx = canvas.getContext("2d")!;
+        await new Promise<void>(resolve => {
+          const img = new Image();
+          img.onload = () => {
+            // blur-extend background
+            ctx.save(); ctx.filter = "blur(24px)";
+            const cs = Math.max(sz.width/img.width, sz.height/img.height);
+            ctx.drawImage(img, (sz.width-img.width*cs)/2, (sz.height-img.height*cs)/2, img.width*cs, img.height*cs);
+            ctx.restore();
+            ctx.fillStyle = "rgba(0,0,0,0.06)"; ctx.fillRect(0,0,sz.width,sz.height);
+            // sharp contain
+            const cs2 = Math.min(sz.width/img.width, sz.height/img.height);
+            ctx.drawImage(img, (sz.width-img.width*cs2)/2, (sz.height-img.height*cs2)/2, img.width*cs2, img.height*cs2);
+            resolve();
+          };
+          img.src = baseDataUrl;
+        });
+        const dataUrl = canvas.toDataURL("image/png");
+        finalPreviews.push({ key: sz.key, width: sz.width, height: sz.height, label: sz.label, isTop5: sz.isTop5, dataUrl });
+        const b64 = dataUrl.split(",")[1];
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        if (sz.isTop5) top5Folder.file(`${sz.key}.png`, bytes);
+        allFolder.file(`${sz.key}.png`, bytes);
       }
+      setAgPreviews(finalPreviews);
       const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
       const reader = new FileReader();
       reader.onload = () => setAgZipBase64((reader.result as string).split(",")[1]);
@@ -429,7 +481,7 @@ export default function Home() {
 
   const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
   const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
-  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgError(""); setAgGenStatus(""); };
+  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgDalleImages([]); setAgError(""); setAgGenStatus(""); };
 
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
@@ -2002,6 +2054,23 @@ export default function Home() {
 
                 {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
 
+                {/* Quality toggle */}
+                <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <div>
+                    <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng DALL-E 3</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>HD: đẹp hơn · Standard: nhanh hơn & rẻ hơn (~$0.04/ảnh vs $0.08/ảnh)</div>
+                  </div>
+                  <div className="flex gap-1 rounded-lg p-0.5 ml-3 flex-shrink-0" style={{backgroundColor: t.border}}>
+                    {(["standard","hd"] as const).map(q => (
+                      <button key={q} onClick={() => setAgQuality(q)}
+                        className="px-3 py-1 rounded-md text-xs font-semibold transition-all"
+                        style={agQuality===q?{backgroundColor:"#7C3AED",color:"#fff"}:{color:t.textMuted}}>
+                        {q === "standard" ? "Standard" : "HD"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <button onClick={handleAgAnalyze} disabled={!agUrl.trim()}
                   className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
                   ✨ Tạo banner AI →
@@ -2044,6 +2113,29 @@ export default function Home() {
                     </button>
                   </div>
                 </div>
+
+                {/* DALL-E base images */}
+                {agDalleImages.length > 0 && (
+                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh gốc DALL-E 3 ({agDalleImages.length} tỉ lệ)</div>
+                    <div className="flex gap-3 overflow-x-auto pb-1">
+                      {agDalleImages.map(img => (
+                        <div key={img.key} className="flex-shrink-0 space-y-1.5">
+                          <img src={img.dataUrl} alt={img.label}
+                            onClick={() => setLightboxFrame(img.dataUrl)}
+                            className="rounded-xl object-cover shadow-lg cursor-zoom-in"
+                            style={{
+                              height: img.key === "portrait" ? 180 : img.key === "square" ? 120 : 90,
+                              width:  img.key === "portrait" ? 100 : img.key === "square" ? 120 : 160,
+                            }}/>
+                          <div className="text-[10px] text-center" style={{color: t.textMuted}}>{img.label}</div>
+                          <button onClick={() => { const a=document.createElement("a"); a.href=img.dataUrl; a.download=`dalle-${img.key}-${agBrief?.app_name||"banner"}.png`; a.click(); }}
+                            className="w-full text-[10px] py-1 rounded-lg bg-violet-600/20 text-violet-400 font-medium hover:bg-violet-600/40 transition-all">⬇ Tải</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Concept summary */}
                 {agBrief && (
