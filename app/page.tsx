@@ -439,7 +439,7 @@ export default function Home() {
         i.onload = () => res(i); i.onerror = rej; i.src = src;
       });
 
-      const compositeWithIcon = async (baseDataUrl: string, iconDataUrl: string | null): Promise<string> => {
+      const compositeWithIcon = async (baseDataUrl: string, iconDataUrl: string | null, appBrief: Brief | null): Promise<string> => {
         const base = await loadImg(baseDataUrl);
         const canvas = document.createElement("canvas");
         canvas.width = base.width; canvas.height = base.height;
@@ -447,10 +447,34 @@ export default function Home() {
         ctx.drawImage(base, 0, 0);
         if (iconDataUrl) {
           const icon = await loadImg(iconDataUrl);
-          // Place real icon top-left, sized ~8% of shorter dimension with rounded clip
-          const s = Math.round(Math.min(base.width, base.height) * 0.10);
-          const pad = Math.round(s * 0.25);
-          const x = pad, y = pad, r = s * 0.22;
+          // Icon size: ~9% of shorter dimension, min 40px
+          const s = Math.max(40, Math.round(Math.min(base.width, base.height) * 0.09));
+          const pad = Math.round(s * 0.30);
+          const x = pad, y = pad, r = s * 0.24;
+          // Draw semi-transparent pill background behind icon+name
+          const nameFont = Math.round(s * 0.38);
+          const appNameText = appBrief?.app_name || "";
+          ctx.font = `bold ${nameFont}px -apple-system, Arial, sans-serif`;
+          const textW = appNameText ? ctx.measureText(appNameText).width : 0;
+          const pillW = s + (appNameText ? textW + pad * 1.5 : 0) + pad;
+          const pillH = s + pad;
+          ctx.save();
+          ctx.fillStyle = "rgba(0,0,0,0.45)";
+          const pr = pillH / 2;
+          ctx.beginPath();
+          ctx.moveTo(pad * 0.5 + pr, pad * 0.5);
+          ctx.lineTo(pad * 0.5 + pillW - pr, pad * 0.5);
+          ctx.quadraticCurveTo(pad * 0.5 + pillW, pad * 0.5, pad * 0.5 + pillW, pad * 0.5 + pr);
+          ctx.lineTo(pad * 0.5 + pillW, pad * 0.5 + pillH - pr);
+          ctx.quadraticCurveTo(pad * 0.5 + pillW, pad * 0.5 + pillH, pad * 0.5 + pillW - pr, pad * 0.5 + pillH);
+          ctx.lineTo(pad * 0.5 + pr, pad * 0.5 + pillH);
+          ctx.quadraticCurveTo(pad * 0.5, pad * 0.5 + pillH, pad * 0.5, pad * 0.5 + pillH - pr);
+          ctx.lineTo(pad * 0.5, pad * 0.5 + pr);
+          ctx.quadraticCurveTo(pad * 0.5, pad * 0.5, pad * 0.5 + pr, pad * 0.5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+          // Draw icon with rounded corners
           ctx.save();
           ctx.beginPath();
           ctx.moveTo(x + r, y); ctx.lineTo(x + s - r, y);
@@ -462,6 +486,15 @@ export default function Home() {
           ctx.closePath(); ctx.clip();
           ctx.drawImage(icon, x, y, s, s);
           ctx.restore();
+          // Draw app name text next to icon
+          if (appNameText) {
+            ctx.font = `bold ${nameFont}px -apple-system, Arial, sans-serif`;
+            ctx.fillStyle = "#ffffff";
+            ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 4;
+            ctx.textBaseline = "middle";
+            ctx.fillText(appNameText, x + s + pad * 0.6, y + s / 2);
+            ctx.shadowBlur = 0;
+          }
         }
         return canvas.toDataURL("image/png");
       };
@@ -469,7 +502,7 @@ export default function Home() {
       const dalleWithIcon: typeof dalleImages = await Promise.all(
         dalleImages.map(async img => ({
           ...img,
-          dataUrl: await compositeWithIcon(img.dataUrl, iconB64),
+          dataUrl: await compositeWithIcon(img.dataUrl, iconB64, brief),
         }))
       );
       setAgDalleImages(dalleWithIcon);

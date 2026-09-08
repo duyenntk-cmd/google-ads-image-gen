@@ -36,17 +36,17 @@ function buildPrompt(brief: Brief, ratio: "portrait" | "square" | "landscape", u
 App name: "${brief.app_name}"
 Layout: ${layoutMap[ratio]}
 Design elements to include:
-- App icon (circular, top-left area)
-- Illustrated 3D character or mascot relevant to the app (friendly, modern style)
+- Illustrated 3D character or mascot relevant to the app (friendly, modern style, prominent)
 - Smartphone mockup showing the app's UI/interface
-- Bold headline: "${brief.headline}"
-- Supporting text: "${brief.subheadline || ""}"
-- CTA button with text: "${brief.cta_text}" (rounded, prominent)
-- Google Play / App Store badge at bottom
-Color scheme: primary ${brief.primary_color}, accent ${brief.accent_color}, use white for text on dark backgrounds
-Visual style: ${moodMap[brief.mood] || brief.mood}, premium advertising quality
+- Bold headline text: "${brief.headline}"
+- Supporting subtext: "${brief.subheadline || ""}"
+- Rounded CTA button with text: "${brief.cta_text}" (prominent, high contrast)
+- Google Play badge at the bottom
+Color scheme: primary ${brief.primary_color}, accent ${brief.accent_color}, white text on dark areas
+Visual style: ${moodMap[brief.mood] || brief.mood}, premium ad agency quality
 ${userPrompt ? `Creative direction: ${userPrompt}` : ""}
-Output requirements: photorealistic smartphone mockup, crisp readable text, professional ad agency quality, fills entire canvas, no watermarks, no borders, no lorem ipsum text.`.trim();
+CRITICAL: Do NOT draw any app icon, circular logo, avatar, or brand mark anywhere in the image — leave the top-left corner area completely blank/empty. The real app icon will be composited on top separately.
+Output: fills entire canvas, crisp legible text, no watermarks, no lorem ipsum, no borders.`.trim();
 }
 
 export async function POST(req: NextRequest) {
