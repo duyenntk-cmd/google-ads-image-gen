@@ -292,7 +292,7 @@ export default function Home() {
   const [agIcon, setAgIcon] = useState<string|null>(null);
   const [agGenStatus, setAgGenStatus] = useState("");
   const [agDalleImages, setAgDalleImages] = useState<{key:string;label:string;dataUrl:string}[]>([]);
-  const [agQuality, setAgQuality] = useState<"standard"|"hd">("standard");
+  const [agQuality, setAgQuality] = useState<"low"|"medium"|"high">("high");
   const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
   const [agZipBase64, setAgZipBase64] = useState("");
   const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
@@ -2057,15 +2057,15 @@ export default function Home() {
                 {/* Quality toggle */}
                 <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                   <div>
-                    <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng DALL-E 3</div>
-                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>HD: đẹp hơn · Standard: nhanh hơn & rẻ hơn (~$0.04/ảnh vs $0.08/ảnh)</div>
+                    <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng ảnh AI</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>High: đẹp nhất · Medium: cân bằng · Low: nhanh & rẻ nhất</div>
                   </div>
                   <div className="flex gap-1 rounded-lg p-0.5 ml-3 flex-shrink-0" style={{backgroundColor: t.border}}>
-                    {(["standard","hd"] as const).map(q => (
+                    {(["low","medium","high"] as const).map(q => (
                       <button key={q} onClick={() => setAgQuality(q)}
-                        className="px-3 py-1 rounded-md text-xs font-semibold transition-all"
+                        className="px-3 py-1 rounded-md text-xs font-semibold transition-all capitalize"
                         style={agQuality===q?{backgroundColor:"#7C3AED",color:"#fff"}:{color:t.textMuted}}>
-                        {q === "standard" ? "Standard" : "HD"}
+                        {q}
                       </button>
                     ))}
                   </div>
