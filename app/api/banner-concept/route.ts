@@ -39,28 +39,30 @@ export async function POST(req: NextRequest) {
         image_url: { url: s, detail: "low" as const },
       }));
 
-    const systemPrompt = `You are a senior Google Ads creative director specializing in mobile app advertising.
-Analyze the app screenshots and the user's design brief, then output a JSON design concept for generating 20 banner ads.
+    const systemPrompt = `You are a world-class Google Ads creative director at a top mobile advertising agency. You've shipped campaigns for apps with 100M+ downloads.
 
-Return ONLY valid JSON matching this exact schema (no markdown, no explanation):
+Analyze the app screenshots and user brief. Extract the app's true visual identity (real brand colors, real design language) and output the PERFECT design concept for generating high-converting Google Ads banners.
+
+Return ONLY valid JSON (no markdown, no explanation):
 {
-  "headline": "string (max 30 chars, punchy benefit)",
-  "subheadline": "string (max 60 chars, supporting benefit)",
-  "cta_text": "string (max 15 chars, action verb)",
-  "primary_color": "#RRGGBB (dominant brand color)",
-  "secondary_color": "#RRGGBB (complementary color)",
-  "accent_color": "#RRGGBB (CTA/highlight color)",
-  "mood": "bold | lifestyle | minimal | product",
+  "headline": "string (max 30 chars — punchy, benefit-driven, creates desire)",
+  "subheadline": "string (max 60 chars — supporting proof point or feature highlight)",
+  "cta_text": "string (max 12 chars — strong action verb, urgent)",
+  "primary_color": "#RRGGBB (exact dominant brand color from screenshots)",
+  "secondary_color": "#RRGGBB (complementary brand color)",
+  "accent_color": "#RRGGBB (CTA button color — must have high contrast against primary)",
+  "mood": "bold | lifestyle | minimal | product | playful | professional",
   "niche": "photo | tool | office | game | health | finance | social | travel",
   "text_zone": "bottom | top | left | right",
   "subject_position": "center | left | right"
 }
 
-Rules:
-- headline MUST be ≤30 characters
-- cta_text MUST be ≤15 characters
-- Choose colors that match the app's visual identity from the screenshots
-- mood: bold=strong contrast, lifestyle=aspirational, minimal=clean, product=feature-focused`;
+CRITICAL RULES:
+- headline: MUST be ≤30 chars. Make it emotionally compelling, not just descriptive. Focus on the #1 user benefit.
+- cta_text: MUST be ≤12 chars. Use urgent action verbs: "Try Free", "Install Now", "Get Started", "Play Free"
+- primary_color: Extract THE ACTUAL dominant color from the app screenshots — don't guess, look at the UI
+- accent_color: Must contrast strongly with primary_color for the CTA button to stand out
+- mood: bold=cinematic high-contrast, lifestyle=aspirational warm, minimal=Apple-style clean, product=feature showcase, playful=vibrant fun, professional=corporate trust`;
 
     const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [
       {

@@ -19,34 +19,95 @@ const SIZES = [
 ] as const;
 
 function buildPrompt(brief: Brief, ratio: "portrait" | "square" | "landscape", userPrompt: string): string {
-  const layoutMap: Record<string, string> = {
-    portrait:  "vertical portrait banner (9:16). Smartphone centered, hero character upper right, headline and CTA on left/bottom.",
-    square:    "square banner (1:1). Smartphone on right side, illustrated character beside it, bold headline and CTA button on left.",
-    landscape: "horizontal landscape banner (16:9). Smartphone mockup with app UI on the right. Illustrated AI character, bold headline text, and CTA button on the left side.",
+
+  const moodStyle: Record<string, string> = {
+    bold:         "bold high-contrast design with deep shadows and vivid pop colors, electric energy, cinematic lighting",
+    lifestyle:    "warm aspirational lifestyle feel, soft golden-hour lighting, premium brand aesthetic",
+    minimal:      "ultra-clean minimalist design, generous whitespace, refined typography, subtle gradients",
+    product:      "sharp product showcase style, crisp tech aesthetics, clean studio lighting, feature-focused layout",
+    playful:      "fun vibrant illustration style, bright cheerful colors, rounded shapes, friendly characters",
+    professional: "sophisticated corporate design, authoritative color palette, premium business aesthetic",
   };
 
-  const moodMap: Record<string, string> = {
-    bold:      "bold, high-energy, strong contrast",
-    lifestyle: "warm, aspirational, lifestyle feel",
-    minimal:   "clean, minimal, elegant, lots of whitespace",
-    product:   "product showcase, feature-focused, tech-savvy",
+  const nicheVisual: Record<string, string> = {
+    photo:    "camera lens flare effects, colorful bokeh, a glowing phone screen showing a stunning edited photo",
+    tool:     "productivity dashboard interface on phone screen, task completion checkmarks, efficiency icons",
+    office:   "clean document/spreadsheet UI on phone screen, professional workspace aesthetic",
+    game:     "game character render, particle effects, epic fantasy/action visual style",
+    health:   "wellness lifestyle imagery, soft greens and blues, healthy glow lighting",
+    finance:  "rising chart/graph elements, gold accent details, wealth and success aesthetic",
+    social:   "connected people, chat bubbles, vibrant social interactions on phone screen",
+    travel:   "stunning destination photography, wanderlust mood, travel adventure aesthetic",
   };
 
-  return `Create a professional Google App Campaign advertisement banner.
-App name: "${brief.app_name}"
-Layout: ${layoutMap[ratio]}
-Design elements to include:
-- Illustrated 3D character or mascot relevant to the app (friendly, modern style, prominent)
-- Smartphone mockup showing the app's UI/interface
-- Bold headline text: "${brief.headline}"
-- Supporting subtext: "${brief.subheadline || ""}"
-- Rounded CTA button with text: "${brief.cta_text}" (prominent, high contrast)
-- Google Play badge at the bottom
-Color scheme: primary ${brief.primary_color}, accent ${brief.accent_color}, white text on dark areas
-Visual style: ${moodMap[brief.mood] || brief.mood}, premium ad agency quality
-${userPrompt ? `Creative direction: ${userPrompt}` : ""}
-STRICT: Do NOT include any app icon, logo, circle badge, or brand mark anywhere in the image. No icons at all. Leave top 8% of canvas as a plain dark/colored strip for branding overlay.
-Output: fills entire canvas, crisp legible text, no watermarks, no lorem ipsum, no borders.`.trim();
+  const style = moodStyle[brief.mood] || moodStyle.bold;
+  const visual = nicheVisual[brief.niche] || "";
+
+  // Layout-specific composition instructions
+  const compositions: Record<string, string> = {
+    portrait: `
+CANVAS: Full-bleed vertical 9:16 format, fills every pixel edge-to-edge.
+BACKGROUND: Rich deep gradient from ${brief.primary_color} at top to a darker tone at bottom, with subtle diagonal light rays or bokeh particles for depth. ${visual}
+TOP ZONE (top 10% of canvas): Flat solid dark strip — leave completely empty, no text, no graphics, plain color (this zone is reserved for app icon overlay).
+UPPER SECTION (10-50% of canvas): Centered hero visual — a beautifully rendered 3D smartphone mockup tilted at a slight angle showing the app UI on screen. The phone has a soft drop shadow and a rim light glow. Behind the phone, large abstract geometric shapes or glowing orbs in ${brief.accent_color} add depth.
+CHARACTER: A friendly 3D-rendered mascot or abstract 3D icon element floats near the upper-right corner of the phone, catching the light.
+LOWER SECTION (50-85% of canvas):
+  - Headline text: "${brief.headline}" — Very large, bold, white text, 2-3 lines maximum, centered with tight line spacing. Use a modern sans-serif weight.
+  - Subheadline: "${brief.subheadline}" — Smaller, lighter weight, soft white/80% opacity, centered below headline.
+BOTTOM ZONE (85-100%): A prominent pill-shaped CTA button with text "${brief.cta_text}", filled with ${brief.accent_color}, white bold text, centered. Below it a very small Google Play badge in white.`,
+
+    square: `
+CANVAS: Perfect square 1:1 format, fills every pixel edge-to-edge.
+BACKGROUND: Dynamic split-design background — left half is a rich gradient in ${brief.primary_color} tones, right half slightly lighter with a large glowing orb or bokeh effect. ${visual}
+TOP ZONE (top 10% of canvas): Flat solid dark strip — leave completely empty, no text, no graphics (reserved for app icon overlay).
+LEFT SIDE (10-90% height, left 45% width):
+  - Headline: "${brief.headline}" — Large bold white text, 2-3 lines, left-aligned. Strong typographic hierarchy.
+  - Subheadline: "${brief.subheadline}" — Smaller, muted white, left-aligned.
+  - CTA button: Pill-shaped button with "${brief.cta_text}" text, ${brief.accent_color} fill, white text, left-aligned.
+RIGHT SIDE (10-90% height, right 55% width):
+  - Large 3D smartphone mockup (slightly angled, front-facing) showing the app UI. The phone occupies most of this zone vertically. Soft shadow beneath it.
+  - Glowing accent shapes in ${brief.accent_color} behind the phone for visual pop.
+BOTTOM: Google Play micro-badge, bottom-center.`,
+
+    landscape: `
+CANVAS: Full-bleed horizontal 16:9 format, fills every pixel edge-to-edge.
+BACKGROUND: Immersive gradient background — darker on left, gradually brightening toward right — in the ${brief.primary_color} color family. Subtle light sweep or particle effects for premium feel. ${visual}
+TOP ZONE (top 10% of canvas): Flat solid dark strip — leave completely empty (reserved for app icon overlay).
+LEFT SECTION (10-100% height, left 50% width):
+  - Large headline: "${brief.headline}" — Extra-bold white text, 2-3 lines, left-aligned, vertically centered in left half.
+  - Subheadline: "${brief.subheadline}" — Smaller, lighter, left-aligned below headline.
+  - CTA button: Large pill shape with "${brief.cta_text}", filled ${brief.accent_color}, white text. Left-aligned below subheadline.
+  - Small Google Play badge below CTA.
+RIGHT SECTION (10-100% height, right 50% width):
+  - Hero 3D smartphone mockup: Large, front-facing, slightly angled left. Screen shows the app's clean UI. Phone has realistic glass sheen, drop shadow, and ${brief.accent_color} rim light glow.
+  - A 3D character or floating abstract shapes orbit near the phone, adding dynamism.
+  - Decorative ${brief.accent_color} glowing circle or arc behind the phone for depth.`,
+  };
+
+  return `You are a world-class digital ad creative designer at a top-tier agency. Create a stunning, award-worthy Google App Campaign banner image.
+
+App: "${brief.app_name}"
+Design mood: ${style}
+${userPrompt ? `Client brief: ${userPrompt}` : ""}
+
+COMPOSITION SPEC:
+${compositions[ratio]}
+
+DESIGN QUALITY REQUIREMENTS:
+- Premium ad agency quality — think Apple, Spotify, or top mobile game launch ads
+- Photorealistic 3D phone mockup with accurate screen reflection and glass sheen
+- Rich color depth: use the full ${brief.primary_color} → ${brief.accent_color} palette with smooth gradients
+- Cinematic lighting: volumetric light rays, soft glows, realistic shadows and highlights
+- Typography is crisp, modern, perfectly kerned — text must be 100% legible at small sizes
+- Every element has intentional visual hierarchy — eye flows naturally from hero image → headline → CTA
+- Background is rich and layered, NOT flat or boring
+
+STRICT RULES:
+- Top 10% of canvas: EMPTY flat dark strip only — NO text, NO icons, NO graphics whatsoever
+- NO app store icons, NO round badge icons, NO brand logos of any kind
+- NO watermarks, NO borders, NO lorem ipsum, NO placeholder text
+- Fills 100% of canvas edge to edge with no padding or whitespace at edges
+- All text must be clearly readable — no text lost in background`.trim();
 }
 
 export async function POST(req: NextRequest) {
