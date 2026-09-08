@@ -2112,7 +2112,7 @@ export default function Home() {
                     </button>
                   </div>
                   <textarea value={agPrompt} onChange={e => setAgPrompt(e.target.value)} rows={3}
-                    placeholder="VD: Bold cinematic style, purple gradients, showcase phone mockup with AI-powered editing UI, inspire creativity..."
+                    placeholder="VD: Phong cách cinematic bold, gradient tím đậm, phone mockup hiển thị giao diện chỉnh ảnh AI, truyền cảm hứng sáng tạo cho người dùng 18-35 tuổi..."
                     className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-none"
                     style={inputStyle}/>
                   <p className="text-xs mt-1" style={{color: t.textMuted}}>Nhấn ✨ Auto Prompt để GPT-4o tự viết creative direction từ URL app</p>

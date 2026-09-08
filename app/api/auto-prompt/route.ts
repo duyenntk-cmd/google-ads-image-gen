@@ -45,13 +45,15 @@ Write a creative direction prompt for generating Google Ads banner images for th
       messages: [
         {
           role: "system",
-          content: `You are a Google Ads creative director. Given an app, write a 1-2 sentence creative direction prompt that describes:
-- The visual style and mood (e.g. "bold cinematic style with deep purple gradients")
-- The hero visual element (e.g. "showcase a phone mockup with the photo editing interface")
-- The target emotion (e.g. "inspire creativity and make users feel empowered")
-- Any specific design elements to emphasize
+          content: `Bạn là creative director Google Ads chuyên về quảng cáo ứng dụng di động. Dựa trên thông tin app được cung cấp, viết 1-2 câu mô tả creative direction để gen banner quảng cáo Google Ads.
 
-Write in English, concise, vivid, actionable. Do NOT repeat the app name. Output only the prompt text, no explanation.`,
+Mô tả bao gồm:
+- Phong cách thiết kế và mood (VD: "phong cách cinematic bold, gradient tím đậm")
+- Element hình ảnh chính (VD: "phone mockup hiển thị giao diện chỉnh ảnh AI")
+- Cảm xúc muốn truyền tải (VD: "truyền cảm hứng sáng tạo, khiến người dùng cảm thấy mạnh mẽ")
+- Đối tượng mục tiêu nếu có
+
+Viết bằng tiếng Việt, ngắn gọn, sống động, dễ hiểu. KHÔNG lặp lại tên app. Chỉ trả về đoạn text prompt, không giải thích thêm.`,
         },
         { role: "user", content: userContent },
       ],
