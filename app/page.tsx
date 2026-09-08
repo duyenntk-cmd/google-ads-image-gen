@@ -431,33 +431,69 @@ export default function Home() {
         else genErrors.push(String(r.reason));
       }
       if (dalleImages.length === 0) throw new Error(genErrors.join("; "));
-      setAgDalleImages(dalleImages);
 
-      // Step 4: resize 3 DALL-E images → 20 Google Ads sizes via canvas (blur-extend, no text)
+      // Step 3b: composite real app icon onto each DALL-E base image
+      setAgGenStatus("🏷️ Ghép icon app thật vào ảnh...");
+      const loadImg = (src: string): Promise<HTMLImageElement> => new Promise((res, rej) => {
+        const i = new Image(); i.crossOrigin = "anonymous";
+        i.onload = () => res(i); i.onerror = rej; i.src = src;
+      });
+
+      const compositeWithIcon = async (baseDataUrl: string, iconDataUrl: string | null): Promise<string> => {
+        const base = await loadImg(baseDataUrl);
+        const canvas = document.createElement("canvas");
+        canvas.width = base.width; canvas.height = base.height;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(base, 0, 0);
+        if (iconDataUrl) {
+          const icon = await loadImg(iconDataUrl);
+          // Place real icon top-left, sized ~8% of shorter dimension with rounded clip
+          const s = Math.round(Math.min(base.width, base.height) * 0.10);
+          const pad = Math.round(s * 0.25);
+          const x = pad, y = pad, r = s * 0.22;
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(x + r, y); ctx.lineTo(x + s - r, y);
+          ctx.quadraticCurveTo(x + s, y, x + s, y + r);
+          ctx.lineTo(x + s, y + s - r);
+          ctx.quadraticCurveTo(x + s, y + s, x + s - r, y + s);
+          ctx.lineTo(x + r, y + s); ctx.quadraticCurveTo(x, y + s, x, y + s - r);
+          ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+          ctx.closePath(); ctx.clip();
+          ctx.drawImage(icon, x, y, s, s);
+          ctx.restore();
+        }
+        return canvas.toDataURL("image/png");
+      };
+
+      const dalleWithIcon: typeof dalleImages = await Promise.all(
+        dalleImages.map(async img => ({
+          ...img,
+          dataUrl: await compositeWithIcon(img.dataUrl, iconB64),
+        }))
+      );
+      setAgDalleImages(dalleWithIcon);
+
+      // Step 4: resize 3 base images → 20 Google Ads sizes via canvas
       setAgGenStatus("📐 Resize ra 20 kích thước chuẩn Google Ads...");
-      // Map each ad size to nearest DALL-E aspect ratio
       const { AD_SIZES } = await import("@/lib/adSizes");
       const imgByKey: Record<string, string> = {};
-      for (const img of dalleImages) imgByKey[img.key] = img.dataUrl;
+      for (const img of dalleWithIcon) imgByKey[img.key] = img.dataUrl;
+
+      // Pick best base ratio: landscape→landscape, portrait→portrait, otherwise square
       const getBestBase = (w: number, h: number) => {
         const ratio = w / h;
-        if (ratio > 1.4) return imgByKey["landscape"] || dalleImages[0]?.dataUrl;
-        if (ratio < 0.8) return imgByKey["portrait"]  || dalleImages[0]?.dataUrl;
-        return imgByKey["square"] || dalleImages[0]?.dataUrl;
+        if (ratio >= 1.5) return imgByKey["landscape"] || dalleWithIcon[0]?.dataUrl;
+        if (ratio <= 0.75) return imgByKey["portrait"]  || dalleWithIcon[0]?.dataUrl;
+        return imgByKey["square"] || dalleWithIcon[0]?.dataUrl;
       };
-      const generated = await generateAllBanners(
-        brief,
-        null, // no single bg — each size picks its own base below
-        undefined,
-        iconB64,
-        true // noText: pure resize of DALL-E image
-      );
-      // Override each banner with the correct DALL-E base resized
+
       const { default: JSZipMod } = await import("jszip");
       const zip = new JSZipMod();
       const top5Folder = zip.folder("top5")!;
       const allFolder   = zip.folder("all_sizes")!;
-      const finalPreviews: typeof generated = [];
+      const finalPreviews: {key:string;width:number;height:number;label:string;isTop5:boolean;dataUrl:string}[] = [];
+
       for (const sz of AD_SIZES) {
         const baseDataUrl = getBestBase(sz.width, sz.height);
         const canvas = document.createElement("canvas");
@@ -466,15 +502,21 @@ export default function Home() {
         await new Promise<void>(resolve => {
           const img = new Image();
           img.onload = () => {
-            // blur-extend background
-            ctx.save(); ctx.filter = "blur(24px)";
-            const cs = Math.max(sz.width/img.width, sz.height/img.height);
-            ctx.drawImage(img, (sz.width-img.width*cs)/2, (sz.height-img.height*cs)/2, img.width*cs, img.height*cs);
-            ctx.restore();
-            ctx.fillStyle = "rgba(0,0,0,0.06)"; ctx.fillRect(0,0,sz.width,sz.height);
-            // sharp contain
-            const cs2 = Math.min(sz.width/img.width, sz.height/img.height);
-            ctx.drawImage(img, (sz.width-img.width*cs2)/2, (sz.height-img.height*cs2)/2, img.width*cs2, img.height*cs2);
+            const srcRatio = img.width / img.height;
+            const dstRatio = sz.width / sz.height;
+            if (Math.abs(srcRatio - dstRatio) < 0.15) {
+              // Similar ratio → stretch to fill (minimal distortion)
+              ctx.drawImage(img, 0, 0, sz.width, sz.height);
+            } else {
+              // Different ratio → blur-extend + contain (no distortion)
+              ctx.save(); ctx.filter = "blur(28px)";
+              const cs = Math.max(sz.width / img.width, sz.height / img.height);
+              ctx.drawImage(img, (sz.width - img.width * cs) / 2, (sz.height - img.height * cs) / 2, img.width * cs, img.height * cs);
+              ctx.restore();
+              ctx.fillStyle = "rgba(0,0,0,0.05)"; ctx.fillRect(0, 0, sz.width, sz.height);
+              const cs2 = Math.min(sz.width / img.width, sz.height / img.height);
+              ctx.drawImage(img, (sz.width - img.width * cs2) / 2, (sz.height - img.height * cs2) / 2, img.width * cs2, img.height * cs2);
+            }
             resolve();
           };
           img.src = baseDataUrl;
