@@ -51,21 +51,23 @@ Output requirements: photorealistic smartphone mockup, crisp readable text, prof
 
 export async function POST(req: NextRequest) {
   try {
-    const { brief, userPrompt, quality = "medium" } = await req.json() as {
+    const { brief, userPrompt, quality = "medium", ratioKey } = await req.json() as {
       brief: Brief;
       userPrompt?: string;
       quality?: "low" | "medium" | "high" | "auto";
+      ratioKey?: string; // optional: generate only 1 ratio (called 3x from client to avoid timeout)
     };
 
     if (!brief?.app_name) {
       return NextResponse.json({ success: false, error: "Missing brief" }, { status: 400 });
     }
 
-    // Generate 3 base images sequentially to avoid rate limits (gpt-image-1 is slow)
+    const sizesToGen = ratioKey ? SIZES.filter(s => s.key === ratioKey) : SIZES;
+
     const images: { key: string; label: string; dataUrl: string }[] = [];
     const errors: string[] = [];
 
-    for (const sz of SIZES) {
+    for (const sz of sizesToGen) {
       try {
         const prompt = buildPrompt(brief, sz.key, userPrompt || "");
         const res = await openai.images.generate({

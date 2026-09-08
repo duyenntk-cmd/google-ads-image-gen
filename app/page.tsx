@@ -376,13 +376,20 @@ export default function Home() {
     if (!agUrl.trim()) return;
     setAgStep("generating"); setAgError(""); setAgGenStatus("📱 Đang lấy thông tin app...");
     try {
+      // helper: safe json parse
+      const safeJson = async (res: Response, label: string) => {
+        const text = await res.text();
+        try { return JSON.parse(text); }
+        catch { throw new Error(`${label} returned invalid response (HTTP ${res.status}): ${text.slice(0, 200)}`); }
+      };
+
       // Step 1: fetch app info + screenshots for GPT-4o analysis
       const ssRes = await fetch("/api/screenshots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ appUrl: agUrl, country: agCountry }),
       });
-      const ssData = await ssRes.json();
+      const ssData = await safeJson(ssRes, "screenshots");
       if (!ssData.success) throw new Error(ssData.error);
       const shots: string[] = ssData.screenshots || [];
       const appName: string = ssData.appName || "";
@@ -400,21 +407,30 @@ export default function Home() {
           screenshots: shots.slice(0, 3), appUrl: agUrl,
         }),
       });
-      const conceptData = await conceptRes.json();
+      const conceptData = await safeJson(conceptRes, "banner-concept");
       if (!conceptData.success) throw new Error(conceptData.error);
       const brief: Brief = conceptData.brief;
       setAgBrief(brief);
 
-      // Step 3: DALL-E 3 generates 3 base images (portrait / square / landscape)
-      setAgGenStatus("🎨 DALL-E 3 đang thiết kế 3 ảnh base (portrait · square · landscape)...");
-      const genRes = await fetch("/api/banner-generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brief, userPrompt: agPrompt, quality: agQuality }),
-      });
-      const genData = await genRes.json();
-      if (!genData.success) throw new Error(genData.error);
-      const dalleImages: {key:string;label:string;dataUrl:string}[] = genData.images;
+      // Step 3: gpt-image-1 — call 3 parallel requests (1 per ratio) to avoid timeout
+      setAgGenStatus("🎨 AI đang thiết kế 3 ảnh — portrait · square · landscape (1-2 phút)...");
+      const genResults = await Promise.allSettled(
+        (["portrait","square","landscape"] as const).map(ratioKey =>
+          fetch("/api/banner-generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ brief, userPrompt: agPrompt, quality: agQuality, ratioKey }),
+          }).then(r => safeJson(r, `banner-generate:${ratioKey}`))
+        )
+      );
+      const dalleImages: {key:string;label:string;dataUrl:string}[] = [];
+      const genErrors: string[] = [];
+      for (const r of genResults) {
+        if (r.status === "fulfilled" && r.value.success) dalleImages.push(...(r.value.images || []));
+        else if (r.status === "fulfilled") genErrors.push(r.value.error);
+        else genErrors.push(String(r.reason));
+      }
+      if (dalleImages.length === 0) throw new Error(genErrors.join("; "));
       setAgDalleImages(dalleImages);
 
       // Step 4: resize 3 DALL-E images → 20 Google Ads sizes via canvas (blur-extend, no text)
