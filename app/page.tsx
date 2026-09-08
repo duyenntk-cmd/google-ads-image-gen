@@ -293,6 +293,7 @@ export default function Home() {
   const [agGenStatus, setAgGenStatus] = useState("");
   const [agDalleImages, setAgDalleImages] = useState<{key:string;label:string;dataUrl:string}[]>([]);
   const [agQuality, setAgQuality] = useState<"low"|"medium"|"high">("high");
+  const [agAutoPromptLoading, setAgAutoPromptLoading] = useState(false);
   const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
   const [agZipBase64, setAgZipBase64] = useState("");
   const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
@@ -370,6 +371,40 @@ export default function Home() {
       if (data.success) loadAdsCampaigns(adsSelectedAccount);
     } catch (e) { setAdsResult({ success: false, error: String(e) }); }
     setAdsLaunching(false);
+  };
+
+  const handleAutoPrompt = async () => {
+    if (!agUrl.trim()) return;
+    setAgAutoPromptLoading(true);
+    try {
+      // Quick fetch app info
+      const ssRes = await fetch("/api/screenshots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appUrl: agUrl, country: agCountry }),
+      });
+      const text = await ssRes.text();
+      let ssData: { success: boolean; appName?: string; screenshots?: string[]; niche?: string; error?: string };
+      try { ssData = JSON.parse(text); } catch { throw new Error("Invalid response"); }
+      if (!ssData.success) throw new Error(ssData.error);
+
+      const promptRes = await fetch("/api/auto-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appName: ssData.appName || "",
+          niche: ssData.niche,
+          screenshots: (ssData.screenshots || []).slice(0, 2),
+          country: agCountry,
+          language: agLang,
+        }),
+      });
+      const promptText = await promptRes.text();
+      let promptData: { success: boolean; prompt?: string; error?: string };
+      try { promptData = JSON.parse(promptText); } catch { throw new Error("Invalid prompt response"); }
+      if (promptData.success && promptData.prompt) setAgPrompt(promptData.prompt);
+    } catch { /* silent fail */ }
+    finally { setAgAutoPromptLoading(false); }
   };
 
   const handleAgAnalyze = async () => {
@@ -2051,14 +2086,36 @@ export default function Home() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
-                    💡 Design Brief / Prompt
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>
+                      💡 Design Brief / Prompt
+                    </label>
+                    <button
+                      onClick={handleAutoPrompt}
+                      disabled={!agUrl.trim() || agAutoPromptLoading}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{
+                        background: agAutoPromptLoading ? "transparent" : "linear-gradient(135deg,#7C3AED,#EC4899)",
+                        color: "#fff",
+                        border: agAutoPromptLoading ? "1px solid #7C3AED44" : "none",
+                      }}
+                      title="Tự động tạo prompt từ URL app"
+                    >
+                      {agAutoPromptLoading ? (
+                        <>
+                          <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>
+                          Đang tạo...
+                        </>
+                      ) : (
+                        <>✨ Auto Prompt</>
+                      )}
+                    </button>
+                  </div>
                   <textarea value={agPrompt} onChange={e => setAgPrompt(e.target.value)} rows={3}
-                    placeholder="VD: Tạo banner nhấn mạnh tính năng học ngôn ngữ bằng AI, tone màu tím hiện đại, đối tượng 18-35 tuổi..."
+                    placeholder="VD: Bold cinematic style, purple gradients, showcase phone mockup with AI-powered editing UI, inspire creativity..."
                     className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-none"
                     style={inputStyle}/>
-                  <p className="text-xs mt-1" style={{color: t.textMuted}}>GPT-4o sẽ phân tích app + prompt để tạo concept màu sắc, copy và layout</p>
+                  <p className="text-xs mt-1" style={{color: t.textMuted}}>Nhấn ✨ Auto Prompt để GPT-4o tự viết creative direction từ URL app</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
