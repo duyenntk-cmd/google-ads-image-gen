@@ -445,56 +445,35 @@ export default function Home() {
         canvas.width = base.width; canvas.height = base.height;
         const ctx = canvas.getContext("2d")!;
         ctx.drawImage(base, 0, 0);
+        // Always draw branding bar at top — covers any AI-generated fake icon
+        const barH = Math.round(base.height * 0.10);
+        const iconS = Math.round(barH * 0.72);
+        const pad2 = Math.round((barH - iconS) / 2);
+        const appNameText = appBrief?.app_name || "";
+        // Solid dark bar background (covers AI icon entirely)
+        ctx.fillStyle = "rgba(10,10,20,0.88)";
+        ctx.fillRect(0, 0, base.width, barH);
         if (iconDataUrl) {
           const icon = await loadImg(iconDataUrl);
-          // Icon size: ~9% of shorter dimension, min 40px
-          const s = Math.max(40, Math.round(Math.min(base.width, base.height) * 0.09));
-          const pad = Math.round(s * 0.30);
-          const x = pad, y = pad, r = s * 0.24;
-          // Draw semi-transparent pill background behind icon+name
-          const nameFont = Math.round(s * 0.38);
-          const appNameText = appBrief?.app_name || "";
-          ctx.font = `bold ${nameFont}px -apple-system, Arial, sans-serif`;
-          const textW = appNameText ? ctx.measureText(appNameText).width : 0;
-          const pillW = s + (appNameText ? textW + pad * 1.5 : 0) + pad;
-          const pillH = s + pad;
-          ctx.save();
-          ctx.fillStyle = "rgba(0,0,0,0.45)";
-          const pr = pillH / 2;
-          ctx.beginPath();
-          ctx.moveTo(pad * 0.5 + pr, pad * 0.5);
-          ctx.lineTo(pad * 0.5 + pillW - pr, pad * 0.5);
-          ctx.quadraticCurveTo(pad * 0.5 + pillW, pad * 0.5, pad * 0.5 + pillW, pad * 0.5 + pr);
-          ctx.lineTo(pad * 0.5 + pillW, pad * 0.5 + pillH - pr);
-          ctx.quadraticCurveTo(pad * 0.5 + pillW, pad * 0.5 + pillH, pad * 0.5 + pillW - pr, pad * 0.5 + pillH);
-          ctx.lineTo(pad * 0.5 + pr, pad * 0.5 + pillH);
-          ctx.quadraticCurveTo(pad * 0.5, pad * 0.5 + pillH, pad * 0.5, pad * 0.5 + pillH - pr);
-          ctx.lineTo(pad * 0.5, pad * 0.5 + pr);
-          ctx.quadraticCurveTo(pad * 0.5, pad * 0.5, pad * 0.5 + pr, pad * 0.5);
-          ctx.closePath();
-          ctx.fill();
-          ctx.restore();
-          // Draw icon with rounded corners
+          const ix = pad2, iy = pad2, r2 = iconS * 0.22;
           ctx.save();
           ctx.beginPath();
-          ctx.moveTo(x + r, y); ctx.lineTo(x + s - r, y);
-          ctx.quadraticCurveTo(x + s, y, x + s, y + r);
-          ctx.lineTo(x + s, y + s - r);
-          ctx.quadraticCurveTo(x + s, y + s, x + s - r, y + s);
-          ctx.lineTo(x + r, y + s); ctx.quadraticCurveTo(x, y + s, x, y + s - r);
-          ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+          ctx.moveTo(ix+r2,iy); ctx.lineTo(ix+iconS-r2,iy);
+          ctx.quadraticCurveTo(ix+iconS,iy,ix+iconS,iy+r2);
+          ctx.lineTo(ix+iconS,iy+iconS-r2);
+          ctx.quadraticCurveTo(ix+iconS,iy+iconS,ix+iconS-r2,iy+iconS);
+          ctx.lineTo(ix+r2,iy+iconS); ctx.quadraticCurveTo(ix,iy+iconS,ix,iy+iconS-r2);
+          ctx.lineTo(ix,iy+r2); ctx.quadraticCurveTo(ix,iy,ix+r2,iy);
           ctx.closePath(); ctx.clip();
-          ctx.drawImage(icon, x, y, s, s);
+          ctx.drawImage(icon, ix, iy, iconS, iconS);
           ctx.restore();
-          // Draw app name text next to icon
-          if (appNameText) {
-            ctx.font = `bold ${nameFont}px -apple-system, Arial, sans-serif`;
-            ctx.fillStyle = "#ffffff";
-            ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 4;
-            ctx.textBaseline = "middle";
-            ctx.fillText(appNameText, x + s + pad * 0.6, y + s / 2);
-            ctx.shadowBlur = 0;
-          }
+        }
+        if (appNameText) {
+          const fontSize = Math.round(barH * 0.36);
+          ctx.font = `bold ${fontSize}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
+          ctx.fillStyle = "#ffffff";
+          ctx.textBaseline = "middle";
+          ctx.fillText(appNameText, iconS + pad2 * 2, barH / 2);
         }
         return canvas.toDataURL("image/png");
       };

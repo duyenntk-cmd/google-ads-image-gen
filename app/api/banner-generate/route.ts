@@ -45,7 +45,7 @@ Design elements to include:
 Color scheme: primary ${brief.primary_color}, accent ${brief.accent_color}, white text on dark areas
 Visual style: ${moodMap[brief.mood] || brief.mood}, premium ad agency quality
 ${userPrompt ? `Creative direction: ${userPrompt}` : ""}
-CRITICAL: Do NOT draw any app icon, circular logo, avatar, or brand mark anywhere in the image — leave the top-left corner area completely blank/empty. The real app icon will be composited on top separately.
+STRICT: Do NOT include any app icon, logo, circle badge, or brand mark anywhere in the image. No icons at all. Leave top 8% of canvas as a plain dark/colored strip for branding overlay.
 Output: fills entire canvas, crisp legible text, no watermarks, no lorem ipsum, no borders.`.trim();
 }
 
