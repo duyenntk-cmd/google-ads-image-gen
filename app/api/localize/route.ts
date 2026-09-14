@@ -142,4 +142,4 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export { MARKETS };
+// MARKETS moved to lib/localize-markets.ts
