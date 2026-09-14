@@ -1,3251 +1,884 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
-import { useSession, signOut } from "next-auth/react";
-import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
-import { AD_SIZES } from "@/lib/adSizes";
-import { generateAllBanners } from "@/lib/canvasGen";
+import { useRef, useState } from "react";
+import JSZip from "jszip";
+import { AD_SIZES, GEN_SIZES, pickBaseRatio, RatioKey } from "@/lib/adSizes";
 
-interface Brief {
-  app_name: string; headline: string; subheadline: string; cta_text: string;
-  primary_color: string; secondary_color: string; accent_color: string;
-  background_style: string; mood: string; best_frame_index: number;
-  niche: string; app_store_url: string; play_store_url: string;
-  subject_position?: string; text_zone?: string;
+/* ----------------------------- types ----------------------------- */
+interface AppInfo {
+  appName: string;
+  iconBase64: string | null;
+  screenshots: string[];
 }
-interface Preview { key: string; width: number; height: number; label: string; isTop5: boolean; dataUrl: string; }
-type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
+interface Brief {
+  app_name: string;
+  tagline: string;
+  headline: string;
+  subheadline: string;
+  cta_text: string;
+  primary_color: string;
+  secondary_color: string;
+  accent_color: string;
+  mood: string;
+  niche: string;
+  text_zone: string;
+  subject_position: string;
+}
+interface FinalBanner {
+  key: string;
+  width: number;
+  height: number;
+  usage: string;
+  dataUrl: string;
+}
 
-const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
-  photo:  { primary_color: "#7B2FBE", secondary_color: "#E91E8C", accent_color: "#FF6B35", headline: "Edit Photos Like a Pro",      subheadline: "100+ Filters & AI Tools",   cta_text: "Edit for Free"    },
-  tool:   { primary_color: "#2563EB", secondary_color: "#60A5FA", accent_color: "#059669", headline: "Get More Done in Less Time", subheadline: "Smart tools for every task", cta_text: "Try Free"         },
-  office: { primary_color: "#1E3A5F", secondary_color: "#2563EB", accent_color: "#3B82F6", headline: "Work Smarter with Your Team",subheadline: "Documents, Sheets & More",   cta_text: "Start Free Trial" },
-};
+/* ----------------------------- generic helpers ----------------------------- */
+async function safeJson(res: Response, label: string) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label}: phản hồi không hợp lệ (HTTP ${res.status}) ${text.slice(0, 160)}`);
+  }
+}
+function loadImg(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Không load được ảnh."));
+    img.src = src;
+  });
+}
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(new Error("Đọc file lỗi."));
+    r.readAsDataURL(file);
+  });
+}
+function clamp(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v));
+}
+function hexToRgb(hex: string): [number, number, number] {
+  let h = (hex || "").replace("#", "").trim();
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (h.length !== 6) return [26, 26, 46];
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function hexA(hex: string, a: number) {
+  const [r, g, b] = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${a})`;
+}
+function contrastColor(hex: string) {
+  const [r, g, b] = hexToRgb(hex);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? "#141414" : "#ffffff";
+}
+function lighten(hex: string, amt: number) {
+  const [r, g, b] = hexToRgb(hex);
+  const f = (c: number) => Math.round(c + (255 - c) * amt);
+  return `rgb(${f(r)},${f(g)},${f(b)})`;
+}
+function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = (text || "").split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const test = cur ? cur + " " + w : w;
+    if (ctx.measureText(test).width > maxW && cur) {
+      lines.push(cur);
+      cur = w;
+    } else cur = test;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+function ellipsize(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return t + "…";
+}
 
-const LANGUAGES = [
-  { code: "English",            label: "🇺🇸 English" },
-  { code: "Vietnamese",         label: "🇻🇳 Tiếng Việt" },
-  { code: "Indonesian",         label: "🇮🇩 Bahasa Indonesia" },
-  { code: "Thai",               label: "🇹🇭 ภาษาไทย" },
-  { code: "Korean",             label: "🇰🇷 한국어" },
-  { code: "Japanese",           label: "🇯🇵 日本語" },
-  { code: "Chinese Simplified", label: "🇨🇳 中文简体" },
-  { code: "Arabic",             label: "🇸🇦 العربية" },
-  { code: "Spanish",            label: "🇪🇸 Español" },
-  { code: "Portuguese",         label: "🇧🇷 Português" },
-  { code: "Russian",            label: "🇷🇺 Русский" },
-  { code: "French",             label: "🇫🇷 Français" },
-  { code: "German",             label: "🇩🇪 Deutsch" },
-  { code: "Hindi",              label: "🇮🇳 हिन्दी" },
-  { code: "Bengali",            label: "🇧🇩 বাংলা" },
-  { code: "Filipino",           label: "🇵🇭 Filipino" },
-  { code: "Malay",              label: "🇲🇾 Bahasa Melayu" },
+/* ----------------------------- drawing pieces ----------------------------- */
+// Logo lockup: frosted chip + rounded icon + app name (+ tagline).
+function drawLogoLockup(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  iconImg: HTMLImageElement | null,
+  appName: string,
+  tagline: string,
+  scale: number,
+) {
+  const iconS = Math.round(44 * scale);
+  const gap = Math.round(10 * scale);
+  const nameFs = Math.round(24 * scale);
+  const tagFs = Math.round(12 * scale);
+  ctx.font = `800 ${nameFs}px system-ui, Arial, sans-serif`;
+  const nameW = ctx.measureText(appName).width;
+  ctx.font = `500 ${tagFs}px system-ui, Arial, sans-serif`;
+  const tagW = tagline ? ctx.measureText(tagline).width : 0;
+  const textW = Math.max(nameW, tagW);
+  const padX = Math.round(12 * scale);
+  const padY = Math.round(10 * scale);
+  const chipW = padX * 2 + (iconImg ? iconS + gap : 0) + textW;
+  const chipH = padY * 2 + Math.max(iconS, nameFs + (tagline ? tagFs + 4 * scale : 0));
+
+  // frosted chip for legibility on any background
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.35)";
+  ctx.shadowBlur = 18 * scale;
+  ctx.shadowOffsetY = 4 * scale;
+  ctx.fillStyle = "rgba(12,12,22,0.42)";
+  roundedRectPath(ctx, x, y, chipW, chipH, chipH * 0.28);
+  ctx.fill();
+  ctx.restore();
+
+  let cx = x + padX;
+  const midY = y + chipH / 2;
+  if (iconImg) {
+    const iy = midY - iconS / 2;
+    ctx.save();
+    roundedRectPath(ctx, cx, iy, iconS, iconS, iconS * 0.24);
+    ctx.clip();
+    ctx.drawImage(iconImg, cx, iy, iconS, iconS);
+    ctx.restore();
+    cx += iconS + gap;
+  }
+  if (tagline) {
+    ctx.textBaseline = "alphabetic";
+    ctx.font = `800 ${nameFs}px system-ui, Arial, sans-serif`;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(appName, cx, midY + nameFs * 0.05);
+    ctx.font = `500 ${tagFs}px system-ui, Arial, sans-serif`;
+    ctx.fillStyle = "rgba(255,255,255,0.82)";
+    ctx.fillText(ellipsize(ctx, tagline, chipW - (cx - x) - padX), cx, midY + nameFs * 0.05 + tagFs + 4 * scale);
+  } else {
+    ctx.textBaseline = "middle";
+    ctx.font = `800 ${nameFs}px system-ui, Arial, sans-serif`;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(appName, cx, midY);
+  }
+  return { w: chipW, h: chipH };
+}
+
+// CTA pill: accent bg, left circle w/ download arrow, centered label, right chevron.
+function drawCTA(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, label: string, accent: string, scale: number) {
+  const fs = clamp(Math.round(22 * scale), 12, 46);
+  ctx.font = `bold ${fs}px system-ui, Arial, sans-serif`;
+  const labelW = ctx.measureText(label).width;
+  const circle = fs * 1.5;
+  const chev = fs * 0.9;
+  const gap = fs * 0.6;
+  const bh = Math.round(fs * 2.2);
+  let bw = circle + gap + labelW + gap + chev + fs * 1.2;
+  bw = Math.min(bw, maxW);
+  const bx = x;
+  const by = y;
+
+  ctx.save();
+  ctx.shadowColor = hexA(accent, 0.5);
+  ctx.shadowBlur = 22 * scale;
+  ctx.shadowOffsetY = 6 * scale;
+  const grad = ctx.createLinearGradient(bx, by, bx + bw, by);
+  grad.addColorStop(0, accent);
+  grad.addColorStop(1, lighten(accent, 0.18));
+  ctx.fillStyle = grad;
+  roundedRectPath(ctx, bx, by, bw, bh, bh / 2);
+  ctx.fill();
+  ctx.restore();
+
+  const cc = contrastColor(accent);
+  // left circle + download arrow
+  const ccx = bx + bh / 2;
+  const ccy = by + bh / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.beginPath();
+  ctx.arc(ccx, ccy, circle / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = cc;
+  ctx.lineWidth = Math.max(2, fs * 0.11);
+  ctx.lineCap = "round";
+  const a = circle * 0.24;
+  ctx.beginPath();
+  ctx.moveTo(ccx, ccy - a);
+  ctx.lineTo(ccx, ccy + a * 0.7);
+  ctx.moveTo(ccx - a * 0.6, ccy + a * 0.1);
+  ctx.lineTo(ccx, ccy + a * 0.7);
+  ctx.lineTo(ccx + a * 0.6, ccy + a * 0.1);
+  ctx.moveTo(ccx - a * 0.9, ccy + a * 0.9);
+  ctx.lineTo(ccx + a * 0.9, ccy + a * 0.9);
+  ctx.stroke();
+
+  // label
+  ctx.fillStyle = cc;
+  ctx.textBaseline = "middle";
+  ctx.font = `bold ${fs}px system-ui, Arial, sans-serif`;
+  const labelX = bx + bh + gap;
+  ctx.fillText(ellipsize(ctx, label, bw - bh - chev - fs * 1.6), labelX, ccy + 1);
+
+  // right chevron
+  const chx = bx + bw - fs * 1.1;
+  ctx.beginPath();
+  ctx.moveTo(chx - chev * 0.3, ccy - chev * 0.5);
+  ctx.lineTo(chx + chev * 0.3, ccy);
+  ctx.lineTo(chx - chev * 0.3, ccy + chev * 0.5);
+  ctx.stroke();
+
+  return { w: bw, h: bh };
+}
+
+// Simplified "GET IT ON Google Play" badge.
+function drawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
+  const bh = Math.round(46 * scale);
+  const bw = Math.round(150 * scale);
+  ctx.save();
+  ctx.fillStyle = "#000000";
+  roundedRectPath(ctx, x, y, bw, bh, Math.round(8 * scale));
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = Math.max(1, scale);
+  roundedRectPath(ctx, x, y, bw, bh, Math.round(8 * scale));
+  ctx.stroke();
+
+  // play triangle (colored)
+  const tx = x + bh * 0.28;
+  const ty = y + bh / 2;
+  const s = bh * 0.28;
+  const tri = [
+    ["#00D2FF", 0],
+    ["#FF3D00", 0],
+  ];
+  ctx.fillStyle = "#00E0FF";
+  ctx.beginPath();
+  ctx.moveTo(tx - s * 0.7, ty - s);
+  ctx.lineTo(tx - s * 0.7, ty + s);
+  ctx.lineTo(tx + s * 0.9, ty);
+  ctx.closePath();
+  ctx.fillStyle = "#12B5FF";
+  ctx.fill();
+  void tri;
+
+  const textX = x + bh * 0.95;
+  ctx.fillStyle = "#ffffff";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = `500 ${Math.round(9 * scale)}px system-ui, Arial, sans-serif`;
+  ctx.fillText("GET IT ON", textX, y + bh * 0.42);
+  ctx.font = `700 ${Math.round(17 * scale)}px system-ui, Arial, sans-serif`;
+  ctx.fillText("Google Play", textX, y + bh * 0.82);
+  ctx.restore();
+}
+
+/* ----------------------------- text block (hook + sub) ----------------------------- */
+function drawMarketingText(ctx: CanvasRenderingContext2D, w: number, h: number, brief: Brief, scale: number): number {
+  const secondary = brief.secondary_color || "#1A1A2E";
+  const accent = brief.accent_color || "#FF6B35";
+  const headline = brief.headline || brief.app_name || "";
+  const sub = brief.subheadline || "";
+  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.06));
+  const isStrip = h <= 120;
+  ctx.textAlign = "left";
+
+  if (isStrip) {
+    const g = ctx.createLinearGradient(0, 0, w, 0);
+    g.addColorStop(0, hexA(secondary, 0.94));
+    g.addColorStop(1, hexA(secondary, 0.5));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    const fs = Math.round(h * 0.34);
+    ctx.textBaseline = "middle";
+    ctx.font = `800 ${fs}px system-ui, Arial, sans-serif`;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(ellipsize(ctx, headline, w - pad * 2), pad, h / 2);
+    return h; // strips: CTA handled by caller area check (skipped)
+  }
+
+  const scrimH = Math.round(h * (h / w >= 1.4 ? 0.52 : 0.6));
+  const g = ctx.createLinearGradient(0, h - scrimH, 0, h);
+  g.addColorStop(0, hexA(secondary, 0));
+  g.addColorStop(0.45, hexA(secondary, 0.6));
+  g.addColorStop(1, hexA(secondary, 0.96));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, h - scrimH, w, scrimH);
+
+  const maxW = w - pad * 2;
+  let y = h - pad;
+
+  // reserve space for CTA + play badge; those are drawn by caller. Return the top Y where text ends.
+  // headline (two-tone: last line accent) + subheadline, drawn bottom-up above the CTA zone.
+  const ctaZone = Math.round(64 * scale) + Math.round(52 * scale) + pad; // cta + badge + gap
+  y -= ctaZone;
+
+  if (sub && h >= 250) {
+    const fs = clamp(Math.round(w * 0.04), 12, 32);
+    ctx.font = `500 ${fs}px system-ui, Arial, sans-serif`;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    const lines = wrapText(ctx, sub, maxW).slice(0, 2);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      ctx.fillText(lines[i], pad, y);
+      y -= fs * 1.3;
+    }
+    y -= fs * 0.3;
+  }
+
+  if (headline) {
+    const fs = clamp(Math.round(w * 0.082), 16, 80);
+    ctx.font = `900 ${fs}px system-ui, Arial, sans-serif`;
+    ctx.textBaseline = "alphabetic";
+    const lines = wrapText(ctx, headline, maxW).slice(0, 2);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      ctx.fillStyle = lines.length > 1 && i === lines.length - 1 ? lighten(accent, 0.15) : "#ffffff";
+      ctx.fillText(lines[i], pad, y);
+      y -= fs * 1.12;
+    }
+  }
+  return y;
+}
+
+/* ----------------------------- final banner assembly ----------------------------- */
+function renderFinalBanner(
+  baseImg: HTMLImageElement,
+  w: number,
+  h: number,
+  brief: Brief,
+  iconImg: HTMLImageElement | null,
+): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+
+  // resize base
+  const srcRatio = baseImg.width / baseImg.height;
+  const dstRatio = w / h;
+  if (Math.abs(srcRatio - dstRatio) < 0.15) {
+    ctx.drawImage(baseImg, 0, 0, w, h);
+  } else {
+    ctx.save();
+    ctx.filter = "blur(28px)";
+    const cs = Math.max(w / baseImg.width, h / baseImg.height);
+    ctx.drawImage(baseImg, (w - baseImg.width * cs) / 2, (h - baseImg.height * cs) / 2, baseImg.width * cs, baseImg.height * cs);
+    ctx.restore();
+    const cs2 = Math.min(w / baseImg.width, h / baseImg.height);
+    ctx.drawImage(baseImg, (w - baseImg.width * cs2) / 2, (h - baseImg.height * cs2) / 2, baseImg.width * cs2, baseImg.height * cs2);
+  }
+
+  const scale = clamp(Math.min(w, h) / 500, 0.34, 2.2);
+  const isStrip = h <= 120;
+  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.06));
+
+  // text block (hook + sub) + scrim
+  drawMarketingText(ctx, w, h, brief, scale);
+
+  if (isStrip) {
+    // strip: just a compact CTA on the right
+    if (brief.cta_text) {
+      const est = 160 * scale;
+      drawCTA(ctx, w - pad - est, (h - 46 * scale) / 2, est, brief.cta_text, brief.accent_color || "#FF6B35", scale * 0.7);
+    }
+    return canvas.toDataURL("image/png");
+  }
+
+  // logo lockup top-left
+  drawLogoLockup(ctx, pad, pad, iconImg, brief.app_name, brief.tagline, scale);
+
+  // CTA + Play badge bottom-left
+  const ctaScale = scale;
+  const cta = drawCTA(ctx, pad, h - pad - Math.round(46 * ctaScale) - Math.round(52 * ctaScale) - pad * 0.4, w - pad * 2, brief.cta_text || "Download", brief.accent_color || "#FF6B35", ctaScale);
+  if (h >= 320 && w >= 300) {
+    drawPlayBadge(ctx, pad, h - pad - Math.round(46 * scale), scale);
+    void cta;
+  }
+
+  return canvas.toDataURL("image/png");
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [head, b64] = dataUrl.split(",");
+  const mime = head.match(/:(.*?);/)?.[1] || "image/png";
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+/* ----------------------------- options ----------------------------- */
+const COUNTRIES = ["Global", "Vietnam", "Indonesia", "United States", "India", "Thailand", "Philippines", "Saudi Arabia"];
+const LANGUAGES = ["Vietnamese", "English", "Indonesian", "Arabic"];
+const NICHES = ["photo", "tool", "office", "game", "health", "finance", "social", "travel", "education"];
+const QUALITIES: { v: "low" | "medium" | "high"; label: string }[] = [
+  { v: "low", label: "Low (nhanh)" },
+  { v: "medium", label: "Medium" },
+  { v: "high", label: "High (đẹp nhất)" },
 ];
 
-const COUNTRY_DEFAULT_LANG: Record<string, string> = {
-  Vietnam: "Vietnamese", Indonesia: "Indonesian", Thailand: "Thai",
-  Philippines: "Filipino", Malaysia: "Malay", Singapore: "English",
-  Myanmar: "English", Cambodia: "English",
-  Japan: "Japanese", "South Korea": "Korean", China: "Chinese Simplified",
-  Taiwan: "Chinese Simplified", "Hong Kong": "Chinese Simplified",
-  India: "Hindi", Pakistan: "English", Bangladesh: "Bengali", "Sri Lanka": "English",
-  "Saudi Arabia": "Arabic", UAE: "Arabic", Egypt: "Arabic", Turkey: "English",
-  Israel: "English", Iraq: "Arabic",
-  USA: "English", Canada: "English", Mexico: "Spanish",
-  Brazil: "Portuguese", Argentina: "Spanish", Colombia: "Spanish",
-  Chile: "Spanish", Peru: "Spanish",
-  Germany: "German", France: "French", "United Kingdom": "English",
-  Italy: "English", Spain: "Spanish", Netherlands: "English",
-  Poland: "English", Sweden: "English", Norway: "English",
-  Denmark: "English", Finland: "English", Belgium: "French",
-  Switzerland: "German", Austria: "German", Portugal: "Portuguese",
-  Greece: "English", Ukraine: "English", Russia: "Russian",
-  Australia: "English", "New Zealand": "English",
-  Nigeria: "English", "South Africa": "English", Kenya: "English",
-  Ethiopia: "English", Ghana: "English",
-};
-
-const COUNTRIES = [
-  { code: "Global",           label: "🌍 Global (Universal)" },
-  // Southeast Asia
-  { code: "Vietnam",          label: "🇻🇳 Vietnam" },
-  { code: "Indonesia",        label: "🇮🇩 Indonesia" },
-  { code: "Thailand",         label: "🇹🇭 Thailand" },
-  { code: "Philippines",      label: "🇵🇭 Philippines" },
-  { code: "Malaysia",         label: "🇲🇾 Malaysia" },
-  { code: "Singapore",        label: "🇸🇬 Singapore" },
-  { code: "Myanmar",          label: "🇲🇲 Myanmar" },
-  { code: "Cambodia",         label: "🇰🇭 Cambodia" },
-  // East Asia
-  { code: "Japan",            label: "🇯🇵 Japan" },
-  { code: "South Korea",      label: "🇰🇷 South Korea" },
-  { code: "China",            label: "🇨🇳 China" },
-  { code: "Taiwan",           label: "🇹🇼 Taiwan" },
-  { code: "Hong Kong",        label: "🇭🇰 Hong Kong" },
-  // South Asia
-  { code: "India",            label: "🇮🇳 India" },
-  { code: "Pakistan",         label: "🇵🇰 Pakistan" },
-  { code: "Bangladesh",       label: "🇧🇩 Bangladesh" },
-  { code: "Sri Lanka",        label: "🇱🇰 Sri Lanka" },
-  // Middle East
-  { code: "Saudi Arabia",     label: "🇸🇦 Saudi Arabia" },
-  { code: "UAE",              label: "🇦🇪 UAE" },
-  { code: "Egypt",            label: "🇪🇬 Egypt" },
-  { code: "Turkey",           label: "🇹🇷 Turkey" },
-  { code: "Israel",           label: "🇮🇱 Israel" },
-  { code: "Iraq",             label: "🇮🇶 Iraq" },
-  // North America
-  { code: "USA",              label: "🇺🇸 United States" },
-  { code: "Canada",           label: "🇨🇦 Canada" },
-  { code: "Mexico",           label: "🇲🇽 Mexico" },
-  // Latin America
-  { code: "Brazil",           label: "🇧🇷 Brazil" },
-  { code: "Argentina",        label: "🇦🇷 Argentina" },
-  { code: "Colombia",         label: "🇨🇴 Colombia" },
-  { code: "Chile",            label: "🇨🇱 Chile" },
-  { code: "Peru",             label: "🇵🇪 Peru" },
-  // Europe
-  { code: "Germany",          label: "🇩🇪 Germany" },
-  { code: "France",           label: "🇫🇷 France" },
-  { code: "United Kingdom",   label: "🇬🇧 United Kingdom" },
-  { code: "Italy",            label: "🇮🇹 Italy" },
-  { code: "Spain",            label: "🇪🇸 Spain" },
-  { code: "Netherlands",      label: "🇳🇱 Netherlands" },
-  { code: "Poland",           label: "🇵🇱 Poland" },
-  { code: "Sweden",           label: "🇸🇪 Sweden" },
-  { code: "Norway",           label: "🇳🇴 Norway" },
-  { code: "Denmark",          label: "🇩🇰 Denmark" },
-  { code: "Finland",          label: "🇫🇮 Finland" },
-  { code: "Belgium",          label: "🇧🇪 Belgium" },
-  { code: "Switzerland",      label: "🇨🇭 Switzerland" },
-  { code: "Austria",          label: "🇦🇹 Austria" },
-  { code: "Portugal",         label: "🇵🇹 Portugal" },
-  { code: "Greece",           label: "🇬🇷 Greece" },
-  { code: "Ukraine",          label: "🇺🇦 Ukraine" },
-  { code: "Russia",           label: "🇷🇺 Russia" },
-  // Oceania
-  { code: "Australia",        label: "🇦🇺 Australia" },
-  { code: "New Zealand",      label: "🇳🇿 New Zealand" },
-  // Africa
-  { code: "Nigeria",          label: "🇳🇬 Nigeria" },
-  { code: "South Africa",     label: "🇿🇦 South Africa" },
-  { code: "Kenya",            label: "🇰🇪 Kenya" },
-  { code: "Ethiopia",         label: "🇪🇹 Ethiopia" },
-  { code: "Ghana",            label: "🇬🇭 Ghana" },
-];
-
+/* ----------------------------- page ----------------------------- */
 export default function Home() {
-  const { data: session } = useSession();
-  const [step, setStep] = useState<Step>("upload");
-  const [niche, setNiche] = useState<"photo"|"tool"|"office">("photo");
-  const [language, setLanguage] = useState("English");
+  const [appUrl, setAppUrl] = useState("");
   const [country, setCountry] = useState("Global");
-  const [inputMode, setInputMode] = useState<"video"|"image">("video");
-  const [videoFile, setVideoFile] = useState<File|null>(null);
-  const [imageFiles, setImageFiles] = useState<File[]>([]);
-  const [iconFile, setIconFile] = useState<File|null>(null);
-  const [iconDataUrlFetched, setIconDataUrlFetched] = useState<string|null>(null);
-  const [iconFetching, setIconFetching] = useState(false);
-  const [suggestLoading, setSuggestLoading] = useState(false);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [suggestResult, setSuggestResult] = useState<any>(null);
-  const [lightboxFrame, setLightboxFrame] = useState<string|null>(null);
-  const [frames, setFrames] = useState<ExtractedFrame[]>([]);
-  const [extractProgress, setExtractProgress] = useState(0);
-  const [brief, setBrief] = useState<Brief>({ app_name:"",headline:"",subheadline:"",cta_text:"",primary_color:"#7B2FBE",secondary_color:"#E91E8C",accent_color:"#FF6B35",background_style:"dark",mood:"bold",best_frame_index:0,niche:"photo",app_store_url:"",play_store_url:"" });
-  const [previews, setPreviews] = useState<Preview[]>([]);
-  const [zipBase64, setZipBase64] = useState("");
+  const [language, setLanguage] = useState("Vietnamese");
+  const [niche, setNiche] = useState("photo");
+  const [quality, setQuality] = useState<"low" | "medium" | "high">("high");
+  const [useScreenshot, setUseScreenshot] = useState(true);
+  const [userPrompt, setUserPrompt] = useState("");
+  const [autoMascot, setAutoMascot] = useState(true);
+  const [characterImage, setCharacterImage] = useState<string | null>(null);
+  const [mascotUsed, setMascotUsed] = useState<string | null>(null);
+  const charInputRef = useRef<HTMLInputElement>(null);
+
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [brief, setBrief] = useState<Brief | null>(null);
+  const [banners, setBanners] = useState<FinalBanner[]>([]);
+
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
   const [error, setError] = useState("");
-  const [inpainting, setInpainting] = useState(false);
-  const [activeTab, setActiveTab] = useState<"top5"|"all"|"device">("top5");
-  const [deviceType, setDeviceType] = useState<"phone"|"tablet">("phone");
-  const [devicePreviewIndex, setDevicePreviewIndex] = useState(0);
-  const [selectedPreview, setSelectedPreview] = useState<Preview|null>(null);
-  const videoInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const iconInputRef = useRef<HTMLInputElement>(null);
 
-  const [darkMode, setDarkMode] = useState(false);
-  const bgColor = darkMode ? "#0A0A0F" : "#F8FAFC";
-  // kept for compatibility but no longer used
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
-  void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
+  async function onCharFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setCharacterImage(await fileToDataUrl(f));
+  }
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"autogen"|"localize"|"launch">("home");
-
-  // YouTube upload state
-  const [ytAuthenticated, setYtAuthenticated] = useState(false);
-  const [ytAccessToken, setYtAccessToken] = useState("");
-  interface YtVideo { file: File; title: string; description: string; tags: string; privacy: "public"|"unlisted"|"private"; status: "idle"|"uploading"|"done"|"error"; progress: number; errorMsg: string; videoId?: string; }
-  const [ytVideos, setYtVideos] = useState<YtVideo[]>([]);
-  const [ytUploading, setYtUploading] = useState(false);
-  const [ytCopiedIndex, setYtCopiedIndex] = useState<number|null>(null);
-  const ytFileRef = useRef<HTMLInputElement>(null);
-
-  const checkYtAuth = useCallback(async () => {
+  async function fetchApp() {
+    setError("");
+    setAppInfo(null);
+    setBanners([]);
+    if (!appUrl.trim()) return setError("Nhập URL App Store hoặc Play Store.");
+    setBusy(true);
+    setStatus("Đang lấy thông tin app từ store...");
     try {
-      const res = await fetch("/api/auth/token");
-      if (res.ok) { const d = await res.json(); if (d.access_token) { setYtAccessToken(d.access_token); setYtAuthenticated(true); } }
-    } catch {}
-  }, []);
-
-  useEffect(() => { checkYtAuth(); }, [checkYtAuth]);
-
-  // Handle OAuth redirect back
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("yt_ok")) { setActivePage("youtube"); checkYtAuth(); window.history.replaceState({}, "", "/"); }
-    if (params.get("page") === "youtube") { setActivePage("youtube"); window.history.replaceState({}, "", "/"); }
-  }, [checkYtAuth]);
-
-  const addYtFiles = (files: FileList) => {
-    const newVids: YtVideo[] = Array.from(files).map(f => ({
-      file: f, title: f.name.replace(/\.[^.]+$/, ""), description: "", tags: "", privacy: "unlisted",
-      status: "idle", progress: 0, errorMsg: "",
-    }));
-    setYtVideos(prev => [...prev, ...newVids]);
-  };
-
-  const uploadSingleVideo = async (video: YtVideo, index: number, token: string): Promise<void> => {
-    setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "uploading", progress: 0} : v));
-    try {
-      const metadata = {
-        snippet: { title: video.title || video.file.name, description: video.description, tags: video.tags ? video.tags.split(",").map(t=>t.trim()) : [] },
-        status: { privacyStatus: video.privacy },
-      };
-      // 1. Init resumable upload
-      const initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+      const res = await fetch("/api/screenshots", {
         method: "POST",
-        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "X-Upload-Content-Type": video.file.type, "X-Upload-Content-Length": String(video.file.size) },
-        body: JSON.stringify(metadata),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appUrl: appUrl.trim(), country }),
       });
-      if (!initRes.ok) throw new Error(`Init failed: ${initRes.status}`);
-      const uploadUrl = initRes.headers.get("Location");
-      if (!uploadUrl) throw new Error("No upload URL");
+      const data = await safeJson(res, "screenshots");
+      if (!data.success) throw new Error(data.error || "Fetch app thất bại.");
+      setAppInfo({ appName: data.appName, iconBase64: data.iconBase64, screenshots: data.screenshots || [] });
+      setStatus(`Đã lấy "${data.appName}" — ${data.screenshots?.length || 0} screenshots.`);
+    } catch (e: any) {
+      setError(e.message);
+      setStatus("");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      // 2. Upload in chunks
-      const CHUNK = 5 * 1024 * 1024; // 5MB
-      let offset = 0;
-      while (offset < video.file.size) {
-        const chunk = video.file.slice(offset, offset + CHUNK);
-        const end = Math.min(offset + CHUNK - 1, video.file.size - 1);
-        const uploadRes = await fetch(uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Range": `bytes ${offset}-${end}/${video.file.size}`, "Content-Type": video.file.type },
-          body: chunk,
-        });
-        if (uploadRes.status === 308) {
-          const range = uploadRes.headers.get("Range");
-          offset = range ? parseInt(range.split("-")[1]) + 1 : offset + CHUNK;
-        } else if (uploadRes.ok || uploadRes.status === 201 || uploadRes.status === 200) {
-          const resData = await uploadRes.json().catch(() => ({}));
-          const vid = resData?.id;
-          setYtVideos(prev => prev.map((v, i) => i === index ? {...v, videoId: vid || undefined} : v));
-          offset = video.file.size;
-        } else {
-          throw new Error(`Upload chunk failed: ${uploadRes.status}`);
+  async function autoPrompt() {
+    if (!appInfo) return setError("Fetch app trước đã.");
+    setError("");
+    setBusy(true);
+    setStatus("Auto Prompt: GPT đang viết creative direction...");
+    try {
+      const res = await fetch("/api/auto-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appName: appInfo.appName, niche, screenshots: appInfo.screenshots, country, language }),
+      });
+      const data = await safeJson(res, "auto-prompt");
+      if (!data.success) throw new Error(data.error || "Auto Prompt thất bại.");
+      setUserPrompt(data.prompt || "");
+      setStatus("Đã điền creative direction. Chỉnh sửa nếu muốn rồi bấm Generate.");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generate() {
+    if (!appInfo) return setError("Fetch app trước đã.");
+    setError("");
+    setBanners([]);
+    setBusy(true);
+    try {
+      setStatus("Đang tạo design brief (GPT-4o)...");
+      const briefRes = await fetch("/api/banner-concept", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appName: appInfo.appName,
+          prompt: userPrompt,
+          country,
+          language,
+          screenshots: appInfo.screenshots,
+          appUrl,
+        }),
+      });
+      const briefData = await safeJson(briefRes, "banner-concept");
+      if (!briefData.success) throw new Error(briefData.error || "Tạo brief thất bại.");
+      const theBrief: Brief = { ...briefData.brief, niche: briefData.brief.niche || niche };
+      setBrief(theBrief);
+
+      // Resolve mascot: manual upload wins; otherwise auto-find in screenshots or generate one.
+      let mascot: string | null = characterImage;
+      if (!mascot && autoMascot) {
+        setStatus("Đang tìm mascot trong screenshots (hoặc tạo mới)...");
+        try {
+          const mres = await fetch("/api/mascot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              appName: appInfo.appName,
+              niche: theBrief.niche,
+              screenshots: appInfo.screenshots,
+              brief: theBrief,
+              quality,
+            }),
+          });
+          const md = await safeJson(mres, "mascot");
+          if (md.success) {
+            mascot = md.source === "screenshot" ? appInfo.screenshots[md.index] || null : md.dataUrl || null;
+          }
+        } catch {
+          /* non-fatal: continue without a mascot reference */
         }
-        const pct = Math.round((Math.min(offset, video.file.size) / video.file.size) * 100);
-        setYtVideos(prev => prev.map((v, i) => i === index ? {...v, progress: pct} : v));
       }
-      setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "done", progress: 100} : v));
-    } catch (e) {
-      setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "error", errorMsg: String(e)} : v));
-    }
-  };
+      setMascotUsed(mascot);
 
-  const handleYtUploadAll = async () => {
-    if (!ytAccessToken) return;
-    setYtUploading(true);
-    for (let i = 0; i < ytVideos.length; i++) {
-      if (ytVideos[i].status === "idle" || ytVideos[i].status === "error") {
-        await uploadSingleVideo(ytVideos[i], i, ytAccessToken);
-      }
-    }
-    setYtUploading(false);
-  };
-
-  const ytLogout = async () => {
-    await fetch("/api/auth/token", { method: "DELETE" });
-    setYtAuthenticated(false); setYtAccessToken(""); setYtVideos([]);
-  };
-
-  // AI Banner Design state
-  type AgStep = "input" | "generating" | "preview";
-  const [agStep, setAgStep] = useState<AgStep>("input");
-  const [agNoText] = useState(false);
-  const [agIdeogramImages] = useState<{landscape:string;square:string;portrait:string}|null>(null);
-  const [agUrl, setAgUrl] = useState("");
-  const [agPrompt, setAgPrompt] = useState("");
-  const [agCountry, setAgCountry] = useState("Global");
-  const [agLang, setAgLang] = useState("English");
-  const [agCountrySearch, setAgCountrySearch] = useState("");
-  const [agCountryOpen, setAgCountryOpen] = useState(false);
-  const agCountryRef = useRef<HTMLDivElement>(null);
-  const [agLangSearch, setAgLangSearch] = useState("");
-  const [agLangOpen, setAgLangOpen] = useState(false);
-  const agLangRef = useRef<HTMLDivElement>(null);
-  const [agError, setAgError] = useState("");
-  const [agBrief, setAgBrief] = useState<Brief|null>(null);
-  const [agScreenshots, setAgScreenshots] = useState<string[]>([]);
-  const [agIcon, setAgIcon] = useState<string|null>(null);
-  const [agGenStatus, setAgGenStatus] = useState("");
-  const [agDalleImages, setAgDalleImages] = useState<{key:string;label:string;dataUrl:string}[]>([]);
-  const [agQuality, setAgQuality] = useState<"low"|"medium"|"high">("high");
-  const [agAutoPromptLoading, setAgAutoPromptLoading] = useState(false);
-  const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
-  const [agZipBase64, setAgZipBase64] = useState("");
-  const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
-
-  // Google Ads Launch state
-  const [adsConnected, setAdsConnected] = useState<boolean|null>(null);
-  const [adsAccounts, setAdsAccounts] = useState<{id:string;name:string;currency:string;status:string}[]>([]);
-  const [adsSelectedAccount, setAdsSelectedAccount] = useState("");
-  const [adsCampaignName, setAdsCampaignName] = useState("");
-  const [adsAppId, setAdsAppId] = useState("");
-  const [adsAppStore, setAdsAppStore] = useState<"GOOGLE_APP_STORE"|"APPLE_APP_STORE">("GOOGLE_APP_STORE");
-  const [adsBudget, setAdsBudget] = useState("200000");
-  const [adsHeadlines, setAdsHeadlines] = useState(["","",""]);
-  const [adsDescriptions, setAdsDescriptions] = useState(["",""]);
-  const [adsSelectedBanners, setAdsSelectedBanners] = useState<string[]>([]);
-  const [adsLaunching, setAdsLaunching] = useState(false);
-  const [adsResult, setAdsResult] = useState<{success:boolean;message?:string;error?:string}|null>(null);
-  const [adsCampaigns, setAdsCampaigns] = useState<{id:string;name:string;status:string;budgetPerDay:number}[]>([]);
-  const [adsAccountsError, setAdsAccountsError] = useState<string|null>(null);
-  const [adsNeedsBasicAccess, setAdsNeedsBasicAccess] = useState(false);
-  const [adsAccountsLoading, setAdsAccountsLoading] = useState(false);
-
-  const checkAdsConnection = async () => {
-    try {
-      const res = await fetch("/api/google-ads/auth?action=status");
-      if (!res.ok) { setAdsConnected(false); return; }
-      const data = await res.json();
-      setAdsConnected(data.connected);
-      if (data.connected) loadAdsAccounts();
-    } catch { setAdsConnected(false); }
-  };
-
-  const loadAdsAccounts = async () => {
-    setAdsAccountsLoading(true);
-    setAdsAccountsError(null);
-    setAdsNeedsBasicAccess(false);
-    try {
-      const res = await fetch("/api/google-ads/accounts");
-      const text = await res.text();
-      let data: {success:boolean;accounts?:{id:string;name:string;currency:string;status:string}[];error?:string;needs_basic_access?:boolean};
-      try { data = JSON.parse(text); } catch { throw new Error(`Server returned HTML (middleware issue). Status: ${res.status}`); }
-      if (data.success) setAdsAccounts(data.accounts || []);
-      else if (data.needs_basic_access) setAdsNeedsBasicAccess(true);
-      else setAdsAccountsError(data.error || "Unknown error");
-    } catch(e) { setAdsAccountsError(String(e)); }
-    setAdsAccountsLoading(false);
-  };
-
-  const loadAdsCampaigns = async (customerId: string) => {
-    const res = await fetch(`/api/google-ads/campaigns?customerId=${customerId}`);
-    const data = await res.json();
-    if (data.success) setAdsCampaigns(data.campaigns || []);
-  };
-
-  const handleAdsLaunch = async () => {
-    if (!adsSelectedAccount || !adsCampaignName || !adsAppId) return;
-    setAdsLaunching(true); setAdsResult(null);
-    try {
-      const res = await fetch("/api/google-ads/campaigns", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customerId: adsSelectedAccount,
-          campaignName: adsCampaignName,
-          appId: adsAppId,
-          appStore: adsAppStore,
-          budgetPerDayVnd: parseInt(adsBudget) || 200000,
-          headlines: adsHeadlines.filter(Boolean),
-          descriptions: adsDescriptions.filter(Boolean),
-          imageDataUrls: adsSelectedBanners,
-        }),
-      });
-      const data = await res.json();
-      setAdsResult(data);
-      if (data.success) loadAdsCampaigns(adsSelectedAccount);
-    } catch (e) { setAdsResult({ success: false, error: String(e) }); }
-    setAdsLaunching(false);
-  };
-
-  const handleAutoPrompt = async () => {
-    if (!agUrl.trim()) return;
-    setAgAutoPromptLoading(true);
-    try {
-      // Quick fetch app info
-      const ssRes = await fetch("/api/screenshots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appUrl: agUrl, country: agCountry }),
-      });
-      const text = await ssRes.text();
-      let ssData: { success: boolean; appName?: string; screenshots?: string[]; niche?: string; error?: string };
-      try { ssData = JSON.parse(text); } catch { throw new Error("Invalid response"); }
-      if (!ssData.success) throw new Error(ssData.error);
-
-      const promptRes = await fetch("/api/auto-prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName: ssData.appName || "",
-          niche: ssData.niche,
-          screenshots: (ssData.screenshots || []).slice(0, 2),
-          country: agCountry,
-          language: agLang,
-        }),
-      });
-      const promptText = await promptRes.text();
-      let promptData: { success: boolean; prompt?: string; error?: string };
-      try { promptData = JSON.parse(promptText); } catch { throw new Error("Invalid prompt response"); }
-      if (promptData.success && promptData.prompt) setAgPrompt(promptData.prompt);
-    } catch { /* silent fail */ }
-    finally { setAgAutoPromptLoading(false); }
-  };
-
-  const handleAgAnalyze = async () => {
-    if (!agUrl.trim()) return;
-    setAgStep("generating"); setAgError(""); setAgGenStatus("📱 Đang lấy thông tin app...");
-    try {
-      // helper: safe json parse
-      const safeJson = async (res: Response, label: string) => {
-        const text = await res.text();
-        try { return JSON.parse(text); }
-        catch { throw new Error(`${label} returned invalid response (HTTP ${res.status}): ${text.slice(0, 200)}`); }
-      };
-
-      // Step 1: fetch app info + screenshots for GPT-4o analysis
-      const ssRes = await fetch("/api/screenshots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appUrl: agUrl, country: agCountry }),
-      });
-      const ssData = await safeJson(ssRes, "screenshots");
-      if (!ssData.success) throw new Error(ssData.error);
-      const shots: string[] = ssData.screenshots || [];
-      const appName: string = ssData.appName || "";
-      const iconB64: string | null = ssData.iconBase64 || null;
-      setAgScreenshots(shots);
-      setAgIcon(iconB64);
-
-      // Step 2: GPT-4o analyzes app + prompt → design brief
-      setAgGenStatus("🤖 GPT-4o đang phân tích app và tạo concept thiết kế...");
-      const conceptRes = await fetch("/api/banner-concept", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName, prompt: agPrompt, country: agCountry, language: agLang,
-          screenshots: shots.slice(0, 3), appUrl: agUrl,
-        }),
-      });
-      const conceptData = await safeJson(conceptRes, "banner-concept");
-      if (!conceptData.success) throw new Error(conceptData.error);
-      const brief: Brief = conceptData.brief;
-      setAgBrief(brief);
-
-      // Step 3: gpt-image-1 — call 3 parallel requests (1 per ratio) to avoid timeout
-      setAgGenStatus("🎨 AI đang thiết kế 3 ảnh — portrait · square · landscape (1-2 phút)...");
+      const referenceImages = useScreenshot ? appInfo.screenshots.slice(0, 1) : [];
+      setStatus("Đang gen 3 ảnh base bằng gpt-image-1 (nhân vật + UI thật)... chờ ~40-80s");
       const genResults = await Promise.allSettled(
-        (["portrait","square","landscape"] as const).map(ratioKey =>
+        (["portrait", "square", "landscape"] as RatioKey[]).map((ratioKey) =>
           fetch("/api/banner-generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ brief, userPrompt: agPrompt, quality: agQuality, ratioKey }),
-          }).then(r => safeJson(r, `banner-generate:${ratioKey}`))
-        )
+            body: JSON.stringify({ brief: theBrief, userPrompt, quality, ratioKey, referenceImages, characterImage: mascot }),
+          }).then((r) => safeJson(r, `banner-generate:${ratioKey}`)),
+        ),
       );
-      const dalleImages: {key:string;label:string;dataUrl:string}[] = [];
-      const genErrors: string[] = [];
-      for (const r of genResults) {
-        if (r.status === "fulfilled" && r.value.success) dalleImages.push(...(r.value.images || []));
-        else if (r.status === "fulfilled") genErrors.push(r.value.error);
-        else genErrors.push(String(r.reason));
+
+      const baseByRatio: Partial<Record<RatioKey, HTMLImageElement>> = {};
+      const failures: string[] = [];
+      for (let i = 0; i < genResults.length; i++) {
+        const r = genResults[i];
+        const ratioKey = (["portrait", "square", "landscape"] as RatioKey[])[i];
+        if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+          baseByRatio[ratioKey] = await loadImg(r.value.images[0].dataUrl);
+        } else {
+          const reason = r.status === "rejected" ? r.reason?.message : r.value?.error || "unknown";
+          failures.push(`${ratioKey}: ${reason}`);
+        }
       }
-      if (dalleImages.length === 0) throw new Error(genErrors.join("; "));
+      if (!Object.keys(baseByRatio).length) throw new Error("Không gen được ảnh base nào.\n" + failures.join("\n"));
 
-      // Step 3b: composite real app icon onto each DALL-E base image
-      setAgGenStatus("🏷️ Ghép icon app thật vào ảnh...");
-      const loadImg = (src: string): Promise<HTMLImageElement> => new Promise((res, rej) => {
-        const i = new Image(); i.crossOrigin = "anonymous";
-        i.onload = () => res(i); i.onerror = rej; i.src = src;
-      });
+      const iconImg = appInfo.iconBase64 ? await loadImg(appInfo.iconBase64) : null;
 
-      const compositeWithIcon = async (baseDataUrl: string, iconDataUrl: string | null, appBrief: Brief | null): Promise<string> => {
-        const base = await loadImg(baseDataUrl);
-        const canvas = document.createElement("canvas");
-        canvas.width = base.width; canvas.height = base.height;
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(base, 0, 0);
-        // Always draw branding bar at top — covers any AI-generated fake icon
-        const barH = Math.round(base.height * 0.10);
-        const iconS = Math.round(barH * 0.72);
-        const pad2 = Math.round((barH - iconS) / 2);
-        const appNameText = appBrief?.app_name || "";
-        // Solid dark bar background (covers AI icon entirely)
-        ctx.fillStyle = "rgba(10,10,20,0.88)";
-        ctx.fillRect(0, 0, base.width, barH);
-        if (iconDataUrl) {
-          const icon = await loadImg(iconDataUrl);
-          const ix = pad2, iy = pad2, r2 = iconS * 0.22;
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(ix+r2,iy); ctx.lineTo(ix+iconS-r2,iy);
-          ctx.quadraticCurveTo(ix+iconS,iy,ix+iconS,iy+r2);
-          ctx.lineTo(ix+iconS,iy+iconS-r2);
-          ctx.quadraticCurveTo(ix+iconS,iy+iconS,ix+iconS-r2,iy+iconS);
-          ctx.lineTo(ix+r2,iy+iconS); ctx.quadraticCurveTo(ix,iy+iconS,ix,iy+iconS-r2);
-          ctx.lineTo(ix,iy+r2); ctx.quadraticCurveTo(ix,iy,ix+r2,iy);
-          ctx.closePath(); ctx.clip();
-          ctx.drawImage(icon, ix, iy, iconS, iconS);
-          ctx.restore();
-        }
-        if (appNameText) {
-          const fontSize = Math.round(barH * 0.36);
-          ctx.font = `bold ${fontSize}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
-          ctx.fillStyle = "#ffffff";
-          ctx.textBaseline = "middle";
-          ctx.fillText(appNameText, iconS + pad2 * 2, barH / 2);
-        }
-        return canvas.toDataURL("image/png");
-      };
-
-      const dalleWithIcon: typeof dalleImages = await Promise.all(
-        dalleImages.map(async img => ({
-          ...img,
-          dataUrl: await compositeWithIcon(img.dataUrl, iconB64, brief),
-        }))
-      );
-      setAgDalleImages(dalleWithIcon);
-
-      // Step 4: resize 3 base images → 20 Google Ads sizes via canvas
-      setAgGenStatus("📐 Resize ra 20 kích thước chuẩn Google Ads...");
-      const { AD_SIZES } = await import("@/lib/adSizes");
-      const imgByKey: Record<string, string> = {};
-      for (const img of dalleWithIcon) imgByKey[img.key] = img.dataUrl;
-
-      // Pick best base ratio: landscape→landscape, portrait→portrait, otherwise square
-      const getBestBase = (w: number, h: number) => {
-        const ratio = w / h;
-        if (ratio >= 1.5) return imgByKey["landscape"] || dalleWithIcon[0]?.dataUrl;
-        if (ratio <= 0.75) return imgByKey["portrait"]  || dalleWithIcon[0]?.dataUrl;
-        return imgByKey["square"] || dalleWithIcon[0]?.dataUrl;
-      };
-
-      const { default: JSZipMod } = await import("jszip");
-      const zip = new JSZipMod();
-      const top5Folder = zip.folder("top5")!;
-      const allFolder   = zip.folder("all_sizes")!;
-      const finalPreviews: {key:string;width:number;height:number;label:string;isTop5:boolean;dataUrl:string}[] = [];
-
+      setStatus("Đang overlay logo + hook + CTA + Play badge ra 8 kích thước...");
+      const out: FinalBanner[] = [];
       for (const sz of AD_SIZES) {
-        const baseDataUrl = getBestBase(sz.width, sz.height);
-        const canvas = document.createElement("canvas");
-        canvas.width = sz.width; canvas.height = sz.height;
-        const ctx = canvas.getContext("2d")!;
-        await new Promise<void>(resolve => {
-          const img = new Image();
-          img.onload = () => {
-            const srcRatio = img.width / img.height;
-            const dstRatio = sz.width / sz.height;
-            if (Math.abs(srcRatio - dstRatio) < 0.15) {
-              // Similar ratio → stretch to fill (minimal distortion)
-              ctx.drawImage(img, 0, 0, sz.width, sz.height);
-            } else {
-              // Different ratio → blur-extend + contain (no distortion)
-              ctx.save(); ctx.filter = "blur(28px)";
-              const cs = Math.max(sz.width / img.width, sz.height / img.height);
-              ctx.drawImage(img, (sz.width - img.width * cs) / 2, (sz.height - img.height * cs) / 2, img.width * cs, img.height * cs);
-              ctx.restore();
-              ctx.fillStyle = "rgba(0,0,0,0.05)"; ctx.fillRect(0, 0, sz.width, sz.height);
-              const cs2 = Math.min(sz.width / img.width, sz.height / img.height);
-              ctx.drawImage(img, (sz.width - img.width * cs2) / 2, (sz.height - img.height * cs2) / 2, img.width * cs2, img.height * cs2);
-            }
-            resolve();
-          };
-          img.src = baseDataUrl;
-        });
-        const dataUrl = canvas.toDataURL("image/png");
-        finalPreviews.push({ key: sz.key, width: sz.width, height: sz.height, label: sz.label, isTop5: sz.isTop5, dataUrl });
-        const b64 = dataUrl.split(",")[1];
-        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-        if (sz.isTop5) top5Folder.file(`${sz.key}.png`, bytes);
-        allFolder.file(`${sz.key}.png`, bytes);
+        const ratio = pickBaseRatio(sz.width, sz.height);
+        const baseImg = baseByRatio[ratio] || baseByRatio.square || baseByRatio.portrait || baseByRatio.landscape;
+        if (!baseImg) continue;
+        const dataUrl = renderFinalBanner(baseImg, sz.width, sz.height, theBrief, iconImg);
+        out.push({ key: sz.key, width: sz.width, height: sz.height, usage: sz.usage, dataUrl });
       }
-      setAgPreviews(finalPreviews);
-      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
-      const reader = new FileReader();
-      reader.onload = () => setAgZipBase64((reader.result as string).split(",")[1]);
-      reader.readAsDataURL(blob);
-      setAgStep("preview");
-    } catch (e) { setAgError(String(e)); setAgStep("input"); }
-  };
 
-  const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
-  const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
-  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshots([]); setAgDalleImages([]); setAgError(""); setAgGenStatus(""); };
-
-  // Keyword Research state
-  const [kwAppName, setKwAppName] = useState("");
-  const [kwAppUrl, setKwAppUrl] = useState("");
-  const [kwCountry, setKwCountry] = useState("Global");
-  const [kwLang, setKwLang] = useState("English");
-  const [kwCountrySearch, setKwCountrySearch] = useState("");
-  const [kwCountryOpen, setKwCountryOpen] = useState(false);
-  const kwCountryRef = useRef<HTMLDivElement>(null);
-  const [kwLangSearch, setKwLangSearch] = useState("");
-  const [kwLangOpen, setKwLangOpen] = useState(false);
-  const kwLangRef = useRef<HTMLDivElement>(null);
-  const [kwLoading, setKwLoading] = useState(false);
-  const [kwError, setKwError] = useState("");
-  interface KwItem { keyword: string; monthly_searches: string; competition: "Low"|"Medium"|"High"; competition_index: number; cpc_min: number; cpc_max: number; relevance: number; intent: string; }
-  interface KwResult { app_name: string; keywords: KwItem[]; }
-  const [kwResult, setKwResult] = useState<KwResult|null>(null);
-  const [kwSort, setKwSort] = useState<"relevance"|"competition_index"|"cpc_max">("relevance");
-  const [kwCopied, setKwCopied] = useState(false);
-
-  const handleKwGenerate = async () => {
-    if (!kwAppName.trim() && !kwAppUrl.trim()) return;
-    setKwLoading(true); setKwError(""); setKwResult(null);
-    try {
-      const res = await fetch("/api/keywords", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appName: kwAppName, appUrl: kwAppUrl, country: kwCountry, language: kwLang }),
-      });
-      const data = await res.json();
-      if (data.success) setKwResult(data.result);
-      else setKwError(data.error || "Lỗi không xác định");
-    } catch (e) { setKwError(String(e)); }
-    finally { setKwLoading(false); }
-  };
-
-  const copyKwList = () => {
-    if (!kwResult) return;
-    const sorted = [...kwResult.keywords].sort((a, b) => {
-      if (kwSort === "relevance") return b.relevance - a.relevance;
-      if (kwSort === "competition_index") return a.competition_index - b.competition_index;
-      return b.cpc_max - a.cpc_max;
-    });
-    const text = sorted.map(k => k.keyword).join("\n");
-    navigator.clipboard.writeText(text);
-    setKwCopied(true);
-    setTimeout(() => setKwCopied(false), 2000);
-  };
-
-  // Ad Copy Generator state
-  const [adcopyAppName, setAdcopyAppName] = useState("");
-  const [adcopyMessage, setAdcopyMessage] = useState("");
-  const [adcopyCountry, setAdcopyCountry] = useState("Global");
-  const [adcopyLang, setAdcopyLang] = useState("English");
-  const [adcopyCountrySearch, setAdcopyCountrySearch] = useState("");
-  const [adcopyCountryOpen, setAdcopyCountryOpen] = useState(false);
-  const adcopyCountryRef = useRef<HTMLDivElement>(null);
-  const [adcopyLangSearch, setAdcopyLangSearch] = useState("");
-  const [adcopyLangOpen, setAdcopyLangOpen] = useState(false);
-  const adcopyLangRef = useRef<HTMLDivElement>(null);
-  const [adcopyLoading, setAdcopyLoading] = useState(false);
-  interface AdCopyResult { headlines: string[]; descriptions: string[]; ctas: string[]; }
-  const [adcopyResult, setAdcopyResult] = useState<AdCopyResult|null>(null);
-  const [adcopyCopied, setAdcopyCopied] = useState<string|null>(null);
-  const [adcopyRegening, setAdcopyRegening] = useState<Set<string>>(new Set());
-
-  const handleRegenItem = async (type: "headline" | "description" | "cta", index: number) => {
-    if (!adcopyResult) return;
-    const key = `${type[0]}-${index}`;
-    setAdcopyRegening(prev => new Set(prev).add(key));
-    try {
-      const existing = type === "headline" ? adcopyResult.headlines
-        : type === "description" ? adcopyResult.descriptions
-        : adcopyResult.ctas;
-      const res = await fetch("/api/adcopy/regen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, appName: adcopyMessage, message: adcopyMessage, country: adcopyCountry, language: adcopyLang, existing }),
-      });
-      const data = await res.json();
-      if (data.success && data.text) {
-        setAdcopyResult(prev => {
-          if (!prev) return prev;
-          if (type === "headline") {
-            const h = [...prev.headlines]; h[index] = data.text; return { ...prev, headlines: h };
-          } else if (type === "description") {
-            const d = [...prev.descriptions]; d[index] = data.text; return { ...prev, descriptions: d };
-          } else {
-            const c = [...prev.ctas]; c[index] = data.text; return { ...prev, ctas: c };
-          }
-        });
-      }
-    } catch { /* ignore */ }
-    finally { setAdcopyRegening(prev => { const n = new Set(prev); n.delete(key); return n; }); }
-  };
-
-  // Localize state
-  const LOCALIZE_MARKETS = [
-    { code: "VN", name: "Vietnam",      flag: "🇻🇳" },
-    { code: "ID", name: "Indonesia",    flag: "🇮🇩" },
-    { code: "TH", name: "Thailand",     flag: "🇹🇭" },
-    { code: "PH", name: "Philippines",  flag: "🇵🇭" },
-    { code: "MY", name: "Malaysia",     flag: "🇲🇾" },
-    { code: "SG", name: "Singapore",    flag: "🇸🇬" },
-    { code: "KR", name: "South Korea",  flag: "🇰🇷" },
-    { code: "JP", name: "Japan",        flag: "🇯🇵" },
-    { code: "TW", name: "Taiwan",       flag: "🇹🇼" },
-    { code: "CN", name: "China",        flag: "🇨🇳" },
-    { code: "SA", name: "Saudi Arabia", flag: "🇸🇦" },
-    { code: "BD", name: "Bangladesh",   flag: "🇧🇩" },
-    { code: "BR", name: "Brazil",       flag: "🇧🇷" },
-    { code: "DE", name: "Germany",      flag: "🇩🇪" },
-    { code: "FR", name: "France",       flag: "🇫🇷" },
-    { code: "ES", name: "Spain",        flag: "🇪🇸" },
-    { code: "US", name: "United States",flag: "🇺🇸" },
-    { code: "IN", name: "India",        flag: "🇮🇳" },
-  ];
-  interface LocalizeMarketResult { code: string; name: string; language: string; flag: string; headlines: string[]; descriptions: string[]; ctas: string[]; }
-  const [lcAppName, setLcAppName] = useState("");
-  const [lcHeadlines, setLcHeadlines] = useState("Download now and explore\nBoost your productivity\nTry it free today");
-  const [lcDescriptions, setLcDescriptions] = useState("The best app for your daily tasks\nMillions of users trust us every day");
-  const [lcCtas, setLcCtas] = useState("Install Free\nDownload Now\nGet Started");
-  const [lcSourceLang, setLcSourceLang] = useState("English");
-  const [lcMarkets, setLcMarkets] = useState<string[]>(["VN","ID","TH","PH","MY","SG","US"]);
-  const [lcLoading, setLcLoading] = useState(false);
-  const [lcResults, setLcResults] = useState<LocalizeMarketResult[]|null>(null);
-  const [lcError, setLcError] = useState("");
-  const [lcCopied, setLcCopied] = useState<string|null>(null);
-  const [lcActiveMarket, setLcActiveMarket] = useState<string|null>(null);
-
-  const lcToggleMarket = (code: string) => {
-    setLcMarkets(prev => prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]);
-  };
-  const lcSelectAll = () => setLcMarkets(LOCALIZE_MARKETS.map(m => m.code));
-  const lcSelectNone = () => setLcMarkets([]);
-
-  const lcCopyText = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
-    setLcCopied(key);
-    setTimeout(() => setLcCopied(null), 2000);
-  };
-
-  const lcCopyAllForMarket = (market: LocalizeMarketResult) => {
-    const lines = [
-      `=== ${market.flag} ${market.name} (${market.language}) ===`,
-      "--- Headlines ---",
-      ...market.headlines.map((h, i) => `${i+1}. ${h}`),
-      "--- Descriptions ---",
-      ...market.descriptions.map((d, i) => `${i+1}. ${d}`),
-      "--- CTAs ---",
-      ...market.ctas.map((c, i) => `${i+1}. ${c}`),
-    ].join("\n");
-    navigator.clipboard.writeText(lines);
-    setLcCopied(`all-${market.code}`);
-    setTimeout(() => setLcCopied(null), 2000);
-  };
-
-  const lcCopyAll = () => {
-    if (!lcResults) return;
-    const text = lcResults.map(m => [
-      `=== ${m.flag} ${m.name} (${m.language}) ===`,
-      "Headlines: " + m.headlines.join(" | "),
-      "Descriptions: " + m.descriptions.join(" | "),
-      "CTAs: " + m.ctas.join(" | "),
-    ].join("\n")).join("\n\n");
-    navigator.clipboard.writeText(text);
-    setLcCopied("all");
-    setTimeout(() => setLcCopied(null), 2000);
-  };
-
-  const handleLocalize = async () => {
-    if (!lcAppName.trim()) return;
-    setLcLoading(true);
-    setLcError("");
-    setLcResults(null);
-    try {
-      const res = await fetch("/api/localize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName: lcAppName,
-          headlines: lcHeadlines.split("\n").map(s => s.trim()).filter(Boolean),
-          descriptions: lcDescriptions.split("\n").map(s => s.trim()).filter(Boolean),
-          ctas: lcCtas.split("\n").map(s => s.trim()).filter(Boolean),
-          markets: lcMarkets,
-          sourceLanguage: lcSourceLang,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed");
-      setLcResults(data.results);
-      if (data.results?.length > 0) setLcActiveMarket(data.results[0].code);
-    } catch (e: unknown) {
-      setLcError(e instanceof Error ? e.message : "Translation failed");
+      setBanners(out);
+      setStatus(`Xong: ${out.length} banner.` + (failures.length ? ` (Một số ratio lỗi: ${failures.length})` : ""));
+      if (failures.length) setError("Cảnh báo:\n" + failures.join("\n"));
+    } catch (e: any) {
+      setError(e.message);
+      setStatus("");
     } finally {
-      setLcLoading(false);
+      setBusy(false);
     }
-  };
+  }
 
-  const handleAdCopyGenerate = async () => {
-    if (!adcopyMessage.trim()) return;
-    setAdcopyLoading(true); setAdcopyResult(null);
-    try {
-      const res = await fetch("/api/adcopy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appName: adcopyMessage, message: adcopyMessage, country: adcopyCountry, language: adcopyLang }),
-      });
-      const data = await res.json();
-      if (data.success) setAdcopyResult(data.result);
-    } catch { /* silent */ }
-    finally { setAdcopyLoading(false); }
-  };
-
-  const copyText = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setAdcopyCopied(text);
-    setTimeout(() => setAdcopyCopied(null), 1500);
-  };
-
-  interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  useEffect(() => {
-    try { setHistory(JSON.parse(localStorage.getItem("banner_history") || "[]")); } catch {}
-  }, []);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("google_ads_connected") === "1") {
-      setActivePage("launch");
-      checkAdsConnection();
-      // Clean up URL
-      window.history.replaceState({}, "", "/");
-    }
-  }, []);
-  const saveHistory = (item: HistoryItem) => {
-    setHistory(prev => {
-      const next = [item, ...prev].slice(0, 20);
-      try {
-        // Compress thumbnail to small size before saving
-        const canvas = document.createElement("canvas");
-        const img = new Image(); img.src = item.thumbnail;
-        canvas.width = 120; canvas.height = 63;
-        const ctx = canvas.getContext("2d");
-        img.onload = () => {
-          ctx?.drawImage(img, 0, 0, 120, 63);
-          const smallThumb = canvas.toDataURL("image/jpeg", 0.5);
-          const compressed = next.map((h, i) => i === 0 ? {...h, thumbnail: smallThumb} : h);
-          localStorage.setItem("banner_history", JSON.stringify(compressed));
-          setHistory(compressed);
-        };
-        img.src = item.thumbnail;
-      } catch {}
-      return next;
-    });
-  };
-  const deleteHistory = (id: string) => {
-    setHistory(prev => {
-      const next = prev.filter(h => h.id !== id);
-      try { localStorage.setItem("banner_history", JSON.stringify(next)); } catch {}
-      return next;
-    });
-  };
-  const [compQuery, setCompQuery] = useState("");
-  const [compLoading, setCompLoading] = useState(false);
-  const [compResult, setCompResult] = useState<Record<string, unknown> | null>(null);
-  const [compError, setCompError] = useState("");
-  const [compAppName, setCompAppName] = useState("");
-  const [compAppIcon, setCompAppIcon] = useState("");
-  const [compNameLoading, setCompNameLoading] = useState(false);
-  const [countrySearch, setCountrySearch] = useState("");
-  const [countryOpen, setCountryOpen] = useState(false);
-  const countryRef = useRef<HTMLDivElement>(null);
-  const [langSearch, setLangSearch] = useState("");
-  const [langOpen, setLangOpen] = useState(false);
-  const langRef = useRef<HTMLDivElement>(null);
-  const isDark = darkMode;
-  const t = {
-    text:        isDark ? "#F1F5F9" : "#0F172A",
-    textSub:     isDark ? "#94A3B8" : "#475569",
-    textMuted:   isDark ? "#64748B" : "#94A3B8",
-    border:      isDark ? "#1E293B" : "#E2E8F0",
-    card:        isDark ? "#0F1117" : "#FFFFFF",
-    cardHover:   isDark ? "#161B27" : "#F8FAFC",
-    input:       isDark ? "#0F1117" : "#FFFFFF",
-    inputBorder: isDark ? "#1E293B" : "#CBD5E1",
-    progress:    isDark ? "#1E293B" : "#E2E8F0",
-    tabBg:       isDark ? "#161B27" : "#F1F5F9",
-    tabActive:   isDark ? "#1E293B" : "#FFFFFF",
-    uploadHover: isDark ? "#161B27" : "#F8FAFC",
-    cardShadow:  isDark ? "0 4px 24px rgba(0,0,0,0.4)" : "0 4px 24px rgba(109,40,217,0.07)",
-    cardShadowHover: isDark ? "0 8px 40px rgba(0,0,0,0.5)" : "0 8px 40px rgba(109,40,217,0.13)",
-    gradientOrb1: isDark ? "rgba(109,40,217,0.15)" : "rgba(139,92,246,0.08)",
-    gradientOrb2: isDark ? "rgba(236,72,153,0.08)" : "rgba(236,72,153,0.05)",
-  };
-
-  const handleVideoChange = useCallback(async (file: File) => {
-    setVideoFile(file); setError(""); setExtractProgress(10);
-    try {
-      setExtractProgress(20);
-      const extracted = await extractFramesFromVideo(file, 8);
-      setFrames(extracted); setExtractProgress(100);
-    } catch { setError("Không thể đọc video. Thử file mp4 khác."); setExtractProgress(0); }
-  }, []);
-
-  const handleImagesChange = useCallback(async (files: FileList) => {
-    const arr = Array.from(files).slice(0, 8);
-    setImageFiles(arr); setError(""); setExtractProgress(10);
-    try {
-      const extracted: ExtractedFrame[] = await Promise.all(arr.map((f, i) => new Promise<ExtractedFrame>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
-          resolve({ index: i, timestamp: i, dataUrl, base64: dataUrl.split(",")[1] });
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(f);
-      })));
-      setFrames(extracted); setExtractProgress(100);
-    } catch { setError("Không thể đọc ảnh. Thử file khác."); setExtractProgress(0); }
-  }, []);
-
-  const handleInpaint = async () => {
-    const idx = brief.best_frame_index;
-    if (!frames[idx]) return;
-    setInpainting(true); setError("");
-    try {
-      const res = await fetch("/api/inpaint", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ imageBase64: frames[idx].dataUrl, language, country }) });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      // Replace the selected frame with the cleaned image
-      const newFrames = frames.map((f, i) => i === idx ? { ...f, dataUrl: data.base64, base64: data.base64.split(",")[1] } : f);
-      setFrames(newFrames);
-    } catch(e) { setError(String(e)); }
-    setInpainting(false);
-  };
-
-  const compressFrame = (dataUrl: string, maxSize = 512, quality = 0.5): Promise<string> =>
-    new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => {
-        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
-        const c = document.createElement("canvas");
-        c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-        c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
-        resolve(c.toDataURL("image/jpeg", quality).split(",")[1]);
-      };
-      img.src = dataUrl;
-    });
-
-  const handleAnalyze = async () => {
-    if (!frames.length) return;
-    setStep("analyzing"); setError("");
-    try {
-      const indices = frames.length <= 4
-        ? frames.map((_: unknown, i: number) => i)
-        : [0, Math.floor(frames.length * 0.33), Math.floor(frames.length * 0.66), frames.length - 1];
-      const selectedFrames = await Promise.all(
-        indices.map(async (i: number) => ({ base64: await compressFrame(frames[i].dataUrl) }))
-      );
-      const res = await fetch("/api/analyze", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ selectedFrames, niche, language, country }) });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      const defaults = NICHE_DEFAULTS[niche] || {};
-      const prevUrl = brief.app_store_url || brief.play_store_url;
-      setBrief(prev => ({ ...prev, ...defaults, ...data.brief, niche, app_store_url: prev.app_store_url, play_store_url: prev.play_store_url }));
-      setStep("brief");
-      // Auto-fetch app name from store URL if AI didn't get it
-      if (!data.brief?.app_name && prevUrl) {
-        try {
-          const iconRes = await fetch("/api/fetch-icon", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: prevUrl }) });
-          const iconData = await iconRes.json();
-          if (iconData.appName) setBrief(p => ({ ...p, app_name: p.app_name || iconData.appName }));
-          if (iconData.iconDataUrl) setIconDataUrlFetched(iconData.iconDataUrl);
-        } catch { /* ignore */ }
-      }
-    } catch(e) { setError(String(e)); setStep("upload"); }
-  };
-
-  const handleFetchIcon = async (url: string) => {
-    if (!url) return;
-    setIconFetching(true);
-    try {
-      const res = await fetch("/api/fetch-icon", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
-      const data = await res.json();
-      if (data.iconDataUrl) {
-        setIconDataUrlFetched(data.iconDataUrl);
-        if (data.appName && !brief.app_name) setBrief(p => ({ ...p, app_name: data.appName }));
-      }
-    } catch { /* ignore */ }
-    setIconFetching(false);
-  };
-
-  const handleGenerate = async () => {
-    setStep("generating"); setError("");
-    try {
-      const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
-      const bgDataUrl = frames[bestIdx]?.dataUrl || null;
-      const allFrameDataUrls = frames.map((f: { dataUrl: string }) => f.dataUrl);
-      let iconDataUrl: string | null = iconDataUrlFetched || null;
-      if (!iconDataUrl && iconFile) {
-        iconDataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(iconFile);
-        });
-      }
-      const generated = await generateAllBanners(brief, bgDataUrl, allFrameDataUrls, iconDataUrl);
-      setPreviews(generated);
-
-      const JSZip = (await import("jszip")).default;
-      const zip = new JSZip();
-      const top5 = zip.folder("top5")!;
-      const all = zip.folder("all_sizes")!;
-      for (const b of generated) {
-        const base64 = b.dataUrl.split(",")[1];
-        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-        if (b.isTop5) top5.file(`${b.key}.png`, bytes);
-        all.file(`${b.key}.png`, bytes);
-      }
-      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
-      const reader = new FileReader();
-      reader.onload = () => {
-        const zip64 = (reader.result as string).split(",")[1];
-        setZipBase64(zip64);
-        const thumbnail = generated.find(p => p.isTop5)?.dataUrl || generated[0]?.dataUrl || "";
-        saveHistory({ id: Date.now().toString(), appName: brief.app_name || "Untitled", date: new Date().toLocaleString("vi-VN"), thumbnail, count: generated.length });
-      };
-      reader.readAsDataURL(blob);
-      setStep("preview");
-    } catch(e) { setError(String(e)); setStep("brief"); }
-  };
-
-  const handleDownloadAll = () => { const a=document.createElement("a"); a.href=`data:application/zip;base64,${zipBase64}`; a.download=`google-ads-${brief.app_name||"banners"}.zip`; a.click(); };
-  const handleDownloadSingle = (p: Preview) => { const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); };
-  const displayedPreviews = activeTab==="top5" ? previews.filter(p=>p.isTop5) : previews;
-  const resetAll = () => { setStep("upload"); setPreviews([]); setFrames([]); setVideoFile(null); setImageFiles([]); setIconFile(null); setError(""); setExtractProgress(0); };
-
-  const inputStyle = { backgroundColor: t.input, borderColor: t.inputBorder, color: t.text, transition: "border-color 0.15s, box-shadow 0.15s" };
-  const labelStyle = { color: t.textMuted };
-  const cardStyle = { backgroundColor: t.card, borderColor: t.border, boxShadow: t.cardShadow, borderRadius: 16 };
-  const cardStyleHover = { backgroundColor: t.card, borderColor: t.border, boxShadow: t.cardShadowHover, borderRadius: 16 };
-  void cardStyleHover;
-
-  const extractAppName = (url: string): { name: string; iosId?: string; androidPkg?: string } => {
-    const iosSlugMatch = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id(\d+)/);
-    if (iosSlugMatch) return { name: iosSlugMatch[1].replace(/-/g, " "), iosId: iosSlugMatch[2] };
-    const iosIdOnly = url.match(/apps\.apple\.com.*\/id(\d+)/);
-    if (iosIdOnly) return { name: "", iosId: iosIdOnly[1] };
-    const androidMatch = url.match(/id=([a-zA-Z0-9._]+)/);
-    if (androidMatch) {
-      const pkg = androidMatch[1];
-      const parts = pkg.split(".");
-      return { name: parts[parts.length - 1].replace(/_/g, " "), androidPkg: pkg };
-    }
-    return { name: url.trim() };
-  };
-
-  const handleCompetitorSearch = async () => {
-    if (!compQuery.trim()) return;
-    setCompLoading(true); setCompError("");
-    try {
-      const { name, iosId, androidPkg } = extractAppName(compQuery.trim());
-      let finalName = name;
-
-      if (iosId) {
-        try {
-          const res = await fetch(`https://itunes.apple.com/lookup?id=${iosId}`);
-          const data = await res.json();
-          if (data.results?.[0]?.trackName) finalName = data.results[0].trackName;
-        } catch { /* dùng tên từ URL */ }
-      } else if (androidPkg) {
-        try {
-          const res = await fetch("/api/app-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ packageId: androidPkg }) });
-          const data = await res.json();
-          if (data.name) finalName = data.name;
-        } catch { /* dùng tên từ package */ }
-      }
-
-      if (!finalName || finalName.length < 3) {
-        finalName = androidPkg?.split(".").pop()?.replace(/_/g, " ") || compQuery.trim();
-      }
-      const transparencyUrl = `https://adstransparency.google.com/?region=anywhere&query=${encodeURIComponent(finalName)}`;
-      window.open(transparencyUrl, "_blank");
-    } catch { setCompError("Không thể tra cứu tên app."); }
-    finally { setCompLoading(false); }
-  };
-
-  const lookupAppNamePreview = async (url: string) => {
-    const { name, iosId, androidPkg } = extractAppName(url);
-    setCompAppName(name); setCompAppIcon("");
-    if (!iosId && !androidPkg) return;
-    setCompNameLoading(true);
-    try {
-      if (iosId) {
-        const res = await fetch(`https://itunes.apple.com/lookup?id=${iosId}`);
-        const data = await res.json();
-        const app = data.results?.[0];
-        if (app?.trackName) { setCompAppName(app.trackName); setCompAppIcon(app.artworkUrl60 || ""); }
-      } else if (androidPkg) {
-        const res = await fetch("/api/app-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ packageId: androidPkg }) });
-        const data = await res.json();
-        if (data.name) setCompAppName(data.name);
-      }
-    } catch { /* giữ tên từ URL */ }
-    finally { setCompNameLoading(false); }
-  };
-
-  // Helper to render competitor creatives — unused now but kept for future
-  const renderCompResult = () => {
-    if (!compResult) return null;
-    const creatives = (compResult.creatives as { creatives?: unknown[] } | null)?.creatives || [];
-    const details = compResult.details as { name?: string; icon_url?: string; publisher_name?: string; global_rating_count?: number } | null;
-    const network = compResult.network as { data?: { date: string; networks: { name: string; sov: number }[] }[] } | null;
-    return (
-      <div className="space-y-4 mt-4">
-        {details && (
-          <div className="flex items-center gap-3 p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.card}}>
-            {details.icon_url && <img src={details.icon_url} alt="" className="w-10 h-10 rounded-xl"/>}
-            <div>
-              <div className="font-semibold text-sm" style={{color: t.text}}>{details.name}</div>
-              <div className="text-xs" style={{color: t.textMuted}}>{details.publisher_name}</div>
-              {details.global_rating_count && <div className="text-xs" style={{color: t.textMuted}}>⭐ {Number(details.global_rating_count).toLocaleString()} ratings</div>}
-            </div>
-          </div>
-        )}
-        {network?.data && network.data.length > 0 && (
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>Ad Networks (Share of Voice)</div>
-            {network.data.slice(-1)[0]?.networks?.slice(0,5).map((n: {name:string;sov:number}, i: number) => (
-              <div key={i} className="flex items-center gap-2 mb-1.5">
-                <div className="text-xs w-24 truncate" style={{color: t.textSub}}>{n.name}</div>
-                <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{backgroundColor: t.progress}}>
-                  <div className="h-full bg-violet-500 rounded-full" style={{width:`${Math.min(n.sov*100,100)}%`}}/>
-                </div>
-                <div className="text-xs w-10 text-right" style={{color: t.textMuted}}>{(n.sov*100).toFixed(1)}%</div>
-              </div>
-            ))}
-          </div>
-        )}
-        {creatives.length > 0 ? (
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>{creatives.length} Ad Creatives</div>
-            <div className="grid grid-cols-2 gap-2">
-              {(creatives as Array<{preview_url?:string;ad_type?:string;first_seen_date?:string;last_seen_date?:string;impression_share?:number}>).slice(0,6).map((c, i) => (
-                <div key={i} className="rounded-xl overflow-hidden border" style={{borderColor: t.border}}>
-                  {c.preview_url ? (
-                    <img src={c.preview_url} alt="" className="w-full aspect-video object-cover"/>
-                  ) : (
-                    <div className="w-full aspect-video flex items-center justify-center text-xs" style={{backgroundColor: t.tabBg, color: t.textMuted}}>No preview</div>
-                  )}
-                  <div className="p-2 space-y-0.5" style={{backgroundColor: t.card}}>
-                    <div className="text-xs font-medium capitalize" style={{color: t.text}}>{c.ad_type || "Display"}</div>
-                    {c.first_seen_date && <div className="text-xs" style={{color: t.textMuted}}>First: {c.first_seen_date}</div>}
-                    {c.last_seen_date && <div className="text-xs" style={{color: t.textMuted}}>Last: {c.last_seen_date}</div>}
-                    {c.impression_share !== undefined && <div className="text-xs" style={{color: t.textMuted}}>SOV: {(c.impression_share*100).toFixed(1)}%</div>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="text-xs text-center py-4" style={{color: t.textMuted}}>Không có dữ liệu ad creatives<br/>(Cần SensorTower Ad Intelligence plan)</div>
-        )}
-      </div>
-    );
-  };
-  void renderCompResult; void compError; void compResult;
+  async function downloadZip() {
+    if (!banners.length) return;
+    const zip = new JSZip();
+    const folderName = (brief?.app_name || appInfo?.appName || "banners").replace(/[^\w-]+/g, "_");
+    const folder = zip.folder(folderName)!;
+    banners.forEach((b) => folder.file(`${b.key}.png`, dataUrlToBlob(b.dataUrl)));
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${folderName}_google_ads_banners.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
-    <div className="min-h-screen flex relative" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
-      {/* Gradient orbs */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden" style={{zIndex:0}}>
-        <div style={{position:"absolute",top:"-10%",right:"5%",width:600,height:600,borderRadius:"50%",background:`radial-gradient(circle, ${t.gradientOrb1} 0%, transparent 70%)`,filter:"blur(40px)"}}/>
-        <div style={{position:"absolute",bottom:"10%",left:"10%",width:400,height:400,borderRadius:"50%",background:`radial-gradient(circle, ${t.gradientOrb2} 0%, transparent 70%)`,filter:"blur(40px)"}}/>
-      </div>
-      <div className="min-h-screen flex w-full relative" style={{zIndex:1}}>
-
-      {/* Fixed Sidebar */}
-      <aside className="fixed top-0 left-0 h-full z-40 flex flex-col border-r" style={{width:200, backgroundColor: t.card, borderColor: t.border}}>
-        {/* Logo */}
-        <div className="flex items-center gap-2.5 px-4 py-4 border-b" style={{borderColor: t.border}}>
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center flex-shrink-0">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="5" rx="1" fill="white" opacity="0.9"/><rect x="9" y="1" width="6" height="8" rx="1" fill="white" opacity="0.6"/><rect x="1" y="8" width="6" height="7" rx="1" fill="white" opacity="0.6"/><rect x="9" y="11" width="6" height="4" rx="1" fill="white" opacity="0.4"/></svg>
-          </div>
-          <div>
-            <div className="text-xs font-bold leading-tight" style={{color: t.text}}>Ads Generator</div>
-            <div className="text-[10px]" style={{color: t.textMuted}}>Apero Group</div>
-          </div>
-        </div>
-
-        {/* Nav */}
-        <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
-          <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2" style={{color: t.textMuted}}>Công cụ</div>
-          {([
-            ["home",     "🏠", "Home"],
-            ["generate", "🎨", "Gen Banner"],
-            ["autogen",  "✨", "AI Banner"],
-            ["adcopy",   "✍️", "Ad Copy"],
-            ["keywords", "🔑", "Keywords"],
-            ["localize", "🌏", "Localize"],
-            ["launch",   "🚀", "Launch Camp"],
-          ] as const).map(([page, icon, label]) => (
-            <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } if (page==="launch") { checkAdsConnection(); } }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
-              style={activePage===page
-                ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
-                : {color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}>
-              <span>{icon}</span>{label}
-            </button>
-          ))}
-          <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Upload</div>
-    {([
-      ["youtube", "▶️", "YouTube Upload"],
-    ] as const).map(([page, icon, label]) => (
-      <button key={page} onClick={() => setActivePage(page)}
-        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
-        style={activePage===page
-          ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
-          : {color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}>
-        <span>{icon}</span>{label}
-        {ytAuthenticated && <span className="ml-auto w-2 h-2 rounded-full bg-green-400 flex-shrink-0"/>}
-      </button>
-    ))}
-    <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Nghiên cứu</div>
-          {([
-            ["competitor", "🔍", "Competitor Ads"],
-            ["history",   "🕐", "Lịch sử"],
-          ] as const).map(([page, icon, label]) => (
-            <button key={page} onClick={() => setActivePage(page)}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
-              style={activePage===page
-                ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
-                : {color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}>
-              <span>{icon}</span>{label}
-              {page==="history" && history.length>0 && (
-                <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full font-bold" style={{backgroundColor:"#10B98122",color:"#10B981"}}>{history.length}</span>
-              )}
-            </button>
-          ))}
-        </nav>
-
-        {/* Bottom: user info + dark mode */}
-        <div className="p-3 border-t space-y-2" style={{borderColor: t.border}}>
-          {session?.user && (
-            <div className="px-3 py-2 rounded-lg" style={{backgroundColor: t.tabBg}}>
-              <div className="flex items-center gap-2 mb-1.5">
-                {session.user.image
-                  ? <img src={session.user.image} alt="" className="w-6 h-6 rounded-full flex-shrink-0"/>
-                  : <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center text-white text-xs flex-shrink-0">{(session.user.name||"?")[0].toUpperCase()}</div>
-                }
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold truncate" style={{color: t.text}}>{session.user.name || "User"}</div>
-                  <div className="text-[10px] truncate" style={{color: t.textMuted}}>{session.user.email}</div>
-                </div>
-              </div>
-              <button onClick={() => signOut({ callbackUrl: "/login" })}
-                className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
-                style={{borderColor: t.border, color: t.textMuted}}>
-                Đăng xuất
-              </button>
-            </div>
-          )}
-          <button onClick={() => setDarkMode(d => !d)}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all border"
-            style={{color: t.textMuted, borderColor: t.border, backgroundColor: t.tabBg}}>
-            {darkMode ? "☀️" : "🌙"} {darkMode ? "Light mode" : "Dark mode"}
-          </button>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <div className="flex-1 flex flex-col" style={{marginLeft: 200}}>
-
-      {/* Header */}
-      <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
-        <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "✨ AI Banner Design" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
-        </div>
-        <div className="flex items-center gap-2">
-          {activePage==="generate" && step !== "upload" && (
-            <>
-              <button onClick={() => { if (step==="preview") setStep("brief"); else if (step==="brief") setStep("upload"); else if (step==="analyzing") setStep("upload"); }}
-                className="text-xs px-3 py-1.5 rounded-md border transition-colors"
-                style={{color: t.textMuted, borderColor: t.border}}>← Back</button>
-              <button onClick={resetAll}
-                className="text-xs px-3 py-1.5 rounded-md border transition-colors"
-                style={{color: t.textMuted, borderColor: t.border}}>🏠 Home</button>
-            </>
-          )}
-          {activePage==="generate" && step==="upload" && (
-            <button onClick={() => setActivePage("home")}
-              className="text-xs px-3 py-1.5 rounded-md border transition-colors"
-              style={{color: t.textMuted, borderColor: t.border}}>← Dashboard</button>
-          )}
-        </div>
+    <main className="mx-auto max-w-5xl px-4 py-10">
+      <header className="mb-8">
+        <h1 className="bg-gradient-to-r from-fuchsia-400 via-purple-400 to-orange-400 bg-clip-text text-3xl font-black text-transparent sm:text-4xl">
+          Google Ads Banner Generator
+        </h1>
+        <p className="mt-2 text-sm text-slate-400">
+          URL app + nhân vật branding → AI gen scene → overlay logo / hook / CTA / Play badge → 8 size chuẩn → ZIP.
+        </p>
       </header>
 
-      {/* Progress bar */}
-      {activePage === "generate" && (
-        <div className="h-0.5" style={{backgroundColor: t.progress}}>
-          <div className="h-full bg-gradient-to-r from-violet-600 to-violet-400 transition-all duration-500"
-            style={{width: step==="upload"?"15%":step==="analyzing"?"40%":step==="brief"?"60%":step==="generating"?"80%":"100%"}}/>
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur">
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+          URL App Store / Play Store
+        </label>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            value={appUrl}
+            onChange={(e) => setAppUrl(e.target.value)}
+            placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
+            className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none placeholder:text-slate-600 focus:border-fuchsia-400"
+          />
+          <button
+            onClick={fetchApp}
+            disabled={busy}
+            className="rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-semibold hover:bg-fuchsia-500 disabled:opacity-50"
+          >
+            Fetch app
+          </button>
         </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Select label="Quốc gia" value={country} onChange={setCountry} options={COUNTRIES} />
+          <Select label="Ngôn ngữ" value={language} onChange={setLanguage} options={LANGUAGES} />
+          <Select label="Niche" value={niche} onChange={setNiche} options={NICHES} />
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Quality</label>
+            <select
+              value={quality}
+              onChange={(e) => setQuality(e.target.value as any)}
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-fuchsia-400"
+            >
+              {QUALITIES.map((q) => (
+                <option key={q.v} value={q.v} className="bg-[#12121e]">
+                  {q.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* character branding — auto by default */}
+        <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+          <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+            <input
+              type="checkbox"
+              checked={autoMascot}
+              onChange={(e) => setAutoMascot(e.target.checked)}
+              className="h-4 w-4 accent-fuchsia-500"
+            />
+            Tự động tìm / tạo mascot
+          </label>
+          <p className="mt-1 pl-6 text-xs text-slate-400">
+            Tool sẽ tìm nhân vật trong screenshots của app; nếu không có thì tự tạo 1 mascot và tái dùng cho mọi banner.
+          </p>
+
+          <div className="mt-3 flex items-center gap-3">
+            {mascotUsed || characterImage ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img src={(characterImage || mascotUsed) as string} alt="mascot" className="h-16 w-16 rounded-lg object-cover" />
+            ) : (
+              <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-dashed border-white/20 text-2xl">🤖</div>
+            )}
+            <div className="flex-1">
+              <p className="text-xs text-slate-400">
+                {characterImage
+                  ? "Đang dùng mascot bạn upload (override auto)."
+                  : mascotUsed
+                    ? "Mascot tool đã dùng ở lần gen gần nhất."
+                    : "Không bắt buộc: có thể tự chọn 1 ảnh mascot để ghi đè auto."}
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => charInputRef.current?.click()}
+                  className="rounded-md bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
+                >
+                  Chọn ảnh (tùy chọn)
+                </button>
+                {characterImage && (
+                  <button
+                    onClick={() => setCharacterImage(null)}
+                    className="rounded-md bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
+                  >
+                    Bỏ override
+                  </button>
+                )}
+              </div>
+              <input ref={charInputRef} type="file" accept="image/*" hidden onChange={onCharFile} />
+            </div>
+          </div>
+        </div>
+
+        <label className="mt-4 flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={useScreenshot}
+            onChange={(e) => setUseScreenshot(e.target.checked)}
+            className="h-4 w-4 accent-fuchsia-500"
+          />
+          Dùng screenshot thật của app trong phone mockup
+        </label>
+
+        <div className="mt-4">
+          <div className="mb-1 flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Creative direction (prompt)
+            </label>
+            <button
+              onClick={autoPrompt}
+              disabled={busy || !appInfo}
+              className="rounded-md bg-white/10 px-2 py-1 text-xs hover:bg-white/20 disabled:opacity-40"
+            >
+              ✨ Auto Prompt
+            </button>
+          </div>
+          <textarea
+            value={userPrompt}
+            onChange={(e) => setUserPrompt(e.target.value)}
+            rows={3}
+            placeholder="VD: nền gradient tím sáng, mascot vui vẻ chỉ tay, bong bóng chat có cờ các nước, cảm hứng học ngôn ngữ."
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none placeholder:text-slate-600 focus:border-fuchsia-400"
+          />
+        </div>
+
+        <button
+          onClick={generate}
+          disabled={busy || !appInfo}
+          className="mt-4 w-full rounded-lg bg-gradient-to-r from-fuchsia-600 to-orange-500 px-4 py-3 text-sm font-bold hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? "Đang xử lý..." : "Generate banners"}
+        </button>
+      </section>
+
+      {status && <p className="mt-4 text-sm text-emerald-300">{status}</p>}
+      {error && (
+        <pre className="mt-3 whitespace-pre-wrap rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+          {error}
+        </pre>
       )}
 
-      <main className="max-w-4xl mx-auto px-6 py-10">
-
-        {/* HOME DASHBOARD */}
-        {activePage === "home" && (
-          <div className="space-y-8">
-            <div>
-              <h1 className="text-2xl font-bold mb-1" style={{color: t.text}}>Xin chào! 👋</h1>
-              <p className="text-sm" style={{color: t.textMuted}}>Chọn công cụ để bắt đầu tạo quảng cáo</p>
-            </div>
-
-            {/* Tool cards */}
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Công cụ chính</div>
-              <div className="grid grid-cols-3 gap-4">
-                {[
-                  { page: "generate" as const, icon: "🎨", name: "Gen Banner", desc: "Upload ảnh → AI tạo 20+ kích thước chuẩn Google Ads trong 60 giây", badge: "Phổ biến nhất", primary: true },
-                  { page: "adcopy" as const,   icon: "✍️", name: "Ad Copy",    desc: "Tạo headline, description & CTA chuẩn Google Ads theo thị trường", badge: null, primary: false },
-                  { page: "competitor" as const, icon: "🔍", name: "Competitor", desc: "Xem banner quảng cáo đối thủ đang chạy qua Google Ads Transparency", badge: null, primary: false },
-                ].map(tool => (
-                  <button key={tool.page} onClick={() => { setActivePage(tool.page); if (tool.page==="generate") setStep("upload"); }}
-                    className="p-5 rounded-2xl border text-left transition-all hover:scale-[1.02]"
-                    style={tool.primary
-                      ? {backgroundColor:"#7C3AED12", borderColor:"#7C3AED44", boxShadow: t.cardShadow}
-                      : {...cardStyle}}>
-                    <div className="text-3xl mb-3">{tool.icon}</div>
-                    <div className="text-sm font-bold mb-1" style={{color: t.text}}>{tool.name}</div>
-                    <div className="text-xs leading-relaxed" style={{color: t.textMuted}}>{tool.desc}</div>
-                    {tool.badge && (
-                      <div className="mt-3 inline-flex text-[10px] font-bold px-2 py-0.5 rounded-full" style={{backgroundColor:"#7C3AED22",color:"#A78BFA"}}>⭐ {tool.badge}</div>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Recent history */}
-            {history.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Lần tạo gần đây</div>
-                  <button onClick={() => setActivePage("history")} className="text-xs" style={{color:"#A78BFA"}}>Xem tất cả →</button>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  {history.slice(0,3).map(h => (
-                    <div key={h.id} className="rounded-xl border overflow-hidden" style={cardStyle}>
-                      {h.thumbnail && <img src={h.thumbnail} alt="" className="w-full object-cover" style={{height:64}}/>}
-                      <div className="p-3">
-                        <div className="text-xs font-semibold truncate" style={{color: t.text}}>{h.appName || "Untitled"}</div>
-                        <div className="text-[10px] mt-0.5" style={{color: t.textMuted}}>{h.date} · {h.count} ảnh</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+      {appInfo && (
+        <section className="mt-6 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3">
+          {appInfo.iconBase64 && (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img src={appInfo.iconBase64} alt="icon" className="h-12 w-12 rounded-xl" />
+          )}
+          <div className="min-w-0">
+            <p className="truncate font-semibold">{appInfo.appName}</p>
+            <p className="text-xs text-slate-400">{appInfo.screenshots.length} screenshots</p>
           </div>
-        )}
+        </section>
+      )}
 
-        {/* UPLOAD */}
-        {activePage==="generate" && (step==="upload"||step==="analyzing") && (
-          <div className="space-y-6">
-            <div>
-              <h1 className="text-2xl font-bold mb-1" style={{color: t.text}}>Tạo ảnh Google Ads</h1>
-              <p className="text-sm" style={{color: t.textMuted}}>Upload video hoặc ảnh → tự động gen {AD_SIZES.length} banner PNG cho Google UAC App Install</p>
+      {brief && (
+        <section className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+            <Field k="Tagline" v={brief.tagline} />
+            <Field k="Headline" v={brief.headline} />
+            <Field k="Subheadline" v={brief.subheadline} />
+            <Field k="CTA" v={brief.cta_text} />
+            <Field k="Mood" v={brief.mood} />
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400">Colors:</span>
+              <Swatch c={brief.primary_color} />
+              <Swatch c={brief.secondary_color} />
+              <Swatch c={brief.accent_color} />
             </div>
+          </div>
+        </section>
+      )}
 
-            {/* Niche */}
-            <div className="p-5 border" style={cardStyle}>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>Ngành app</label>
-              <div className="grid grid-cols-3 gap-3">
-                {(["photo","tool","office"] as const).map(n => (
-                  <button key={n} onClick={()=>setNiche(n)}
-                    className={`py-3 px-4 rounded-xl border text-sm font-medium transition-all ${niche===n?"border-violet-500 bg-violet-500/10 text-violet-400":""}`}
-                    style={niche===n ? {} : {borderColor: t.border, color: t.textMuted}}>
-                    {n==="photo"?"📸 Photo":n==="tool"?"🔧 Tool":"💼 Office"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Language + Country */}
-            <div className="p-5 border grid grid-cols-2 gap-4" style={cardStyle}>
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={labelStyle}>
-                  🌐 Ngôn ngữ text trong ảnh
-                </label>
-                <div ref={langRef} className="relative">
-                  <button type="button" onClick={() => { setLangOpen(o => !o); setLangSearch(""); }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
-                    style={{...inputStyle, borderColor: langOpen ? "#7C3AED" : t.inputBorder}}>
-                    <span>{LANGUAGES.find(l => l.code === language)?.label || language}</span>
-                    <span className="text-xs ml-2" style={{color: t.textMuted}}>{langOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {langOpen && (
-                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                      <div className="p-2 border-b" style={{borderColor: t.border}}>
-                        <input autoFocus value={langSearch} onChange={e => setLangSearch(e.target.value)}
-                          placeholder="🔍 Tìm ngôn ngữ..."
-                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
-                          style={inputStyle}/>
-                      </div>
-                      <div className="max-h-52 overflow-y-auto">
-                        {LANGUAGES.filter(l => l.label.toLowerCase().includes(langSearch.toLowerCase()) || l.code.toLowerCase().includes(langSearch.toLowerCase())).map(l => (
-                          <button key={l.code} type="button"
-                            onClick={() => { setLanguage(l.code); setLangOpen(false); setLangSearch(""); }}
-                            className="w-full text-left px-4 py-2 text-sm transition-colors"
-                            style={{backgroundColor: language === l.code ? "#7C3AED22" : "transparent", color: language === l.code ? "#A78BFA" : t.text}}>
-                            {l.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs mt-1.5" style={{color: t.textMuted}}>Headline, subheadline, CTA sẽ được viết bằng ngôn ngữ này</p>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={labelStyle}>
-                  🎯 Thị trường mục tiêu
-                </label>
-                <div ref={countryRef} className="relative">
-                  <button type="button" onClick={() => { setCountryOpen(o => !o); setCountrySearch(""); }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none focus:border-violet-500 transition-colors"
-                    style={{...inputStyle, borderColor: countryOpen ? "#7C3AED" : t.inputBorder}}>
-                    <span>{COUNTRIES.find(c => c.code === country)?.label || country}</span>
-                    <span className="text-xs ml-2" style={{color: t.textMuted}}>{countryOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {countryOpen && (
-                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                      <div className="p-2 border-b" style={{borderColor: t.border}}>
-                        <input autoFocus value={countrySearch} onChange={e => setCountrySearch(e.target.value)}
-                          placeholder="🔍 Tìm quốc gia..."
-                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
-                          style={inputStyle}/>
-                      </div>
-                      <div className="max-h-52 overflow-y-auto">
-                        {COUNTRIES.filter(c => c.label.toLowerCase().includes(countrySearch.toLowerCase()) || c.code.toLowerCase().includes(countrySearch.toLowerCase())).map(c => (
-                          <button key={c.code} type="button"
-                            onClick={() => { setCountry(c.code); setCountryOpen(false); setCountrySearch(""); }}
-                            className="w-full text-left px-4 py-2 text-sm transition-colors"
-                            style={{backgroundColor: country === c.code ? "#7C3AED22" : "transparent", color: country === c.code ? "#A78BFA" : t.text}}>
-                            {c.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs mt-1.5" style={{color: t.textMuted}}>AI điều chỉnh màu sắc, tone & style phù hợp thị trường</p>
-              </div>
-            </div>
-
-            {/* Input mode + upload */}
-            <div className="p-5 border" style={cardStyle}>
-              <div className="flex items-center justify-between mb-3">
-                <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>
-                  Nguồn ảnh <span className="text-violet-400">*</span>
-                </label>
-                <div className="flex gap-1 rounded-lg p-0.5" style={{backgroundColor: t.tabBg}}>
-                  {([["video","🎬 Video"],["image","🖼️ Ảnh tĩnh"]] as const).map(([mode, label])=>(
-                    <button key={mode} onClick={()=>{setInputMode(mode);setFrames([]);setVideoFile(null);setImageFiles([]);setExtractProgress(0);}}
-                      className="px-3 py-1 rounded-md text-xs font-medium transition-all"
-                      style={inputMode===mode?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {inputMode === "video" ? (
-                <div onClick={()=>videoInputRef.current?.click()}
-                  className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${videoFile?"border-violet-500/50 bg-violet-500/5":""}`}
-                  style={videoFile ? {} : {borderColor: t.border}}
-                  onMouseEnter={e => { if (!videoFile) (e.currentTarget as HTMLDivElement).style.backgroundColor = t.uploadHover; }}
-                  onMouseLeave={e => { if (!videoFile) (e.currentTarget as HTMLDivElement).style.backgroundColor = ""; }}>
-                  {videoFile ? (
-                    <div className="space-y-2">
-                      <div className="text-2xl">🎬</div>
-                      <div className="text-sm font-medium" style={{color: t.text}}>{videoFile.name}</div>
-                      <div className="text-xs" style={{color: t.textMuted}}>{(videoFile.size/1024/1024).toFixed(1)} MB</div>
-                      {extractProgress>0&&extractProgress<100&&(
-                        <div className="mt-3">
-                          <div className="h-1 rounded-full overflow-hidden" style={{backgroundColor: t.border}}>
-                            <div className="h-full bg-violet-500 transition-all duration-300" style={{width:`${extractProgress}%`}}/>
-                          </div>
-                          <div className="text-xs mt-1" style={{color: t.textMuted}}>Đang extract frames...</div>
-                        </div>
-                      )}
-                      {extractProgress===100&&<div className="text-xs text-emerald-500">✓ Extracted {frames.length} frames</div>}
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="text-3xl opacity-40">🎬</div>
-                      <div className="text-sm" style={{color: t.textMuted}}>Click để upload video ads</div>
-                      <div className="text-xs" style={{color: t.textMuted, opacity: 0.7}}>MP4, MOV, AVI, WebM</div>
-                    </div>
-                  )}
-                  <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={e=>e.target.files?.[0]&&handleVideoChange(e.target.files[0])}/>
-                </div>
-              ) : (
-                <div onClick={()=>imageInputRef.current?.click()}
-                  className={`relative border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${imageFiles.length?"border-violet-500/50 bg-violet-500/5":""}`}
-                  style={imageFiles.length ? {} : {borderColor: t.border}}
-                  onMouseEnter={e => { if (!imageFiles.length) (e.currentTarget as HTMLDivElement).style.backgroundColor = t.uploadHover; }}
-                  onMouseLeave={e => { if (!imageFiles.length) (e.currentTarget as HTMLDivElement).style.backgroundColor = ""; }}>
-                  {imageFiles.length ? (
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap gap-2 justify-center">
-                        {frames.map((f,i)=>(
-                          <img key={i} src={f.dataUrl} alt={`img${i}`} className="w-16 h-16 object-cover rounded-lg border" style={{borderColor:t.border}}/>
-                        ))}
-                      </div>
-                      <div className="text-xs text-emerald-500">✓ {imageFiles.length} ảnh đã tải lên</div>
-                      <div className="text-xs" style={{color: t.textMuted}}>Click để thay đổi</div>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="text-3xl opacity-40">🖼️</div>
-                      <div className="text-sm" style={{color: t.textMuted}}>Click để upload 1–8 ảnh</div>
-                      <div className="text-xs" style={{color: t.textMuted, opacity: 0.7}}>PNG, JPG, WebP</div>
-                    </div>
-                  )}
-                  <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e=>e.target.files&&e.target.files.length>0&&handleImagesChange(e.target.files)}/>
-                </div>
-              )}
-            </div>
-
-            {/* Icon + Store links */}
-            <div className="p-5 border grid grid-cols-2 gap-4" style={cardStyle}>
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>
-                  Icon app <span className="font-normal normal-case" style={{color: t.textMuted}}>(tuỳ chọn)</span>
-                </label>
-                {iconDataUrlFetched ? (
-                  <div className="border border-violet-500/40 bg-violet-500/5 rounded-xl p-3 flex items-center gap-3 h-[88px]">
-                    <img src={iconDataUrlFetched} alt="icon" className="w-14 h-14 rounded-2xl object-cover flex-shrink-0 shadow"/>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium truncate" style={{color: t.text}}>Icon đã fetch ✓</div>
-                      <button onClick={()=>{ setIconDataUrlFetched(null); setIconFile(null); }} className="text-xs mt-1" style={{color: t.textMuted}}>Xoá</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div onClick={()=>iconInputRef.current?.click()}
-                    className={`border border-dashed rounded-xl p-5 text-center cursor-pointer transition-all h-[88px] flex flex-col items-center justify-center gap-1 ${iconFile?"border-violet-500/40 bg-violet-500/5":""}`}
-                    style={iconFile ? {} : {borderColor: t.border}}>
-                    {iconFile ? (
-                      <><div className="text-xl">🔷</div><div className="text-xs truncate max-w-[140px]" style={{color: t.text}}>{iconFile.name}</div></>
-                    ) : (
-                      <><div className="text-xl opacity-30">🔷</div><div className="text-xs" style={{color: t.textMuted}}>Upload icon PNG/JPG</div></>
-                    )}
-                    <input ref={iconInputRef} type="file" accept="image/*" className="hidden" onChange={e=>e.target.files?.[0]&&(setIconFile(e.target.files[0]),setIconDataUrlFetched(null))}/>
-                  </div>
-                )}
-              </div>
-              <div className="space-y-2">
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={labelStyle}>
-                  Store links <span className="font-normal normal-case" style={{color: t.textMuted}}>(tự động lấy icon)</span>
-                </label>
-                <div className="relative">
-                  <input type="url" placeholder="🍎 App Store URL" value={brief.app_store_url}
-                    onChange={e=>{setBrief(p=>({...p,app_store_url:e.target.value})); setIconDataUrlFetched(null);}}
-                    onBlur={e=>{ if(e.target.value && !iconDataUrlFetched) handleFetchIcon(e.target.value); }}
-                    className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors pr-16" style={inputStyle}/>
-                  {iconFetching
-                    ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs">⏳</span>
-                    : brief.app_store_url && !iconDataUrlFetched && <button onClick={()=>handleFetchIcon(brief.app_store_url)}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded text-xs font-medium bg-violet-600 text-white">Fetch</button>}
-                </div>
-                <div className="relative">
-                  <input type="url" placeholder="🤖 Google Play URL" value={brief.play_store_url}
-                    onChange={e=>{setBrief(p=>({...p,play_store_url:e.target.value})); setIconDataUrlFetched(null);}}
-                    onBlur={e=>{ if(e.target.value && !iconDataUrlFetched) handleFetchIcon(e.target.value); }}
-                    className="w-full rounded-lg px-3 py-2 text-xs border focus:outline-none focus:border-violet-500/50 transition-colors pr-16" style={inputStyle}/>
-                  {iconFetching
-                    ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs">⏳</span>
-                    : brief.play_store_url && !iconDataUrlFetched && <button onClick={()=>handleFetchIcon(brief.play_store_url)}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded text-xs font-medium bg-violet-600 text-white">Fetch</button>}
-                </div>
-                <div className="text-xs" style={{color:t.textMuted}}>💡 Paste URL → icon tự lấy khi rời ô nhập</div>
-              </div>
-            </div>
-
-            {error&&<p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-4 py-3">{error}</p>}
-            <button onClick={handleAnalyze} disabled={frames.length===0||step==="analyzing"}
-              className="w-full py-3.5 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white">
-              {step==="analyzing"?<span className="flex items-center justify-center gap-2"><span className="animate-spin">⏳</span> Đang phân tích...</span>:"Phân tích & tạo brief →"}
+      {banners.length > 0 && (
+        <section className="mt-6">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-bold">{banners.length} banners</h2>
+            <button
+              onClick={downloadZip}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold hover:bg-emerald-500"
+            >
+              ⬇ Download ZIP
             </button>
           </div>
-        )}
-
-        {/* BRIEF */}
-        {activePage==="generate" && step==="brief" && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-bold mb-1" style={{color: t.text}}>Xem lại & chỉnh brief</h2>
-              <p className="text-sm" style={{color: t.textMuted}}>Claude đã phân tích. Chỉnh bất kỳ mục nào trước khi gen ảnh.</p>
-            </div>
-
-            {/* Frame selector */}
-            <div className="p-5 border" style={cardStyle}>
-              <div className="flex items-center justify-between mb-3">
-                <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>
-                  Frame background ({brief.best_frame_index+1}/{frames.length})
-                </label>
-                <button onClick={handleInpaint} disabled={inpainting}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all disabled:opacity-40"
-                  style={{borderColor:"rgba(139,92,246,0.5)", color:"#a78bfa", backgroundColor:"rgba(139,92,246,0.08)"}}
-                  title="Dùng AI xóa text gốc trong ảnh (OpenAI)">
-                  {inpainting ? <><span className="animate-spin">⏳</span> Đang xử lý...</> : <>✨ Xóa text gốc (AI)</>}
-                </button>
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                {frames.map((f,i)=>(
-                  <div key={i} className="relative flex-shrink-0 group">
-                    <button onClick={()=>setBrief(p=>({...p,best_frame_index:i}))}
-                      className={`rounded-lg overflow-hidden border-2 transition-all block ${brief.best_frame_index===i?"border-violet-500 scale-105":""}`}
-                      style={brief.best_frame_index===i ? {} : {borderColor: t.border, opacity: 0.6}}>
-                      <img src={f.dataUrl} alt={`Frame ${i}`} className="w-24 h-14 object-cover"/>
-                    </button>
-                    <button onClick={e=>{e.stopPropagation();setLightboxFrame(f.dataUrl);}}
-                      className="absolute top-1 right-1 w-5 h-5 rounded flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                      style={{backgroundColor:"rgba(0,0,0,0.7)",color:"white"}} title="Xem to">🔍</button>
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs mt-2" style={{color: t.textMuted}}>Click chọn frame · Hover → 🔍 để xem to · "Xóa text gốc" dùng AI xóa text (~$0.04)</p>
-            </div>
-
-            {/* Text fields */}
-            <div className="p-5 border grid grid-cols-2 gap-4" style={cardStyle}>
-              <div className="col-span-2 flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider" style={labelStyle}>Nội dung</span>
-                <button onClick={async () => {
-                  if (!brief.app_name) { alert("Nhập tên app trước!"); return; }
-                  setSuggestLoading(true); setSuggestResult(null);
-                  try {
-                    const res = await fetch("/api/suggest-brief", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ app_name: brief.app_name, niche: brief.niche, headline: brief.headline, subheadline: brief.subheadline, cta_text: brief.cta_text }) });
-                    const data = await res.json();
-                    if (data.success) setSuggestResult(data);
-                  } catch {}
-                  setSuggestLoading(false);
-                }} disabled={suggestLoading}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all disabled:opacity-40"
-                  style={{borderColor:"rgba(139,92,246,0.5)", color:"#a78bfa", backgroundColor:"rgba(139,92,246,0.08)"}}>
-                  {suggestLoading ? <><span className="animate-spin">⏳</span> Đang suggest...</> : <>✨ AI Suggest</>}
-                </button>
-              </div>
-
-              {/* AI Suggestions */}
-              {suggestResult && (
-                <div className="col-span-2 space-y-2 mb-2">
-                  <p className="text-xs font-medium" style={{color: t.textMuted}}>Chọn 1 gợi ý bên dưới để áp dụng:</p>
-                  {suggestResult.suggestions.map((s: {label:string;headline:string;subheadline:string;cta:string}, i: number) => (
-                    <button key={i} onClick={() => { setBrief(p => ({...p, headline: s.headline, subheadline: s.subheadline, cta_text: s.cta})); setSuggestResult(null); }}
-                      className="w-full text-left p-3 rounded-lg border transition-all hover:border-violet-500/60"
-                      style={{borderColor: t.border, backgroundColor: t.input}}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{color:"#a78bfa"}}>{s.label || `Gợi ý ${i+1}`}</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{backgroundColor:"rgba(139,92,246,0.15)", color:"#a78bfa"}}>Áp dụng →</span>
-                      </div>
-                      <p className="text-sm font-semibold" style={{color: t.text}}>{s.headline}</p>
-                      <p className="text-xs mt-0.5" style={{color: t.textMuted}}>{s.subheadline} · <span style={{color:"#34d399"}}>{s.cta}</span></p>
-                    </button>
-                  ))}
-                  {suggestResult.palettes && (
-                    <div>
-                      <p className="text-xs font-medium mt-3 mb-1.5" style={{color: t.textMuted}}>Bảng màu gợi ý:</p>
-                      <div className="flex gap-2">
-                        {suggestResult.palettes.map((p: {name:string;primary:string;secondary:string;accent:string}, i: number) => (
-                          <button key={i} onClick={() => { setBrief(prev => ({...prev, primary_color: p.primary, secondary_color: p.secondary, accent_color: p.accent})); }}
-                            className="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all hover:border-violet-500/60 flex-1"
-                            style={{borderColor: t.border, backgroundColor: t.input}}>
-                            <div className="flex gap-1">
-                              <div className="w-4 h-4 rounded-full" style={{backgroundColor: p.primary}}/>
-                              <div className="w-4 h-4 rounded-full" style={{backgroundColor: p.secondary}}/>
-                              <div className="w-4 h-4 rounded-full" style={{backgroundColor: p.accent}}/>
-                            </div>
-                            <span className="text-[10px]" style={{color: t.textMuted}}>{p.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            {banners.map((b) => (
+              <div key={b.key} className="rounded-xl border border-white/10 bg-black/30 p-2">
+                <div
+                  className="mb-2 flex items-center justify-center overflow-hidden rounded-lg bg-black/40"
+                  style={{ aspectRatio: `${b.width}/${b.height}` }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={b.dataUrl} alt={b.key} className="max-h-40 w-full object-contain" />
                 </div>
-              )}
-
-              {[{key:"app_name",label:"Tên app",placeholder:"e.g. PhotoPro"},{key:"cta_text",label:"CTA Button",placeholder:"e.g. Try Free"},{key:"headline",label:"Headline",placeholder:"e.g. Edit Photos Like a Pro",full:true},{key:"subheadline",label:"Subheadline",placeholder:"e.g. 100+ Filters & AI Tools",full:true}].map(field=>(
-                <div key={field.key} className={field.full?"col-span-2":""}>
-                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>{field.label}</label>
-                  <input type="text" placeholder={field.placeholder}
-                    value={(brief as unknown as Record<string,string>)[field.key]||""}
-                    onChange={e=>setBrief(p=>({...p,[field.key]:e.target.value}))}
-                    className="w-full rounded-lg px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500/60 transition-colors"
-                    style={inputStyle}/>
-                </div>
-              ))}
-            </div>
-
-            {/* Colors */}
-            <div className="p-5 border" style={cardStyle}>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-3" style={labelStyle}>Màu sắc</label>
-              <div className="flex gap-6">
-                {[{key:"primary_color",label:"Primary"},{key:"secondary_color",label:"Secondary"},{key:"accent_color",label:"Accent (CTA)"}].map(c=>(
-                  <div key={c.key} className="flex items-center gap-2">
-                    <input type="color" value={(brief as unknown as Record<string,string>)[c.key]||"#7B2FBE"} onChange={e=>setBrief(p=>({...p,[c.key]:e.target.value}))}
-                      className="w-8 h-8 rounded cursor-pointer border" style={{borderColor: t.border}}/>
-                    <span className="text-xs" style={{color: t.textMuted}}>{c.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {error&&<p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-4 py-3">{error}</p>}
-            <button onClick={handleGenerate} className="w-full py-3.5 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 transition-all text-white">
-              Gen {AD_SIZES.length} banner PNG →
-            </button>
-          </div>
-        )}
-
-        {/* GENERATING */}
-        {activePage==="generate" && step==="generating" && (
-          <div className="text-center py-20 space-y-6">
-            <div className="text-5xl animate-pulse">🎨</div>
-            <div>
-              <h2 className="text-xl font-bold mb-2" style={{color: t.text}}>Đang tạo {AD_SIZES.length} banner...</h2>
-              <p className="text-sm" style={{color: t.textMuted}}>Đang composite ảnh cho tất cả kích thước Google Ads</p>
-            </div>
-            <div className="w-48 h-1 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
-              <div className="h-full bg-violet-500 animate-pulse w-2/3"/>
-            </div>
-          </div>
-        )}
-
-        {/* PREVIEW */}
-        {activePage==="generate" && step==="preview" && (
-          <div className="space-y-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-xl font-bold mb-1" style={{color: t.text}}>✅ {previews.length} banner đã sẵn sàng</h2>
-                <p className="text-sm" style={{color: t.textMuted}}>Click ảnh để xem lớn · hover để download riêng</p>
-              </div>
-              <button onClick={handleDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 transition-all text-white text-sm font-semibold px-4 py-2.5 rounded-xl">
-                ⬇ Tải tất cả (.zip)
-              </button>
-            </div>
-            <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
-              {([["top5","⭐ Top 5"],["all",`Tất cả (${previews.length})`],["device","📱 Device Preview"]] as const).map(([tab,label])=>(
-                <button key={tab} onClick={()=>setActiveTab(tab)}
-                  className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
-                  style={activeTab===tab ? {backgroundColor: t.tabActive, color: t.text} : {color: t.textMuted}}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {/* Device Preview Tab */}
-            {activeTab === "device" && (() => {
-              const allP = previews;
-              const cur = allP[devicePreviewIndex] || allP[0];
-              const isPortrait = cur && cur.height > cur.width;
-              const isSquare = cur && cur.width === cur.height;
-              return (
-                <div className="space-y-6">
-                  {/* Device selector */}
-                  <div className="flex items-center gap-3">
-                    {(["phone","tablet"] as const).map(d => (
-                      <button key={d} onClick={() => setDeviceType(d)}
-                        className="px-4 py-1.5 rounded-lg text-sm font-medium border transition-all"
-                        style={deviceType===d ? {backgroundColor:"#7C3AED22",borderColor:"#7C3AED",color:"#A78BFA"} : {borderColor:t.border,color:t.textMuted}}>
-                        {d==="phone"?"📱 Phone":"📟 Tablet"}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex flex-col lg:flex-row gap-8 items-start">
-                    {/* Mockup */}
-                    <div className="flex-shrink-0 flex flex-col items-center gap-4">
-                      {/* Phone frame */}
-                      {deviceType === "phone" ? (
-                        <div className="relative rounded-[2.5rem] border-[6px] shadow-2xl overflow-hidden flex-shrink-0"
-                          style={{width:220, height:440, borderColor: isDark?"#334155":"#1E293B", backgroundColor:"#0F172A"}}>
-                          {/* Notch */}
-                          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-20 h-5 rounded-b-xl z-10" style={{backgroundColor: isDark?"#334155":"#1E293B"}}/>
-                          {/* Screen */}
-                          <div className="w-full h-full overflow-hidden flex flex-col" style={{backgroundColor:"#F8FAFC"}}>
-                            {/* Status bar */}
-                            <div className="flex items-center justify-between px-5 pt-6 pb-1 text-xs font-medium" style={{color:"#0F172A"}}>
-                              <span>9:41</span><span>●●●</span>
-                            </div>
-                            {/* App-like content above ad — thu nhỏ lại nếu portrait */}
-                            {!isPortrait && (
-                              <div className="flex-1 px-2 py-1 space-y-1.5 overflow-hidden">
-                                {[80,60,70].map((w,i)=>(
-                                  <div key={i} className="h-2 rounded-full" style={{width:`${w}%`,backgroundColor:"#E2E8F0"}}/>
-                                ))}
-                                <div className="h-16 rounded-lg mt-2" style={{backgroundColor:"#E2E8F0"}}/>
-                                <div className="h-2 rounded-full w-4/5" style={{backgroundColor:"#E2E8F0"}}/>
-                                <div className="h-2 rounded-full w-3/5" style={{backgroundColor:"#E2E8F0"}}/>
-                              </div>
-                            )}
-                            {/* Ad banner — scale đúng tỉ lệ, phone inner width ~196px */}
-                            {cur && (() => {
-                              const innerW = 196;
-                              const ratio = cur.height / cur.width;
-                              const adH = Math.round(innerW * ratio);
-                              const maxAdH = isPortrait ? 320 : isSquare ? 196 : 103;
-                              return (
-                                <div className="relative mx-1 mb-1 overflow-hidden rounded-lg shadow" style={{flexShrink:0, height: Math.min(adH, maxAdH)}}>
-                                  <div className="absolute top-0.5 right-0.5 bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
-                                  <img src={cur.dataUrl} alt="" style={{width:"100%", height:"100%", objectFit:"cover", objectPosition:"top"}}/>
-                                </div>
-                              );
-                            })()}
-                          </div>
-                          {/* Home bar */}
-                          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-16 h-1 rounded-full" style={{backgroundColor:"#334155"}}/>
-                        </div>
-                      ) : (
-                        /* Tablet frame */
-                        <div className="relative rounded-[1.5rem] border-[6px] shadow-2xl overflow-hidden"
-                          style={{width:320, height:440, borderColor: isDark?"#334155":"#1E293B", backgroundColor:"#0F172A"}}>
-                          <div className="w-full h-full overflow-hidden flex flex-col" style={{backgroundColor:"#F8FAFC"}}>
-                            <div className="flex items-center justify-between px-4 pt-3 pb-1 text-xs font-medium" style={{color:"#0F172A"}}>
-                              <span>9:41</span><span>●●● 100%</span>
-                            </div>
-                            <div className="flex-1 px-3 py-2 grid grid-cols-2 gap-2 overflow-hidden">
-                              {[1,2,3,4].map(i=>(
-                                <div key={i} className="rounded-lg" style={{backgroundColor:"#E2E8F0",height:80}}/>
-                              ))}
-                            </div>
-                            {cur && (() => {
-                              const innerW = 296;
-                              const ratio = cur.height / cur.width;
-                              const adH = Math.round(innerW * ratio);
-                              const maxAdH = isPortrait ? 380 : isSquare ? 296 : 155;
-                              return (
-                                <div className="relative mx-2 mb-2 overflow-hidden rounded-lg shadow" style={{flexShrink:0, height: Math.min(adH, maxAdH)}}>
-                                  <div className="absolute top-0.5 right-0.5 bg-black/50 text-white px-1 rounded z-10" style={{fontSize:8}}>Ad</div>
-                                  <img src={cur.dataUrl} alt="" style={{width:"100%", height:"100%", objectFit:"cover", objectPosition:"top"}}/>
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      )}
-                      <div className="text-xs text-center" style={{color:t.textMuted}}>
-                        {cur?.label} · {cur?.width}×{cur?.height}px
-                      </div>
-                    </div>
-
-                    {/* Banner selector list */}
-                    <div className="flex-1 grid grid-cols-2 gap-2 max-h-96 overflow-y-auto pr-1">
-                      {allP.map((p,i) => (
-                        <button key={p.key} onClick={() => setDevicePreviewIndex(i)}
-                          className="rounded-lg border p-2 text-left transition-all"
-                          style={{borderColor: devicePreviewIndex===i?"#7C3AED":t.border, backgroundColor: devicePreviewIndex===i?"#7C3AED11":t.card}}>
-                          <img src={p.dataUrl} alt="" className="w-full rounded mb-1 object-cover" style={{height:40}}/>
-                          <div className="text-xs font-medium truncate" style={{color: devicePreviewIndex===i?"#A78BFA":t.text}}>{p.key}</div>
-                          <div className="text-xs truncate" style={{color:t.textMuted}}>{p.width}×{p.height}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Banner grid */}
-            {activeTab !== "device" && <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {displayedPreviews.map(p=>{
-                const scale=Math.min(1,340/Math.max(p.width,p.height));
-                return (
-                  <div key={p.key} onClick={()=>setSelectedPreview(p)}
-                    className="group rounded-2xl p-4 cursor-pointer transition-all border"
-                    style={{...cardStyle, transition:"box-shadow 0.2s, border-color 0.2s, background-color 0.2s"}}
-                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
-                    <div className="flex items-center justify-center mb-3" style={{height:Math.round(p.height*scale)+16}}>
-                      <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
-                        <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
-                      </div>
-                      <button onClick={e=>{e.stopPropagation();handleDownloadSingle(p);}}
-                        className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
-                        style={{backgroundColor: t.tabBg, color: t.textSub}}>
-                        ⬇
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>}
-          </div>
-        )}
-
-        {/* AD COPY PAGE */}
-        {activePage === "adcopy" && (
-          <div className="max-w-xl space-y-4">
-            <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Key message</div>
-            <textarea value={adcopyMessage} onChange={e => setAdcopyMessage(e.target.value)}
-              placeholder="VD: Canva - chỉnh ảnh chuyên nghiệp, miễn phí, AI filters..." rows={3}
-              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500 resize-none"
-              style={inputStyle}/>
-            <div className="grid grid-cols-2 gap-3">
-              {/* Country searchable dropdown */}
-              <div>
-                <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Thị trường</div>
-                <div ref={adcopyCountryRef} className="relative">
-                  <button type="button" onClick={() => { setAdcopyCountryOpen(o => !o); setAdcopyCountrySearch(""); }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
-                    style={{...inputStyle, borderColor: adcopyCountryOpen ? "#7C3AED" : t.inputBorder}}>
-                    <span className="truncate">{COUNTRIES.find(c => c.code === adcopyCountry)?.label || adcopyCountry}</span>
-                    <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{adcopyCountryOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {adcopyCountryOpen && (
-                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                      <div className="p-2 border-b" style={{borderColor: t.border}}>
-                        <input autoFocus value={adcopyCountrySearch} onChange={e => setAdcopyCountrySearch(e.target.value)}
-                          placeholder="🔍 Tìm quốc gia..."
-                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
-                          style={inputStyle}/>
-                      </div>
-                      <div className="max-h-48 overflow-y-auto">
-                        {COUNTRIES.filter(c => c.label.toLowerCase().includes(adcopyCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(adcopyCountrySearch.toLowerCase())).map(c => (
-                          <button key={c.code} type="button"
-                            onClick={() => { setAdcopyCountry(c.code); setAdcopyCountryOpen(false); setAdcopyCountrySearch(""); const defaultLang = COUNTRY_DEFAULT_LANG[c.code]; if (defaultLang) setAdcopyLang(defaultLang); }}
-                            className="w-full text-left px-4 py-2 text-sm transition-colors"
-                            style={{backgroundColor: adcopyCountry === c.code ? "#7C3AED22" : "transparent", color: adcopyCountry === c.code ? "#A78BFA" : t.text}}>
-                            {c.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              {/* Language searchable dropdown */}
-              <div>
-                <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</div>
-                <div ref={adcopyLangRef} className="relative">
-                  <button type="button" onClick={() => { setAdcopyLangOpen(o => !o); setAdcopyLangSearch(""); }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
-                    style={{...inputStyle, borderColor: adcopyLangOpen ? "#7C3AED" : t.inputBorder}}>
-                    <span className="truncate">{LANGUAGES.find(l => l.code === adcopyLang)?.label || adcopyLang}</span>
-                    <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{adcopyLangOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {adcopyLangOpen && (
-                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                      <div className="p-2 border-b" style={{borderColor: t.border}}>
-                        <input autoFocus value={adcopyLangSearch} onChange={e => setAdcopyLangSearch(e.target.value)}
-                          placeholder="🔍 Tìm ngôn ngữ..."
-                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
-                          style={inputStyle}/>
-                      </div>
-                      <div className="max-h-48 overflow-y-auto">
-                        {LANGUAGES.filter(l => l.label.toLowerCase().includes(adcopyLangSearch.toLowerCase()) || l.code.toLowerCase().includes(adcopyLangSearch.toLowerCase())).map(l => (
-                          <button key={l.code} type="button"
-                            onClick={() => { setAdcopyLang(l.code); setAdcopyLangOpen(false); setAdcopyLangSearch(""); }}
-                            className="w-full text-left px-4 py-2 text-sm transition-colors"
-                            style={{backgroundColor: adcopyLang === l.code ? "#7C3AED22" : "transparent", color: adcopyLang === l.code ? "#A78BFA" : t.text}}>
-                            {l.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-            <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyMessage.trim()}
-              className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm py-3 px-4 rounded-xl transition-all font-semibold flex items-center justify-center gap-2">
-              {adcopyLoading ? <><span className="animate-spin">⏳</span> Đang tạo...</> : <>✨ Generate Ad Copy</>}
-            </button>
-
-            {adcopyResult && (
-              <div className="space-y-4 pt-2">
-                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                  <div className="px-4 py-3 text-xs font-bold border-b flex items-center gap-2" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-                    📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(≤30 ký tự)</span>
-                  </div>
-                  {adcopyResult.headlines.map((h, i) => {
-                    const over = h.length > 30;
-                    const rkey = `h-${i}`;
-                    const spinning = adcopyRegening.has(rkey);
-                    return (
-                      <div key={i} className={`flex items-center justify-between px-4 py-2.5 gap-2 border-b last:border-0 ${over ? "bg-red-500/5" : ""}`} style={{borderColor: t.border}}>
-                        <span className="text-sm flex-1" style={{color: over ? "#EF4444" : t.text}}>
-                          {h}
-                          {over && <span className="ml-1.5 text-[10px] font-semibold text-red-400">{h.length}/30</span>}
-                        </span>
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          {over && (
-                            <button onClick={() => handleRegenItem("headline", i)} disabled={spinning}
-                              className="text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50"
-                              style={{borderColor:"#F59E0B44",color:"#F59E0B",backgroundColor:"#F59E0B11"}}
-                              title="Gen lại dòng này">
-                              {spinning ? "⏳" : "🔄"}
-                            </button>
-                          )}
-                          <button onClick={() => copyText(h)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: adcopyCopied===h ? "#10B98122" : t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
-                            {adcopyCopied===h ? "✓" : "copy"}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                  <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-                    📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(≤90 ký tự)</span>
-                  </div>
-                  {adcopyResult.descriptions.map((d, i) => {
-                    const over = d.length > 90;
-                    const rkey = `d-${i}`;
-                    const spinning = adcopyRegening.has(rkey);
-                    return (
-                      <div key={i} className={`flex items-start justify-between px-4 py-2.5 gap-2 border-b last:border-0 ${over ? "bg-red-500/5" : ""}`} style={{borderColor: t.border}}>
-                        <span className="text-sm leading-relaxed flex-1" style={{color: over ? "#EF4444" : t.text}}>
-                          {d}
-                          {over && <span className="ml-1.5 text-[10px] font-semibold text-red-400">{d.length}/90</span>}
-                        </span>
-                        <div className="flex items-start gap-1 flex-shrink-0 mt-0.5">
-                          {over && (
-                            <button onClick={() => handleRegenItem("description", i)} disabled={spinning}
-                              className="text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50"
-                              style={{borderColor:"#F59E0B44",color:"#F59E0B",backgroundColor:"#F59E0B11"}}
-                              title="Gen lại dòng này">
-                              {spinning ? "⏳" : "🔄"}
-                            </button>
-                          )}
-                          <button onClick={() => copyText(d)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: adcopyCopied===d ? "#10B98122" : t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
-                            {adcopyCopied===d ? "✓" : "copy"}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                  <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>🎯 Call to Action</div>
-                  <div className="p-4 flex flex-wrap gap-2">
-                    {adcopyResult.ctas.map((c, i) => (
-                      <button key={i} onClick={() => copyText(c)} className="text-sm px-4 py-2 rounded-xl border transition-all"
-                        style={{borderColor: adcopyCopied===c ? "#10B981" : t.border, color: adcopyCopied===c ? "#10B981" : t.text, backgroundColor: t.tabBg}}>
-                        {adcopyCopied===c ? "✓ Copied" : c}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button onClick={handleAdCopyGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Tạo lại</button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* AI BANNER DESIGN PAGE */}
-        {activePage === "autogen" && (
-          <div className="space-y-6 max-w-2xl">
-
-            {/* Step indicator */}
-            <div className="flex items-center gap-2 text-xs" style={{color: t.textMuted}}>
-              {([["input","1","Nhập thông tin"],["generating","2","AI phân tích"],["preview","3","Kết quả"]] as [AgStep,string,string][]).map(([s, n, label], i) => {
-                const order: AgStep[] = ["input","generating","preview"];
-                const cur = order.indexOf(agStep); const own = order.indexOf(s);
-                const done = cur > own; const active = agStep === s;
-                return (
-                  <div key={s} className="flex items-center gap-2">
-                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${active?"bg-violet-600 text-white":done?"bg-violet-600/40 text-violet-400":""}`}
-                      style={!active&&!done?{backgroundColor:t.tabBg,color:t.textMuted}:{}}>{n}</span>
-                    <span style={active?{color:"#A78BFA"}:{}}>{label}</span>
-                    {i<2&&<span>→</span>}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* STEP 1: Input */}
-            {agStep === "input" && (
-              <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
-                    🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
-                  </label>
-                  <input value={agUrl} onChange={e => setAgUrl(e.target.value)}
-                    placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                    style={inputStyle}/>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>
-                      💡 Design Brief / Prompt
-                    </label>
-                    <button
-                      onClick={handleAutoPrompt}
-                      disabled={!agUrl.trim() || agAutoPromptLoading}
-                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                      style={{
-                        background: agAutoPromptLoading ? "transparent" : "linear-gradient(135deg,#7C3AED,#EC4899)",
-                        color: "#fff",
-                        border: agAutoPromptLoading ? "1px solid #7C3AED44" : "none",
-                      }}
-                      title="Tự động tạo prompt từ URL app"
-                    >
-                      {agAutoPromptLoading ? (
-                        <>
-                          <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>
-                          Đang tạo...
-                        </>
-                      ) : (
-                        <>✨ Auto Prompt</>
-                      )}
-                    </button>
-                  </div>
-                  <textarea value={agPrompt} onChange={e => setAgPrompt(e.target.value)} rows={5}
-                    placeholder="VD: Phong cách cinematic bold, gradient tím đậm, phone mockup hiển thị giao diện chỉnh ảnh AI, truyền cảm hứng sáng tạo cho người dùng 18-35 tuổi..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-y"
-                    style={{...inputStyle, minHeight: 100, lineHeight: "1.6"}}/>
-                  <p className="text-xs mt-1" style={{color: t.textMuted}}>Nhấn ✨ Auto Prompt để GPT-4o tự viết creative direction từ URL app</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center justify-between">
                   <div>
-                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
-                    <div ref={agCountryRef} className="relative">
-                      <button type="button" onClick={() => { setAgCountryOpen(o => !o); setAgCountrySearch(""); }}
-                        className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
-                        style={{...inputStyle, borderColor: agCountryOpen ? "#7C3AED" : t.inputBorder}}>
-                        <span className="truncate">{COUNTRIES.find(c => c.code === agCountry)?.label || agCountry}</span>
-                        <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{agCountryOpen ? "▲" : "▼"}</span>
-                      </button>
-                      {agCountryOpen && (
-                        <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                          <div className="p-2 border-b" style={{borderColor: t.border}}>
-                            <input autoFocus value={agCountrySearch} onChange={e => setAgCountrySearch(e.target.value)}
-                              placeholder="🔍 Tìm quốc gia..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                          </div>
-                          <div className="max-h-48 overflow-y-auto">
-                            {COUNTRIES.filter(c => c.label.toLowerCase().includes(agCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(agCountrySearch.toLowerCase())).map(c => (
-                              <button key={c.code} type="button"
-                                onClick={() => { setAgCountry(c.code); setAgCountryOpen(false); setAgCountrySearch(""); const dl = COUNTRY_DEFAULT_LANG[c.code]; if (dl) setAgLang(dl); }}
-                                className="w-full text-left px-4 py-2 text-sm"
-                                style={{backgroundColor: agCountry === c.code ? "#7C3AED22" : "transparent", color: agCountry === c.code ? "#A78BFA" : t.text}}>
-                                {c.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <p className="text-xs font-semibold">{b.key}</p>
+                    <p className="text-[10px] text-slate-500">{b.usage}</p>
                   </div>
-                  <div>
-                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
-                    <div ref={agLangRef} className="relative">
-                      <button type="button" onClick={() => { setAgLangOpen(o => !o); setAgLangSearch(""); }}
-                        className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
-                        style={{...inputStyle, borderColor: agLangOpen ? "#7C3AED" : t.inputBorder}}>
-                        <span className="truncate">{LANGUAGES.find(l => l.code === agLang)?.label || agLang}</span>
-                        <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{agLangOpen ? "▲" : "▼"}</span>
-                      </button>
-                      {agLangOpen && (
-                        <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                          <div className="p-2 border-b" style={{borderColor: t.border}}>
-                            <input autoFocus value={agLangSearch} onChange={e => setAgLangSearch(e.target.value)}
-                              placeholder="🔍 Tìm ngôn ngữ..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                          </div>
-                          <div className="max-h-48 overflow-y-auto">
-                            {LANGUAGES.filter(l => l.label.toLowerCase().includes(agLangSearch.toLowerCase()) || l.code.toLowerCase().includes(agLangSearch.toLowerCase())).map(l => (
-                              <button key={l.code} type="button"
-                                onClick={() => { setAgLang(l.code); setAgLangOpen(false); setAgLangSearch(""); }}
-                                className="w-full text-left px-4 py-2 text-sm"
-                                style={{backgroundColor: agLang === l.code ? "#7C3AED22" : "transparent", color: agLang === l.code ? "#A78BFA" : t.text}}>
-                                {l.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
-
-                {/* Quality toggle */}
-                <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                  <div>
-                    <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng ảnh AI</div>
-                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>High: đẹp nhất · Medium: cân bằng · Low: nhanh & rẻ nhất</div>
-                  </div>
-                  <div className="flex gap-1 rounded-lg p-0.5 ml-3 flex-shrink-0" style={{backgroundColor: t.border}}>
-                    {(["low","medium","high"] as const).map(q => (
-                      <button key={q} onClick={() => setAgQuality(q)}
-                        className="px-3 py-1 rounded-md text-xs font-semibold transition-all capitalize"
-                        style={agQuality===q?{backgroundColor:"#7C3AED",color:"#fff"}:{color:t.textMuted}}>
-                        {q}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <button onClick={handleAgAnalyze} disabled={!agUrl.trim()}
-                  className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
-                  ✨ Tạo banner AI →
-                </button>
-              </div>
-            )}
-
-            {/* STEP generating */}
-            {agStep === "generating" && (
-              <div className="text-center py-20 space-y-6">
-                <div className="text-5xl animate-pulse">✨</div>
-                <div className="text-lg font-bold" style={{color: t.text}}>Đang tạo banner AI...</div>
-                <div className="text-sm font-medium" style={{color: "#A78BFA"}}>{agGenStatus}</div>
-                <div className="space-y-1.5 text-xs" style={{color: t.textMuted}}>
-                  <div>📱 Lấy screenshot từ App Store / Play Store</div>
-                  <div>🤖 GPT-4o phân tích app và tạo concept</div>
-                  <div>🎨 Render {AD_SIZES.length} kích thước chuẩn Google Ads</div>
-                </div>
-                <div className="w-56 h-1.5 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
-                  <div className="h-full bg-gradient-to-r from-violet-500 to-purple-400 animate-pulse" style={{width:"70%"}}/>
+                  <a href={b.dataUrl} download={`${b.key}.png`} className="rounded-md bg-white/10 px-2 py-1 text-[10px] hover:bg-white/20">
+                    PNG
+                  </a>
                 </div>
               </div>
-            )}
-
-            {/* STEP preview */}
-            {agStep === "preview" && (
-              <div className="space-y-5">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <div className="text-lg font-bold" style={{color: t.text}}>✅ {agPreviews.length} banner sẵn sàng</div>
-                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>
-                      {agBrief?.app_name} · {agCountry}
-                      {agBrief?.headline && <span> · &ldquo;{agBrief.headline}&rdquo;</span>}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={resetAg} className="text-xs px-3 py-2 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Gen lại</button>
-                    <button onClick={handleAgDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all">
-                      ⬇ Tải tất cả (.zip)
-                    </button>
-                  </div>
-                </div>
-
-                {/* DALL-E base images */}
-                {agDalleImages.length > 0 && (
-                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
-                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh gốc DALL-E 3 ({agDalleImages.length} tỉ lệ)</div>
-                    <div className="flex gap-3 overflow-x-auto pb-1">
-                      {agDalleImages.map(img => (
-                        <div key={img.key} className="flex-shrink-0 space-y-1.5">
-                          <img src={img.dataUrl} alt={img.label}
-                            onClick={() => setLightboxFrame(img.dataUrl)}
-                            className="rounded-xl object-cover shadow-lg cursor-zoom-in"
-                            style={{
-                              height: img.key === "portrait" ? 180 : img.key === "square" ? 120 : 90,
-                              width:  img.key === "portrait" ? 100 : img.key === "square" ? 120 : 160,
-                            }}/>
-                          <div className="text-[10px] text-center" style={{color: t.textMuted}}>{img.label}</div>
-                          <button onClick={() => { const a=document.createElement("a"); a.href=img.dataUrl; a.download=`dalle-${img.key}-${agBrief?.app_name||"banner"}.png`; a.click(); }}
-                            className="w-full text-[10px] py-1 rounded-lg bg-violet-600/20 text-violet-400 font-medium hover:bg-violet-600/40 transition-all">⬇ Tải</button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Concept summary */}
-                {agBrief && (
-                  <div className="p-3 rounded-xl border text-xs flex flex-wrap gap-3 items-center" style={{...cardStyle, borderColor: "#7C3AED44"}}>
-                    {agIcon && <img src={agIcon} alt="" className="w-8 h-8 rounded-lg flex-shrink-0"/>}
-                    <div className="flex flex-wrap gap-2 flex-1 min-w-0">
-                      <span className="px-2 py-0.5 rounded-full font-medium" style={{backgroundColor:"#7C3AED22",color:"#A78BFA"}}>H: {agBrief.headline}</span>
-                      <span className="px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>CTA: {agBrief.cta_text}</span>
-                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>
-                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:agBrief.primary_color}}/>
-                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:agBrief.accent_color}}/>
-                        {agBrief.mood}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
-                  {([["top5","⭐ Top 5"],["all",`Tất cả (${agPreviews.length})`]] as const).map(([tab,label])=>(
-                    <button key={tab} onClick={() => setAgActiveTab(tab)}
-                      className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
-                      style={agActiveTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {agDisplayed.map(p => {
-                    const scale = Math.min(1, 340/Math.max(p.width, p.height));
-                    return (
-                      <div key={p.key} onClick={() => setSelectedPreview(p)}
-                        className="group rounded-2xl p-4 cursor-pointer transition-all border"
-                        style={cardStyle}
-                        onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
-                        <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
-                          <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
-                            <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
-                          </div>
-                          <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
-                            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
-                            style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* KEYWORD RESEARCH PAGE */}
-        {activePage === "keywords" && (
-          <div className="max-w-2xl space-y-5">
-            {/* Input form */}
-            <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
-              <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Thông tin app</div>
-              <div>
-                <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Tên app</label>
-                <input value={kwAppName} onChange={e => setKwAppName(e.target.value)}
-                  placeholder="VD: Canva, PhotoRoom, Snapseed..."
-                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}/>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="h-px flex-1" style={{backgroundColor: t.border}}/>
-                <span className="text-xs" style={{color: t.textMuted}}>hoặc</span>
-                <div className="h-px flex-1" style={{backgroundColor: t.border}}/>
-              </div>
-              <div>
-                <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>URL App Store / Play Store</label>
-                <input value={kwAppUrl} onChange={e => setKwAppUrl(e.target.value)}
-                  placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
-                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}/>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                {/* Country */}
-                <div>
-                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
-                  <div ref={kwCountryRef} className="relative">
-                    <button type="button" onClick={() => { setKwCountryOpen(o => !o); setKwCountrySearch(""); }}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none"
-                      style={{...inputStyle, borderColor: kwCountryOpen ? "#7C3AED" : t.inputBorder}}>
-                      <span className="truncate">{COUNTRIES.find(c => c.code === kwCountry)?.label || kwCountry}</span>
-                      <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{kwCountryOpen ? "▲" : "▼"}</span>
-                    </button>
-                    {kwCountryOpen && (
-                      <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                        <div className="p-2 border-b" style={{borderColor: t.border}}>
-                          <input autoFocus value={kwCountrySearch} onChange={e => setKwCountrySearch(e.target.value)}
-                            placeholder="🔍 Tìm quốc gia..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                        </div>
-                        <div className="max-h-48 overflow-y-auto">
-                          {COUNTRIES.filter(c => c.label.toLowerCase().includes(kwCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(kwCountrySearch.toLowerCase())).map(c => (
-                            <button key={c.code} type="button"
-                              onClick={() => { setKwCountry(c.code); setKwCountryOpen(false); setKwCountrySearch(""); const dl = COUNTRY_DEFAULT_LANG[c.code]; if (dl) setKwLang(dl); }}
-                              className="w-full text-left px-4 py-2 text-sm"
-                              style={{backgroundColor: kwCountry === c.code ? "#7C3AED22" : "transparent", color: kwCountry === c.code ? "#A78BFA" : t.text}}>
-                              {c.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                {/* Language */}
-                <div>
-                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</label>
-                  <div ref={kwLangRef} className="relative">
-                    <button type="button" onClick={() => { setKwLangOpen(o => !o); setKwLangSearch(""); }}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none"
-                      style={{...inputStyle, borderColor: kwLangOpen ? "#7C3AED" : t.inputBorder}}>
-                      <span className="truncate">{LANGUAGES.find(l => l.code === kwLang)?.label || kwLang}</span>
-                      <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{kwLangOpen ? "▲" : "▼"}</span>
-                    </button>
-                    {kwLangOpen && (
-                      <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                        <div className="p-2 border-b" style={{borderColor: t.border}}>
-                          <input autoFocus value={kwLangSearch} onChange={e => setKwLangSearch(e.target.value)}
-                            placeholder="🔍 Tìm ngôn ngữ..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                        </div>
-                        <div className="max-h-48 overflow-y-auto">
-                          {LANGUAGES.filter(l => l.label.toLowerCase().includes(kwLangSearch.toLowerCase()) || l.code.toLowerCase().includes(kwLangSearch.toLowerCase())).map(l => (
-                            <button key={l.code} type="button"
-                              onClick={() => { setKwLang(l.code); setKwLangOpen(false); setKwLangSearch(""); }}
-                              className="w-full text-left px-4 py-2 text-sm"
-                              style={{backgroundColor: kwLang === l.code ? "#7C3AED22" : "transparent", color: kwLang === l.code ? "#A78BFA" : t.text}}>
-                              {l.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {kwError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{kwError}</p>}
-              <button onClick={handleKwGenerate}
-                disabled={kwLoading || (!kwAppName.trim() && !kwAppUrl.trim())}
-                className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
-                {kwLoading ? <><span className="animate-spin">⏳</span> Đang phân tích...</> : <>🔑 Tìm Keywords</>}
-              </button>
-            </div>
-
-            {/* Results */}
-            {kwResult && (
-              <div className="space-y-3">
-                {/* Header */}
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <div className="text-sm font-bold" style={{color: t.text}}>{kwResult.app_name}</div>
-                    <div className="text-xs" style={{color: t.textMuted}}>{kwResult.keywords.length} keywords · {kwCountry !== "Global" ? kwCountry : "Global"} · ước tính bởi AI</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select value={kwSort} onChange={e => setKwSort(e.target.value as typeof kwSort)}
-                      className="text-xs rounded-lg px-2 py-1.5 border focus:outline-none" style={inputStyle}>
-                      <option value="relevance">Sắp xếp: Relevance</option>
-                      <option value="competition_index">Sắp xếp: Competition ↑</option>
-                      <option value="cpc_max">Sắp xếp: CPC ↓</option>
-                    </select>
-                    <button onClick={copyKwList}
-                      className="text-xs px-3 py-1.5 rounded-lg border transition-all active:scale-95"
-                      style={kwCopied ? {borderColor:"#10B981",color:"#10B981",backgroundColor:"#10B98111"} : {borderColor:t.border,color:t.textMuted}}>
-                      {kwCopied ? "✓ Đã copy!" : "📋 Copy list"}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Table */}
-                <div className="rounded-2xl border overflow-hidden" style={{borderColor: t.border}}>
-                  {/* Table header */}
-                  <div className="grid text-xs font-bold uppercase tracking-wider px-4 py-2.5 border-b"
-                    style={{gridTemplateColumns:"1fr 110px 90px 80px 90px", backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
-                    <div>Keyword</div>
-                    <div className="text-center">Volume/tháng</div>
-                    <div className="text-center">Competition</div>
-                    <div className="text-center">CPC (USD)</div>
-                    <div className="text-center">Intent</div>
-                  </div>
-                  {/* Rows */}
-                  {[...kwResult.keywords].sort((a, b) => {
-                    if (kwSort === "relevance") return b.relevance - a.relevance;
-                    if (kwSort === "competition_index") return a.competition_index - b.competition_index;
-                    return b.cpc_max - a.cpc_max;
-                  }).map((kw, i) => (
-                    <div key={i} className="grid items-center px-4 py-2.5 border-b last:border-0 hover:bg-violet-500/5 transition-colors"
-                      style={{gridTemplateColumns:"1fr 110px 90px 80px 90px", borderColor: t.border}}>
-                      <div>
-                        <div className="text-sm font-medium" style={{color: t.text}}>{kw.keyword}</div>
-                        <div className="flex items-center gap-1 mt-0.5">
-                          <div className="h-1 rounded-full overflow-hidden" style={{width:48, backgroundColor: t.progress}}>
-                            <div className="h-full bg-violet-500 rounded-full" style={{width:`${kw.relevance}%`}}/>
-                          </div>
-                          <span className="text-xs" style={{color: t.textMuted}}>{kw.relevance}%</span>
-                        </div>
-                      </div>
-                      <div className="text-xs text-center font-medium" style={{color: t.text}}>{kw.monthly_searches}</div>
-                      <div className="text-center">
-                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                          style={{
-                            backgroundColor: kw.competition === "Low" ? "#10B98122" : kw.competition === "Medium" ? "#F59E0B22" : "#EF444422",
-                            color: kw.competition === "Low" ? "#10B981" : kw.competition === "Medium" ? "#F59E0B" : "#EF4444",
-                          }}>
-                          {kw.competition}
-                        </span>
-                      </div>
-                      <div className="text-xs text-center" style={{color: t.text}}>${kw.cpc_min.toFixed(2)}–${kw.cpc_max.toFixed(2)}</div>
-                      <div className="text-center">
-                        <span className="text-xs px-1.5 py-0.5 rounded-full"
-                          style={{
-                            backgroundColor: kw.intent === "Install" ? "#7C3AED22" : kw.intent === "Branded" ? "#3B82F622" : kw.intent === "Compare" ? "#F59E0B22" : "#64748B22",
-                            color: kw.intent === "Install" ? "#A78BFA" : kw.intent === "Branded" ? "#60A5FA" : kw.intent === "Compare" ? "#F59E0B" : t.textMuted,
-                          }}>
-                          {kw.intent}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Disclaimer */}
-                <p className="text-xs text-center" style={{color: t.textMuted}}>
-                  ⚠️ Volume & CPC là ước tính AI, không phải dữ liệu thực từ Google Keyword Planner.
-                  Dùng để định hướng chiến lược, không dùng để báo cáo.
-                </p>
-
-                <button onClick={handleKwGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
-                  🔄 Tạo lại
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* COMPETITOR PAGE */}
-        {activePage === "competitor" && (
-          <div className="max-w-xl space-y-4">
-            <div className="text-xs" style={{color: t.textMuted}}>Nhập link App Store hoặc Play Store của app đối thủ</div>
-            <input value={compQuery} onChange={e => {
-              const val = e.target.value; setCompQuery(val); setCompAppName(""); setCompAppIcon("");
-              if (val.trim().startsWith("http")) lookupAppNamePreview(val.trim());
-            }}
-              placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
-              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500"
-              style={inputStyle}/>
-            {compQuery.trim().startsWith("http") && (
-              <div className="flex items-center gap-2 px-1">
-                {compNameLoading ? <span className="text-xs" style={{color: t.textMuted}}>⏳ Đang nhận diện app...</span>
-                  : compAppName ? (
-                    <>
-                      {compAppIcon && <img src={compAppIcon} alt="" className="w-8 h-8 rounded-xl flex-shrink-0"/>}
-                      <span className="text-sm font-semibold" style={{color: t.text}}>{compAppName}</span>
-                    </>
-                  ) : null}
-              </div>
-            )}
-            {compQuery.trim() && (
-              <button onClick={handleCompetitorSearch} disabled={compLoading || compNameLoading}
-                className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm py-3 px-4 rounded-xl transition-all font-semibold flex items-center justify-center gap-2">
-                {compLoading ? <><span>⏳</span> Đang mở...</> : <>🔎 Xem quảng cáo trên Google</>}
-              </button>
-            )}
-            <div className="text-xs font-semibold mt-6" style={{color: t.textMuted}}>Ví dụ nhanh</div>
-            {["https://apps.apple.com/us/app/canva/id897446215","https://play.google.com/store/apps/details?id=com.canva.editor"].map(ex => (
-              <button key={ex} onClick={() => setCompQuery(ex)}
-                className="w-full text-left text-sm px-4 py-3 rounded-xl border transition-colors"
-                style={cardStyle}>
-                {ex.includes("apple") ? "🍎 App Store — Canva" : "🤖 Play Store — Canva"}
-              </button>
             ))}
           </div>
-        )}
-
-        {/* LAUNCH CAMPAIGN PAGE */}
-        {activePage === "launch" && (
-          <div className="space-y-5">
-            {/* Connect Google Ads */}
-            <div className="p-5 border rounded-2xl" style={cardStyle}>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <div className="font-semibold text-sm" style={{color: t.text}}>Kết nối Google Ads</div>
-                  <div className="text-xs mt-0.5" style={{color: t.textMuted}}>Authorize để tạo campaign trực tiếp</div>
-                </div>
-                {adsConnected === null ? (
-                  <div className="text-xs" style={{color: t.textMuted}}>Đang kiểm tra...</div>
-                ) : adsConnected ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs px-2 py-1 rounded-full bg-green-500/15 text-green-500 font-medium">✓ Đã kết nối</span>
-                    <button onClick={async()=>{ await fetch("/api/google-ads/auth?action=disconnect"); setAdsConnected(false); setAdsAccounts([]); }}
-                      className="text-xs px-2 py-1 rounded-lg border" style={{color:t.textMuted,borderColor:t.border}}>Ngắt kết nối</button>
-                  </div>
-                ) : (
-                  <a href="/api/google-ads/auth?action=connect"
-                    className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 transition-colors">
-                    🔗 Connect Google Ads
-                  </a>
-                )}
-              </div>
-            </div>
-
-            {adsConnected && (
-              <>
-                {/* Select Account */}
-                <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
-                  <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>Chọn tài khoản Google Ads</label>
-                  {adsNeedsBasicAccess ? (
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-3">
-                      <div className="flex items-start gap-3">
-                        <span className="text-2xl">⏳</span>
-                        <div>
-                          <div className="text-sm font-semibold text-amber-400 mb-1">Đang chờ phê duyệt Basic Access</div>
-                          <div className="text-xs text-amber-300/80 leading-relaxed">
-                            Developer Token hiện ở chế độ <b>Explorer (Test)</b> — không thể truy cập tài khoản Google Ads thật.<br/>
-                            Bạn đã nộp đơn xin <b>Basic Access</b>. Google thường phê duyệt trong <b>3–5 ngày làm việc</b>.
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-xs text-amber-300/70 bg-amber-500/10 rounded-lg px-3 py-2 space-y-1">
-                        <div>✅ Đơn đã được gửi đến Google Ads API Center</div>
-                        <div>📧 Bạn sẽ nhận email khi được phê duyệt</div>
-                        <div>🔄 Sau khi được duyệt, nhấn <b>Thử lại</b> để tải tài khoản</div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-black font-semibold">🔄 Thử lại</button>
-                        <a href="https://ads.google.com/nav/selectaccount?dst=/aw/apicenter" target="_blank" rel="noreferrer"
-                          className="text-xs px-3 py-1.5 rounded-lg border border-amber-500/50 text-amber-400">Kiểm tra trạng thái →</a>
-                      </div>
-                    </div>
-                  ) : adsAccountsError ? (
-                    <div className="space-y-2">
-                      <div className="text-xs text-red-400 bg-red-400/10 rounded-lg px-3 py-2 break-all">{adsAccountsError}</div>
-                      <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">Thử lại</button>
-                    </div>
-                  ) : adsAccountsLoading ? (
-                    <div className="text-xs" style={{color:t.textMuted}}>⏳ Đang tải tài khoản...</div>
-                  ) : adsAccounts.length === 0 ? (
-                    <div className="flex items-center gap-2">
-                      <div className="text-xs" style={{color:t.textMuted}}>Không có tài khoản nào</div>
-                      <button onClick={loadAdsAccounts} className="text-xs px-2 py-1 rounded-lg border" style={{borderColor:t.border,color:t.textMuted}}>Tải lại</button>
-                    </div>
-                  ) : (
-                    <select value={adsSelectedAccount} onChange={e=>{ setAdsSelectedAccount(e.target.value); if(e.target.value) loadAdsCampaigns(e.target.value); }}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none" style={inputStyle}>
-                      <option value="">-- Chọn account --</option>
-                      {adsAccounts.map(a=>(
-                        <option key={a.id} value={a.id}>{a.name} ({a.id}) — {a.currency}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-
-                {adsSelectedAccount && (
-                  <>
-                    {/* Campaign Settings */}
-                    <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
-                      <div className="font-semibold text-sm" style={{color:t.text}}>Cấu hình Campaign</div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Tên campaign</label>
-                          <input value={adsCampaignName} onChange={e=>setAdsCampaignName(e.target.value)}
-                            placeholder="VD: Pix Editor - VN Q1" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
-                        </div>
-                        <div>
-                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Budget/ngày (VNĐ)</label>
-                          <input value={adsBudget} onChange={e=>setAdsBudget(e.target.value)} type="number"
-                            placeholder="200000" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>App ID</label>
-                          <input value={adsAppId} onChange={e=>setAdsAppId(e.target.value)}
-                            placeholder="com.apero.pixeditor" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
-                        </div>
-                        <div>
-                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Store</label>
-                          <select value={adsAppStore} onChange={e=>setAdsAppStore(e.target.value as "GOOGLE_APP_STORE"|"APPLE_APP_STORE")}
-                            className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}>
-                            <option value="GOOGLE_APP_STORE">🤖 Google Play</option>
-                            <option value="APPLE_APP_STORE">🍎 App Store</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Headlines & Descriptions */}
-                    <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
-                      <div className="font-semibold text-sm" style={{color:t.text}}>Ad Copy</div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold" style={labelStyle}>Headlines (tối đa 5, mỗi cái ≤30 ký tự)</label>
-                        {adsHeadlines.map((h,i)=>(
-                          <div key={i} className="flex gap-2 items-center">
-                            <input value={h} onChange={e=>{ const arr=[...adsHeadlines]; arr[i]=e.target.value.slice(0,30); setAdsHeadlines(arr); }}
-                              placeholder={`Headline ${i+1}`} className="flex-1 rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
-                            <span className="text-xs w-8 text-right" style={{color:t.textMuted}}>{h.length}/30</span>
-                          </div>
-                        ))}
-                        {adsHeadlines.length < 5 && (
-                          <button onClick={()=>setAdsHeadlines([...adsHeadlines,""])} className="text-xs" style={{color:"#7C3AED"}}>+ Thêm headline</button>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold" style={labelStyle}>Descriptions (tối đa 5, mỗi cái ≤90 ký tự)</label>
-                        {adsDescriptions.map((d,i)=>(
-                          <div key={i} className="flex gap-2 items-center">
-                            <input value={d} onChange={e=>{ const arr=[...adsDescriptions]; arr[i]=e.target.value.slice(0,90); setAdsDescriptions(arr); }}
-                              placeholder={`Description ${i+1}`} className="flex-1 rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
-                            <span className="text-xs w-8 text-right" style={{color:t.textMuted}}>{d.length}/90</span>
-                          </div>
-                        ))}
-                        {adsDescriptions.length < 5 && (
-                          <button onClick={()=>setAdsDescriptions([...adsDescriptions,""])} className="text-xs" style={{color:"#7C3AED"}}>+ Thêm description</button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Select Banners from history */}
-                    {previews.length > 0 && (
-                      <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
-                        <div className="flex items-center justify-between">
-                          <div className="font-semibold text-sm" style={{color:t.text}}>Chọn banner để upload ({adsSelectedBanners.length} đã chọn)</div>
-                          <button onClick={()=>setAdsSelectedBanners(previews.filter(p=>p.isTop5).map(p=>p.dataUrl))} className="text-xs" style={{color:"#7C3AED"}}>Chọn Top 5</button>
-                        </div>
-                        <div className="grid grid-cols-5 gap-2">
-                          {previews.slice(0,20).map((p,i)=>{
-                            const sel = adsSelectedBanners.includes(p.dataUrl);
-                            return (
-                              <div key={i} onClick={()=>setAdsSelectedBanners(sel ? adsSelectedBanners.filter(x=>x!==p.dataUrl) : [...adsSelectedBanners,p.dataUrl])}
-                                className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${sel?"border-violet-500":"border-transparent"}`}>
-                                <img src={p.dataUrl} alt={p.key} className="w-full h-16 object-contain" style={{background:"#111"}}/>
-                                {sel && <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-violet-500 flex items-center justify-center text-white text-[9px]">✓</div>}
-                                <div className="text-[9px] text-center truncate px-1 py-0.5" style={{color:t.textMuted}}>{p.key}</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <p className="text-xs" style={{color:t.textMuted}}>💡 Gen banner ở trang Gen Banner trước rồi quay lại đây chọn</p>
-                      </div>
-                    )}
-
-                    {/* Launch Button */}
-                    {adsResult && (
-                      <div className={`px-4 py-3 rounded-xl text-sm ${adsResult.success?"bg-green-500/10 text-green-500":"bg-red-500/10 text-red-400"}`}>
-                        {adsResult.success ? `✅ ${adsResult.message}` : `❌ ${adsResult.error}`}
-                      </div>
-                    )}
-
-                    <button onClick={handleAdsLaunch} disabled={adsLaunching || !adsCampaignName || !adsAppId}
-                      className="w-full py-3.5 rounded-xl font-semibold text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-40 transition-all">
-                      {adsLaunching ? "⏳ Đang tạo campaign..." : "🚀 Tạo Campaign Google Ads"}
-                    </button>
-
-                    {/* Existing Campaigns */}
-                    {adsCampaigns.length > 0 && (
-                      <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
-                        <div className="font-semibold text-sm" style={{color:t.text}}>App Campaigns hiện có</div>
-                        <div className="space-y-2">
-                          {adsCampaigns.map(c=>(
-                            <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-xl border" style={{borderColor:t.border}}>
-                              <div>
-                                <div className="text-sm font-medium" style={{color:t.text}}>{c.name}</div>
-                                <div className="text-xs" style={{color:t.textMuted}}>Budget: {c.budgetPerDay.toLocaleString()}đ/ngày</div>
-                              </div>
-                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${c.status==="ENABLED"?"bg-green-500/15 text-green-500":c.status==="PAUSED"?"bg-yellow-500/15 text-yellow-500":"bg-gray-500/15 text-gray-400"}`}>
-                                {c.status}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-
-            {!adsConnected && adsConnected !== null && (
-              <div className="p-6 border rounded-2xl text-center space-y-3" style={cardStyle}>
-                <div className="text-3xl">🔗</div>
-                <div className="font-semibold" style={{color:t.text}}>Chưa kết nối Google Ads</div>
-                <div className="text-sm" style={{color:t.textMuted}}>Bấm "Connect Google Ads" ở trên để authorize</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* HISTORY PAGE */}
-        {activePage === "history" && (
-          <div className="space-y-4">
-            {history.length === 0 ? (
-              <div className="text-center py-20" style={{color: t.textMuted}}>
-                <div className="text-4xl mb-3">🕐</div>
-                <div className="text-sm">Chưa có lịch sử. Gen banner đầu tiên để lưu ở đây.</div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-3 gap-4">
-                {history.map(h => (
-                  <div key={h.id} className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                    {h.thumbnail && <img src={h.thumbnail} alt="" className="w-full object-cover" style={{height:96}}/>}
-                    <div className="p-4">
-                      <div className="font-semibold text-sm truncate" style={{color: t.text}}>{h.appName || "Untitled"}</div>
-                      <div className="text-xs mt-0.5 mb-3" style={{color: t.textMuted}}>{h.date} · {h.count} ảnh</div>
-                      <button onClick={() => deleteHistory(h.id)} className="text-xs px-2.5 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🗑 Xóa</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* YOUTUBE UPLOAD PAGE */}
-        {activePage === "youtube" && (
-          <div className="space-y-6 max-w-3xl">
-            {!ytAuthenticated ? (
-              <div className="flex flex-col items-center justify-center py-24 space-y-6">
-                <div className="text-6xl">▶️</div>
-                <div className="text-center">
-                  <div className="text-xl font-bold mb-2" style={{color: t.text}}>Upload video lên YouTube</div>
-                  <div className="text-sm" style={{color: t.textMuted}}>Đăng nhập Google để bắt đầu upload hàng loạt</div>
-                </div>
-                <a href="/api/auth/google"
-                  className="flex items-center gap-3 px-6 py-3 rounded-xl font-semibold text-sm transition-all border"
-                  style={{backgroundColor: t.card, borderColor: t.border, color: t.text, boxShadow: t.cardShadow}}>
-                  <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-                  Đăng nhập với Google
-                </a>
-                <p className="text-xs text-center" style={{color: t.textMuted}}>Chỉ cấp quyền upload video lên YouTube của bạn</p>
-              </div>
-            ) : (
-              <>
-                {/* Top bar */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-green-400 inline-block"/>
-                    <span className="text-sm" style={{color: t.textMuted}}>Đã kết nối Google</span>
-                  </div>
-                  <button onClick={ytLogout} className="text-xs px-3 py-1.5 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
-                    Đăng xuất
-                  </button>
-                </div>
-
-                {/* Drop zone */}
-                <div onClick={() => ytFileRef.current?.click()}
-                  className="border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all"
-                  style={{borderColor: t.border}}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = "#7C3AED")}
-                  onMouseLeave={e => (e.currentTarget.style.borderColor = t.border)}
-                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#7C3AED"; }}
-                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = t.border; if (e.dataTransfer.files.length) addYtFiles(e.dataTransfer.files); }}>
-                  <div className="text-3xl mb-2">🎬</div>
-                  <div className="text-sm font-medium mb-1" style={{color: t.text}}>Kéo thả video vào đây hoặc click để chọn</div>
-                  <div className="text-xs" style={{color: t.textMuted}}>MP4, MOV, AVI, MKV — nhiều file cùng lúc</div>
-                  <input ref={ytFileRef} type="file" accept="video/*" multiple className="hidden" onChange={e => e.target.files && addYtFiles(e.target.files)}/>
-                </div>
-
-                {/* Video list */}
-                {ytVideos.length > 0 && (
-                  <div className="space-y-3">
-                    {ytVideos.map((v, i) => (
-                      <div key={i} className="rounded-2xl border p-4 space-y-3" style={cardStyle}>
-                        <div className="flex items-center gap-3">
-                          <div className="text-2xl flex-shrink-0">🎬</div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs font-semibold truncate" style={{color: t.text}}>{v.title || v.file.name}</div>
-                            <div className="text-xs" style={{color: t.textMuted}}>{(v.file.size/1024/1024).toFixed(1)} MB</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {v.status === "done" && <span className="text-xs font-bold text-green-400">✓ Done</span>}
-                            {v.status === "done" && v.videoId && (
-                              ytCopiedIndex === i ? (
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs px-2 py-1 rounded-lg border font-medium"
-                                    style={{borderColor:"#6D28D9",color:"#A78BFA",backgroundColor:"#6D28D922",
-                                      animation:"popIn 0.2s ease-out"}}>
-                                    ✓ Đã copy!
-                                  </span>
-                                  <button onClick={() => setYtCopiedIndex(null)}
-                                    className="text-xs px-1.5 py-1 rounded-lg border transition-all hover:bg-slate-100"
-                                    style={{borderColor:t.border,color:t.textMuted}}
-                                    title="Reset">↺</button>
-                                </div>
-                              ) : (
-                                <button onClick={() => {
-                                  const url = `https://youtu.be/${v.videoId}`;
-                                  try { navigator.clipboard.writeText(url); } catch { /* fallback */ }
-                                  setYtCopiedIndex(i);
-                                }}
-                                  className="text-xs px-2 py-1 rounded-lg border transition-all duration-150 active:scale-95"
-                                  style={{borderColor:"#10B981",color:"#10B981",backgroundColor:"#10B98111"}}
-                                  title={`https://youtu.be/${v.videoId}`}>
-                                  🔗 Copy link
-                                </button>
-                              )
-                            )}
-                            {v.status === "error" && <span className="text-xs font-bold text-red-400">✗ Lỗi</span>}
-                            {v.status === "uploading" && <span className="text-xs" style={{color: t.textMuted}}>{v.progress}%</span>}
-                            {v.status !== "uploading" && (
-                              <button onClick={() => setYtVideos(prev => prev.filter((_, j) => j !== i))}
-                                className="text-xs px-2 py-1 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>✕</button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Progress bar */}
-                        {v.status === "uploading" && (
-                          <div className="h-1.5 rounded-full overflow-hidden" style={{backgroundColor: t.progress}}>
-                            <div className="h-full bg-gradient-to-r from-violet-600 to-violet-400 transition-all duration-300" style={{width: `${v.progress}%`}}/>
-                          </div>
-                        )}
-                        {v.status === "error" && <div className="text-xs text-red-400">{v.errorMsg}</div>}
-
-                        {/* Metadata */}
-                        {(v.status === "idle" || v.status === "error") && (
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="col-span-2">
-                              <input value={v.title} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,title:e.target.value}:x))}
-                                placeholder="Tiêu đề video *"
-                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
-                                style={inputStyle}/>
-                            </div>
-                            <div className="col-span-2">
-                              <textarea value={v.description} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,description:e.target.value}:x))}
-                                placeholder="Mô tả (tuỳ chọn)" rows={2}
-                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-none"
-                                style={inputStyle}/>
-                            </div>
-                            <div>
-                              <input value={v.tags} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,tags:e.target.value}:x))}
-                                placeholder="Tags (cách nhau bởi dấu phẩy)"
-                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
-                                style={inputStyle}/>
-                            </div>
-                            <div>
-                              <select value={v.privacy} onChange={e => setYtVideos(prev => prev.map((x,j)=>j===i?{...x,privacy:e.target.value as "public"|"unlisted"|"private"}:x))}
-                                className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500"
-                                style={inputStyle}>
-                                <option value="unlisted">🔗 Unlisted (có link xem được)</option>
-                                <option value="private">🔒 Private (chỉ mình tôi)</option>
-                                <option value="public">🌍 Public (công khai)</option>
-                              </select>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-
-                    {/* Upload button */}
-                    <div className="flex gap-3">
-                      <button onClick={handleYtUploadAll}
-                        disabled={ytUploading || ytVideos.every(v => v.status === "done")}
-                        className="flex-1 py-3 rounded-xl font-semibold text-sm bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
-                        {ytUploading
-                          ? <><span className="animate-spin">⏳</span> Đang upload {ytVideos.filter(v=>v.status==="uploading").length > 0 ? `(${ytVideos.filter(v=>v.status==="uploading")[0]?.progress}%)` : ""}...</>
-                          : <>▶️ Upload {ytVideos.filter(v=>v.status==="idle"||v.status==="error").length} video lên YouTube</>}
-                      </button>
-                      <button onClick={() => setYtVideos([])} disabled={ytUploading}
-                        className="px-4 py-3 rounded-xl border text-sm transition-colors disabled:opacity-40"
-                        style={{borderColor: t.border, color: t.textMuted}}>
-                        Xóa tất cả
-                      </button>
-                    </div>
-
-                    {/* Summary */}
-                    {ytVideos.some(v => v.status === "done") && (
-                      <div className="flex items-center gap-2 text-sm text-green-400">
-                        ✓ {ytVideos.filter(v=>v.status==="done").length}/{ytVideos.length} video đã upload thành công
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
-      </main>
-
-      {/* LOCALIZE PAGE */}
-      {activePage === "localize" && (
-        <div className="space-y-6 max-w-5xl">
-          {/* Input Section */}
-          <div className="rounded-2xl border p-6 space-y-5" style={{...cardStyle}}>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center text-lg">🌏</div>
-              <div>
-                <div className="font-bold text-sm" style={{color: t.text}}>Multi-market Ad Copy Localizer</div>
-                <div className="text-xs" style={{color: t.textMuted}}>Dịch ad copy sang nhiều thị trường cùng lúc, tối ưu cho Google App Campaigns</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-semibold mb-1.5 block" style={{color: t.textSub}}>Tên App *</label>
-                <input
-                  value={lcAppName} onChange={e => setLcAppName(e.target.value)}
-                  placeholder="VD: Photo Editor Pro"
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold mb-1.5 block" style={{color: t.textSub}}>Ngôn ngữ nguồn</label>
-                <select
-                  value={lcSourceLang} onChange={e => setLcSourceLang(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}>
-                  {["English","Vietnamese","Indonesian","Thai","Korean","Japanese","Chinese Simplified"].map(l => (
-                    <option key={l} value={l}>{l}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
-                  <span>Headlines <span className="font-normal">(mỗi dòng 1 headline)</span></span>
-                  <span className="text-[10px]" style={{color: t.textMuted}}>≤30 ký tự/cái</span>
-                </label>
-                <textarea
-                  value={lcHeadlines} onChange={e => setLcHeadlines(e.target.value)}
-                  rows={4} placeholder={"Download now and explore\nBoost your productivity\nTry it free today"}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
-                  <span>Descriptions</span>
-                  <span className="text-[10px]" style={{color: t.textMuted}}>≤90 ký tự/cái</span>
-                </label>
-                <textarea
-                  value={lcDescriptions} onChange={e => setLcDescriptions(e.target.value)}
-                  rows={4} placeholder={"The best app for your daily tasks\nMillions of users trust us every day"}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
-                  <span>CTAs</span>
-                  <span className="text-[10px]" style={{color: t.textMuted}}>≤15 ký tự/cái</span>
-                </label>
-                <textarea
-                  value={lcCtas} onChange={e => setLcCtas(e.target.value)}
-                  rows={4} placeholder={"Install Free\nDownload Now\nGet Started"}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-            </div>
-
-            {/* Market selection */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-semibold" style={{color: t.textSub}}>Chọn thị trường ({lcMarkets.length}/{LOCALIZE_MARKETS.length})</label>
-                <div className="flex gap-2">
-                  <button onClick={lcSelectAll} className="text-xs px-2 py-1 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>Tất cả</button>
-                  <button onClick={lcSelectNone} className="text-xs px-2 py-1 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>Bỏ chọn</button>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {LOCALIZE_MARKETS.map(m => {
-                  const selected = lcMarkets.includes(m.code);
-                  return (
-                    <button key={m.code} onClick={() => lcToggleMarket(m.code)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all"
-                      style={selected
-                        ? {backgroundColor: "#7C3AED22", borderColor: "#7C3AED", color: "#A78BFA"}
-                        : {backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
-                      <span>{m.flag}</span> {m.code}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {lcError && <div className="text-xs px-4 py-2.5 rounded-xl" style={{backgroundColor: "#EF444420", color: "#EF4444"}}>{lcError}</div>}
-
-            <button
-              onClick={handleLocalize}
-              disabled={lcLoading || !lcAppName.trim() || lcMarkets.length === 0}
-              className="w-full py-3 rounded-xl font-semibold text-sm transition-all disabled:opacity-50"
-              style={{backgroundColor: "#7C3AED", color: "white"}}>
-              {lcLoading ? "⏳ Đang dịch..." : `🌏 Dịch sang ${lcMarkets.length} thị trường`}
-            </button>
-          </div>
-
-          {/* Results */}
-          {lcResults && lcResults.length > 0 && (
-            <div className="rounded-2xl border p-6 space-y-4" style={{...cardStyle}}>
-              <div className="flex items-center justify-between">
-                <div className="font-bold text-sm" style={{color: t.text}}>Kết quả — {lcResults.length} thị trường</div>
-                <button
-                  onClick={lcCopyAll}
-                  className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border transition-colors"
-                  style={{borderColor: t.border, color: lcCopied==="all" ? "#10B981" : t.textMuted}}>
-                  {lcCopied==="all" ? "✓ Đã copy" : "📋 Copy tất cả"}
-                </button>
-              </div>
-
-              {/* Market tabs */}
-              <div className="flex flex-wrap gap-2">
-                {lcResults.map(m => (
-                  <button key={m.code} onClick={() => setLcActiveMarket(m.code)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all"
-                    style={lcActiveMarket===m.code
-                      ? {backgroundColor: "#7C3AED22", borderColor: "#7C3AED", color: "#A78BFA"}
-                      : {backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
-                    <span>{m.flag}</span> {m.code}
-                  </button>
-                ))}
-              </div>
-
-              {/* Active market detail */}
-              {lcActiveMarket && (() => {
-                const m = lcResults.find(r => r.code === lcActiveMarket);
-                if (!m) return null;
-                return (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{m.flag}</span>
-                        <div>
-                          <div className="font-semibold text-sm" style={{color: t.text}}>{m.name}</div>
-                          <div className="text-xs" style={{color: t.textMuted}}>{m.language}</div>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => lcCopyAllForMarket(m)}
-                        className="text-xs px-3 py-1.5 rounded-lg border transition-colors"
-                        style={{borderColor: t.border, color: lcCopied===`all-${m.code}` ? "#10B981" : t.textMuted}}>
-                        {lcCopied===`all-${m.code}` ? "✓ Đã copy" : "📋 Copy market này"}
-                      </button>
-                    </div>
-
-                    {/* Headlines */}
-                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Headlines <span className="font-normal normal-case">(≤30 ký tự)</span></div>
-                      {m.headlines.map((h, i) => (
-                        <div key={i} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg" style={{backgroundColor: t.card}}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-[10px] w-4 flex-shrink-0" style={{color: t.textMuted}}>{i+1}.</span>
-                            <span className="text-sm font-medium truncate" style={{color: t.text}}>{h}</span>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-[10px]" style={{color: h.length > 30 ? "#EF4444" : t.textMuted}}>{h.length}/30</span>
-                            <button onClick={() => lcCopyText(h, `h-${m.code}-${i}`)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`h-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`h-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`h-${m.code}-${i}` ? "✓" : "copy"}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Descriptions */}
-                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Descriptions <span className="font-normal normal-case">(≤90 ký tự)</span></div>
-                      {m.descriptions.map((d, i) => (
-                        <div key={i} className="flex items-start justify-between gap-3 px-3 py-2 rounded-lg" style={{backgroundColor: t.card}}>
-                          <div className="flex items-start gap-2 min-w-0">
-                            <span className="text-[10px] w-4 flex-shrink-0 mt-0.5" style={{color: t.textMuted}}>{i+1}.</span>
-                            <span className="text-sm" style={{color: t.text}}>{d}</span>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-[10px]" style={{color: d.length > 90 ? "#EF4444" : t.textMuted}}>{d.length}/90</span>
-                            <button onClick={() => lcCopyText(d, `d-${m.code}-${i}`)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`d-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`d-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`d-${m.code}-${i}` ? "✓" : "copy"}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* CTAs */}
-                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>CTAs <span className="font-normal normal-case">(≤15 ký tự)</span></div>
-                      <div className="flex flex-wrap gap-2">
-                        {m.ctas.map((c, i) => (
-                          <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{backgroundColor: t.card, borderColor: t.border}}>
-                            <span className="text-sm font-medium" style={{color: t.text}}>{c}</span>
-                            <span className="text-[10px]" style={{color: c.length > 15 ? "#EF4444" : t.textMuted}}>{c.length}/15</span>
-                            <button onClick={() => lcCopyText(c, `c-${m.code}-${i}`)} className="text-xs px-1.5 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`c-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`c-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`c-${m.code}-${i}` ? "✓" : "copy"}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* All markets summary table */}
-              <div className="mt-4">
-                <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Tổng quan tất cả thị trường</div>
-                <div className="overflow-x-auto rounded-xl border" style={{borderColor: t.border}}>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr style={{backgroundColor: t.tabBg}}>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Thị trường</th>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Headline #1</th>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Description #1</th>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>CTA #1</th>
-                        <th className="px-3 py-2.5"/>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {lcResults.map((m, idx) => (
-                        <tr key={m.code}
-                          onClick={() => setLcActiveMarket(m.code)}
-                          className="cursor-pointer transition-colors"
-                          style={{backgroundColor: lcActiveMarket===m.code ? "#7C3AED11" : idx%2===0 ? t.card : t.tabBg, borderTop: `1px solid ${t.border}`}}>
-                          <td className="px-3 py-2.5">
-                            <div className="flex items-center gap-1.5">
-                              <span>{m.flag}</span>
-                              <span className="font-medium" style={{color: t.text}}>{m.code}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 max-w-[160px] truncate" style={{color: t.textSub}}>{m.headlines[0]}</td>
-                          <td className="px-3 py-2.5 max-w-[200px] truncate" style={{color: t.textSub}}>{m.descriptions[0]}</td>
-                          <td className="px-3 py-2.5" style={{color: t.textSub}}>{m.ctas[0]}</td>
-                          <td className="px-3 py-2.5">
-                            <button onClick={e => { e.stopPropagation(); lcCopyAllForMarket(m); }}
-                              className="text-[10px] px-2 py-0.5 rounded transition-colors"
-                              style={{backgroundColor: lcCopied===`all-${m.code}` ? "#10B98122" : t.tabBg, color: lcCopied===`all-${m.code}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`all-${m.code}` ? "✓" : "copy"}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        </section>
       )}
 
-      {/* Frame Lightbox */}
-      {lightboxFrame && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-6" onClick={()=>setLightboxFrame(null)}>
-          <div className="relative max-w-4xl w-full" onClick={e=>e.stopPropagation()}>
-            <button onClick={()=>setLightboxFrame(null)} className="absolute -top-10 right-0 text-white/70 hover:text-white text-2xl">✕</button>
-            <img src={lightboxFrame} alt="Frame preview" className="w-full rounded-xl shadow-2xl" style={{maxHeight:"80vh",objectFit:"contain"}}/>
-          </div>
-        </div>
-      )}
+      <footer className="mt-12 text-center text-xs text-slate-600">
+        gpt-image-1 (scene + nhân vật) · Canvas (logo / hook / CTA / Play badge) · Google Ads sizes
+      </footer>
+    </main>
+  );
+}
 
-      {/* Lightbox */}
-      {selectedPreview && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-6" onClick={()=>setSelectedPreview(null)}>
-          <div className="rounded-2xl p-6 max-w-3xl w-full space-y-4 border" style={{...cardStyle, boxShadow:"0 25px 80px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-semibold" style={{color: t.text}}>{selectedPreview.key} — {selectedPreview.label}</div>
-                <div className="text-xs" style={{color: t.textMuted}}>{selectedPreview.width}×{selectedPreview.height}px</div>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={()=>handleDownloadSingle(selectedPreview)} className="bg-violet-600 hover:bg-violet-500 text-white text-sm px-4 py-2 rounded-lg transition-all font-medium">⬇ Download PNG</button>
-                <button onClick={()=>setSelectedPreview(null)} className="px-3 py-2 rounded-lg transition-colors" style={{color: t.textMuted}}>✕</button>
-              </div>
-            </div>
-            <div className="flex items-center justify-center rounded-xl p-4 overflow-auto" style={{backgroundColor: isDark ? "#0A0A0F" : "#F1F5F9", maxHeight:"60vh"}}>
-              <img src={selectedPreview.dataUrl} alt={selectedPreview.label} style={{maxWidth:"100%",maxHeight:"55vh",width:selectedPreview.width>600?"100%":"auto"}} className="rounded"/>
-            </div>
-          </div>
-        </div>
-      )}
-      </div>{/* end main content */}
-      </div>{/* end inner flex */}
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-fuchsia-400"
+      >
+        {options.map((o) => (
+          <option key={o} value={o} className="bg-[#12121e]">
+            {o}
+          </option>
+        ))}
+      </select>
     </div>
   );
+}
+function Field({ k, v }: { k: string; v: string }) {
+  return (
+    <p className="truncate">
+      <span className="text-slate-400">{k}:</span> <span className="font-medium">{v || "—"}</span>
+    </p>
+  );
+}
+function Swatch({ c }: { c: string }) {
+  return <span className="inline-block h-4 w-4 rounded border border-white/20" style={{ background: c }} title={c} />;
 }

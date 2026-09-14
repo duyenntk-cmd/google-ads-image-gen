@@ -1,69 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 
-export const maxDuration = 30;
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
-    const { appName, niche, screenshots, country, language } = await req.json() as {
-      appName: string;
-      niche?: string;
-      screenshots?: string[];
-      country?: string;
-      language?: string;
-    };
+    const { appName, niche, screenshots, country, language } = await req.json();
 
-    if (!appName) {
-      return NextResponse.json({ success: false, error: "Missing appName" }, { status: 400 });
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
     }
 
-    const marketCtx = country && country !== "Global" ? `Target market: ${country}.` : "Global market.";
-    const langCtx = language && language !== "English" ? `Ad copy language: ${language}.` : "";
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const imageContents: OpenAI.Chat.ChatCompletionContentPartImage[] = (screenshots || [])
-      .slice(0, 2)
-      .map(s => ({
-        type: "image_url" as const,
-        image_url: { url: s, detail: "low" as const },
-      }));
+    const outLang = language || "Vietnamese";
+    const system = `Bạn là creative director Google Ads chuyên app mobile. Nhìn app và (nếu có) screenshots, viết 1-2 câu mô tả creative direction: visual style, hero element, cảm xúc muốn truyền tải. Viết bằng ${outLang}. Chỉ trả về text prompt, KHÔNG giải thích, KHÔNG markdown, KHÔNG tiền tố.`;
 
-    const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [
+    const shots: string[] = Array.isArray(screenshots) ? screenshots.slice(0, 2) : [];
+    const userContent: any[] = [
       {
         type: "text",
-        text: `App: "${appName}"${niche ? `, category: ${niche}` : ""}. ${marketCtx} ${langCtx}
-
-Write a creative direction prompt for generating Google Ads banner images for this app.`,
+        text: `App: "${appName}"\nNiche: ${niche || "unknown"}\nThị trường: ${country || "Global"}\nViết creative direction ngắn gọn, punchy.`,
       },
-      ...imageContents,
+      ...shots.map((url) => ({ type: "image_url", image_url: { url, detail: "low" } })),
     ];
 
-    const response = await openai.chat.completions.create({
+    const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       max_tokens: 200,
+      temperature: 0.8,
       messages: [
-        {
-          role: "system",
-          content: `Bạn là creative director Google Ads chuyên về quảng cáo ứng dụng di động. Dựa trên thông tin app được cung cấp, viết 1-2 câu mô tả creative direction để gen banner quảng cáo Google Ads.
-
-Mô tả bao gồm:
-- Phong cách thiết kế và mood (VD: "phong cách cinematic bold, gradient tím đậm")
-- Element hình ảnh chính (VD: "phone mockup hiển thị giao diện chỉnh ảnh AI")
-- Cảm xúc muốn truyền tải (VD: "truyền cảm hứng sáng tạo, khiến người dùng cảm thấy mạnh mẽ")
-- Đối tượng mục tiêu nếu có
-
-Viết bằng tiếng Việt, ngắn gọn, sống động, dễ hiểu. KHÔNG lặp lại tên app. Chỉ trả về đoạn text prompt, không giải thích thêm.`,
-        },
+        { role: "system", content: system },
         { role: "user", content: userContent },
       ],
     });
 
-    const prompt = response.choices[0]?.message?.content?.trim() || "";
-
+    const prompt = completion.choices[0]?.message?.content?.trim() || "";
     return NextResponse.json({ success: true, prompt });
-  } catch (err) {
-    console.error("Auto prompt error:", err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+  } catch (err: any) {
+    return NextResponse.json(
+      { success: false, error: err?.message || "Lỗi auto-prompt." },
+      { status: 500 },
+    );
   }
 }
