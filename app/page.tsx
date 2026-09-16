@@ -3,15 +3,118 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
-import { AD_SIZES } from "@/lib/adSizes";
+import { AD_SIZES, pickBaseRatio, RatioKey } from "@/lib/adSizes";
 import { generateAllBanners } from "@/lib/canvasGen";
 
 interface Brief {
-  app_name: string; headline: string; subheadline: string; cta_text: string;
+  app_name: string; tagline?: string; headline: string; subheadline: string; cta_text: string;
   primary_color: string; secondary_color: string; accent_color: string;
   background_style: string; mood: string; best_frame_index: number;
   niche: string; app_store_url: string; play_store_url: string;
   subject_position?: string; text_zone?: string;
+}
+
+/* ─── canvas helpers for AI Banner tab ─── */
+function _clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
+function _hexToRgb(hex: string): [number,number,number] {
+  let h=(hex||"").replace("#","").trim();
+  if(h.length===3)h=h.split("").map(c=>c+c).join("");
+  if(h.length!==6)return[26,26,46];
+  const n=parseInt(h,16);return[(n>>16)&255,(n>>8)&255,n&255];
+}
+function _hexA(hex:string,a:number){const[r,g,b]=_hexToRgb(hex);return`rgba(${r},${g},${b},${a})`;}
+function _contrastColor(hex:string){const[r,g,b]=_hexToRgb(hex);return(0.299*r+0.587*g+0.114*b)/255>0.6?"#141414":"#ffffff";}
+function _lighten(hex:string,amt:number){const[r,g,b]=_hexToRgb(hex);const f=(c:number)=>Math.round(c+(255-c)*amt);return`rgb(${f(r)},${f(g)},${f(b)})`;}
+function _rrp(ctx:CanvasRenderingContext2D,x:number,y:number,w:number,h:number,r:number){
+  r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();
+}
+function _wrapText(ctx:CanvasRenderingContext2D,text:string,maxW:number):string[]{
+  const words=(text||"").split(/\s+/).filter(Boolean);const lines:string[]=[];let cur="";
+  for(const w of words){const t=cur?cur+" "+w:w;if(ctx.measureText(t).width>maxW&&cur){lines.push(cur);cur=w;}else cur=t;}
+  if(cur)lines.push(cur);return lines;
+}
+function _ellipsize(ctx:CanvasRenderingContext2D,text:string,maxW:number):string{
+  if(ctx.measureText(text).width<=maxW)return text;
+  let t=text;while(t.length>1&&ctx.measureText(t+"…").width>maxW)t=t.slice(0,-1);return t+"…";
+}
+function _loadImg(src:string):Promise<HTMLImageElement>{
+  return new Promise((resolve,reject)=>{const img=new Image();img.crossOrigin="anonymous";img.onload=()=>resolve(img);img.onerror=()=>reject(new Error("Cannot load image"));img.src=src;});
+}
+function _drawLogoLockup(ctx:CanvasRenderingContext2D,x:number,y:number,iconImg:HTMLImageElement|null,appName:string,tagline:string,scale:number){
+  const iconS=Math.round(44*scale),gap=Math.round(10*scale),nameFs=Math.round(24*scale),tagFs=Math.round(12*scale);
+  ctx.font=`800 ${nameFs}px system-ui,Arial,sans-serif`;const nameW=ctx.measureText(appName).width;
+  ctx.font=`500 ${tagFs}px system-ui,Arial,sans-serif`;const tagW=tagline?ctx.measureText(tagline).width:0;
+  const textW=Math.max(nameW,tagW),padX=Math.round(12*scale),padY=Math.round(10*scale);
+  const chipW=padX*2+(iconImg?iconS+gap:0)+textW;
+  const chipH=padY*2+Math.max(iconS,nameFs+(tagline?tagFs+4*scale:0));
+  ctx.save();ctx.shadowColor="rgba(0,0,0,0.35)";ctx.shadowBlur=18*scale;ctx.shadowOffsetY=4*scale;
+  ctx.fillStyle="rgba(12,12,22,0.42)";_rrp(ctx,x,y,chipW,chipH,chipH*0.28);ctx.fill();ctx.restore();
+  let cx=x+padX;const midY=y+chipH/2;
+  if(iconImg){const iy=midY-iconS/2;ctx.save();_rrp(ctx,cx,iy,iconS,iconS,iconS*0.24);ctx.clip();ctx.drawImage(iconImg,cx,iy,iconS,iconS);ctx.restore();cx+=iconS+gap;}
+  if(tagline){ctx.textBaseline="alphabetic";ctx.font=`800 ${nameFs}px system-ui,Arial,sans-serif`;ctx.fillStyle="#ffffff";ctx.fillText(appName,cx,midY+nameFs*0.05);
+    ctx.font=`500 ${tagFs}px system-ui,Arial,sans-serif`;ctx.fillStyle="rgba(255,255,255,0.82)";ctx.fillText(_ellipsize(ctx,tagline,chipW-(cx-x)-padX),cx,midY+nameFs*0.05+tagFs+4*scale);
+  }else{ctx.textBaseline="middle";ctx.font=`800 ${nameFs}px system-ui,Arial,sans-serif`;ctx.fillStyle="#ffffff";ctx.fillText(appName,cx,midY);}
+}
+function _drawCTA(ctx:CanvasRenderingContext2D,x:number,y:number,maxW:number,label:string,accent:string,scale:number){
+  const fs=_clamp(Math.round(22*scale),12,46);ctx.font=`bold ${fs}px system-ui,Arial,sans-serif`;
+  const labelW=ctx.measureText(label).width,circle=fs*1.5,chev=fs*0.9,gap2=fs*0.6;
+  const bh=Math.round(fs*2.2);let bw=circle+gap2+labelW+gap2+chev+fs*1.2;bw=Math.min(bw,maxW);
+  ctx.save();ctx.shadowColor=_hexA(accent,0.5);ctx.shadowBlur=22*scale;ctx.shadowOffsetY=6*scale;
+  const grad=ctx.createLinearGradient(x,y,x+bw,y);grad.addColorStop(0,accent);grad.addColorStop(1,_lighten(accent,0.18));
+  ctx.fillStyle=grad;_rrp(ctx,x,y,bw,bh,bh/2);ctx.fill();ctx.restore();
+  const cc=_contrastColor(accent),ccx=x+bh/2,ccy=y+bh/2;
+  ctx.fillStyle="rgba(255,255,255,0.22)";ctx.beginPath();ctx.arc(ccx,ccy,circle/2,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle=cc;ctx.lineWidth=Math.max(2,fs*0.11);ctx.lineCap="round";const a2=circle*0.24;
+  ctx.beginPath();ctx.moveTo(ccx,ccy-a2);ctx.lineTo(ccx,ccy+a2*0.7);ctx.moveTo(ccx-a2*0.6,ccy+a2*0.1);ctx.lineTo(ccx,ccy+a2*0.7);ctx.lineTo(ccx+a2*0.6,ccy+a2*0.1);ctx.moveTo(ccx-a2*0.9,ccy+a2*0.9);ctx.lineTo(ccx+a2*0.9,ccy+a2*0.9);ctx.stroke();
+  ctx.fillStyle=cc;ctx.textBaseline="middle";ctx.font=`bold ${fs}px system-ui,Arial,sans-serif`;
+  ctx.fillText(_ellipsize(ctx,label,bw-bh-chev-fs*1.6),x+bh+gap2,ccy+1);
+  const chx=x+bw-fs*1.1;ctx.beginPath();ctx.moveTo(chx-chev*0.3,ccy-chev*0.5);ctx.lineTo(chx+chev*0.3,ccy);ctx.lineTo(chx-chev*0.3,ccy+chev*0.5);ctx.stroke();
+  return{w:bw,h:bh};
+}
+function _drawPlayBadge(ctx:CanvasRenderingContext2D,x:number,y:number,scale:number){
+  const bh=Math.round(46*scale),bw=Math.round(150*scale);
+  ctx.save();ctx.fillStyle="#000000";_rrp(ctx,x,y,bw,bh,Math.round(8*scale));ctx.fill();
+  ctx.strokeStyle="rgba(255,255,255,0.35)";ctx.lineWidth=Math.max(1,scale);_rrp(ctx,x,y,bw,bh,Math.round(8*scale));ctx.stroke();
+  const tx=x+bh*0.28,ty=y+bh/2,s2=bh*0.28;
+  ctx.fillStyle="#12B5FF";ctx.beginPath();ctx.moveTo(tx-s2*0.7,ty-s2);ctx.lineTo(tx-s2*0.7,ty+s2);ctx.lineTo(tx+s2*0.9,ty);ctx.closePath();ctx.fill();
+  const textX=x+bh*0.95;ctx.fillStyle="#ffffff";ctx.textBaseline="alphabetic";
+  ctx.font=`500 ${Math.round(9*scale)}px system-ui,Arial,sans-serif`;ctx.fillText("GET IT ON",textX,y+bh*0.42);
+  ctx.font=`700 ${Math.round(17*scale)}px system-ui,Arial,sans-serif`;ctx.fillText("Google Play",textX,y+bh*0.82);ctx.restore();
+}
+function _drawMarketingText(ctx:CanvasRenderingContext2D,w:number,h:number,brief:Brief,scale:number){
+  const secondary=brief.secondary_color||"#1A1A2E",accent=brief.accent_color||"#FF6B35";
+  const headline=brief.headline||brief.app_name||"",sub=brief.subheadline||"";
+  const pad=Math.max(8,Math.round(Math.min(w,h)*0.06));const isStrip=h<=120;ctx.textAlign="left";
+  if(isStrip){
+    const g=ctx.createLinearGradient(0,0,w,0);g.addColorStop(0,_hexA(secondary,0.94));g.addColorStop(1,_hexA(secondary,0.5));
+    ctx.fillStyle=g;ctx.fillRect(0,0,w,h);const fs=Math.round(h*0.34);ctx.textBaseline="middle";
+    ctx.font=`800 ${fs}px system-ui,Arial,sans-serif`;ctx.fillStyle="#ffffff";ctx.fillText(_ellipsize(ctx,headline,w-pad*2),pad,h/2);return;
+  }
+  const scrimH=Math.round(h*(h/w>=1.4?0.52:0.6));
+  const g=ctx.createLinearGradient(0,h-scrimH,0,h);g.addColorStop(0,_hexA(secondary,0));g.addColorStop(0.45,_hexA(secondary,0.6));g.addColorStop(1,_hexA(secondary,0.96));
+  ctx.fillStyle=g;ctx.fillRect(0,h-scrimH,w,scrimH);
+  const maxW=w-pad*2;let y=h-pad;const ctaZone=Math.round(64*scale)+Math.round(52*scale)+pad;y-=ctaZone;
+  if(sub&&h>=250){const fs=_clamp(Math.round(w*0.04),12,32);ctx.font=`500 ${fs}px system-ui,Arial,sans-serif`;ctx.textBaseline="alphabetic";ctx.fillStyle="rgba(255,255,255,0.9)";
+    const lines=_wrapText(ctx,sub,maxW).slice(0,2);for(let i=lines.length-1;i>=0;i--){ctx.fillText(lines[i],pad,y);y-=fs*1.3;}y-=fs*0.3;}
+  if(headline){const fs=_clamp(Math.round(w*0.082),16,80);ctx.font=`900 ${fs}px system-ui,Arial,sans-serif`;ctx.textBaseline="alphabetic";
+    const lines=_wrapText(ctx,headline,maxW).slice(0,2);
+    for(let i=lines.length-1;i>=0;i--){ctx.fillStyle=lines.length>1&&i===lines.length-1?_lighten(accent,0.15):"#ffffff";ctx.fillText(lines[i],pad,y);y-=fs*1.12;}}
+}
+function _renderFinalBanner(baseImg:HTMLImageElement,w:number,h:number,brief:Brief,iconImg:HTMLImageElement|null):string{
+  const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d")!;
+  const srcR=baseImg.width/baseImg.height,dstR=w/h;
+  if(Math.abs(srcR-dstR)<0.15){ctx.drawImage(baseImg,0,0,w,h);}
+  else{ctx.save();ctx.filter="blur(28px)";const cs=Math.max(w/baseImg.width,h/baseImg.height);ctx.drawImage(baseImg,(w-baseImg.width*cs)/2,(h-baseImg.height*cs)/2,baseImg.width*cs,baseImg.height*cs);ctx.restore();
+    const cs2=Math.min(w/baseImg.width,h/baseImg.height);ctx.drawImage(baseImg,(w-baseImg.width*cs2)/2,(h-baseImg.height*cs2)/2,baseImg.width*cs2,baseImg.height*cs2);}
+  const scale=_clamp(Math.min(w,h)/500,0.34,2.2),pad=Math.max(8,Math.round(Math.min(w,h)*0.06)),isStrip=h<=120;
+  _drawMarketingText(ctx,w,h,brief,scale);
+  if(isStrip){if(brief.cta_text){const est=160*scale;_drawCTA(ctx,w-pad-est,(h-46*scale)/2,est,brief.cta_text,brief.accent_color||"#FF6B35",scale*0.7);}return canvas.toDataURL("image/png");}
+  _drawLogoLockup(ctx,pad,pad,iconImg,brief.app_name,brief.tagline||"",scale);
+  _drawCTA(ctx,pad,h-pad-Math.round(46*scale)-Math.round(52*scale)-pad*0.4,w-pad*2,brief.cta_text||"Download",brief.accent_color||"#FF6B35",scale);
+  if(h>=320&&w>=300)_drawPlayBadge(ctx,pad,h-pad-Math.round(46*scale),scale);
+  return canvas.toDataURL("image/png");
 }
 interface Preview { key: string; width: number; height: number; label: string; isTop5: boolean; dataUrl: string; }
 type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
@@ -297,6 +400,11 @@ export default function Home() {
   const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
   const [agZipBase64, setAgZipBase64] = useState("");
   const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
+  const [agCharacterImage, setAgCharacterImage] = useState<string|null>(null);
+  const [agMascotUsed, setAgMascotUsed] = useState<string|null>(null);
+  const [agUseScreenshot, setAgUseScreenshot] = useState(true);
+  const [agAutoMascot, setAgAutoMascot] = useState(true);
+  const agCharInputRef = useRef<HTMLInputElement>(null);
 
   // Google Ads Launch state
   const [adsConnected, setAdsConnected] = useState<boolean|null>(null);
@@ -409,16 +517,16 @@ export default function Home() {
 
   const handleAgAnalyze = async () => {
     if (!agUrl.trim()) return;
-    setAgStep("generating"); setAgError(""); setAgGenStatus("📱 Đang lấy thông tin app...");
+    setAgStep("generating"); setAgError(""); setAgMascotUsed(null);
+    setAgGenStatus("📱 Đang lấy thông tin app...");
     try {
-      // helper: safe json parse
       const safeJson = async (res: Response, label: string) => {
         const text = await res.text();
         try { return JSON.parse(text); }
         catch { throw new Error(`${label} returned invalid response (HTTP ${res.status}): ${text.slice(0, 200)}`); }
       };
 
-      // Step 1: fetch app info + screenshots for GPT-4o analysis
+      // Step 1: fetch app info + screenshots
       const ssRes = await fetch("/api/screenshots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -429,149 +537,81 @@ export default function Home() {
       const shots: string[] = ssData.screenshots || [];
       const appName: string = ssData.appName || "";
       const iconB64: string | null = ssData.iconBase64 || null;
-      setAgScreenshots(shots);
-      setAgIcon(iconB64);
+      setAgScreenshots(shots); setAgIcon(iconB64);
 
-      // Step 2: GPT-4o analyzes app + prompt → design brief
+      // Step 2: design brief
       setAgGenStatus("🤖 GPT-4o đang phân tích app và tạo concept thiết kế...");
       const conceptRes = await fetch("/api/banner-concept", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName, prompt: agPrompt, country: agCountry, language: agLang,
-          screenshots: shots.slice(0, 3), appUrl: agUrl,
-        }),
+        body: JSON.stringify({ appName, prompt: agPrompt, country: agCountry, language: agLang, screenshots: shots.slice(0, 3), appUrl: agUrl }),
       });
       const conceptData = await safeJson(conceptRes, "banner-concept");
       if (!conceptData.success) throw new Error(conceptData.error);
-      const brief: Brief = conceptData.brief;
-      setAgBrief(brief);
+      const theBrief: Brief = conceptData.brief;
+      setAgBrief(theBrief);
 
-      // Step 3: gpt-image-1 — call 3 parallel requests (1 per ratio) to avoid timeout
-      setAgGenStatus("🎨 AI đang thiết kế 3 ảnh — portrait · square · landscape (1-2 phút)...");
+      // Step 3: resolve mascot
+      let mascot: string | null = agCharacterImage;
+      if (!mascot && agAutoMascot) {
+        setAgGenStatus("🎭 Đang tìm mascot trong screenshots (hoặc tạo mới)...");
+        try {
+          const mres = await fetch("/api/mascot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ appName, niche: theBrief.niche, screenshots: shots, brief: theBrief, quality: agQuality }),
+          });
+          const md = await safeJson(mres, "mascot");
+          if (md.success) mascot = md.source === "screenshot" ? shots[md.index] || null : md.dataUrl || null;
+        } catch { /* non-fatal */ }
+      }
+      setAgMascotUsed(mascot);
+      const referenceImages = agUseScreenshot ? shots.slice(0, 1) : [];
+
+      // Step 4: generate 3 base images in parallel (portrait · square · landscape)
+      setAgGenStatus("🎨 AI đang thiết kế 3 ảnh gốc — portrait · square · landscape (1-2 phút)...");
       const genResults = await Promise.allSettled(
-        (["portrait","square","landscape"] as const).map(ratioKey =>
+        (["portrait","square","landscape"] as RatioKey[]).map(ratioKey =>
           fetch("/api/banner-generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ brief, userPrompt: agPrompt, quality: agQuality, ratioKey }),
+            body: JSON.stringify({ brief: theBrief, userPrompt: agPrompt, quality: agQuality, ratioKey, referenceImages, characterImage: mascot }),
           }).then(r => safeJson(r, `banner-generate:${ratioKey}`))
         )
       );
       const dalleImages: {key:string;label:string;dataUrl:string}[] = [];
       const genErrors: string[] = [];
-      for (const r of genResults) {
-        if (r.status === "fulfilled" && r.value.success) dalleImages.push(...(r.value.images || []));
-        else if (r.status === "fulfilled") genErrors.push(r.value.error);
-        else genErrors.push(String(r.reason));
+      const baseByRatio: Partial<Record<RatioKey, HTMLImageElement>> = {};
+      for (let i = 0; i < genResults.length; i++) {
+        const r = genResults[i];
+        const ratioKey = (["portrait","square","landscape"] as RatioKey[])[i];
+        if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+          dalleImages.push(...(r.value.images || []));
+          baseByRatio[ratioKey] = await _loadImg(r.value.images[0].dataUrl);
+        } else {
+          const reason = r.status === "rejected" ? r.reason?.message : r.value?.error || "unknown";
+          genErrors.push(`${ratioKey}: ${reason}`);
+        }
       }
-      if (dalleImages.length === 0) throw new Error(genErrors.join("; "));
+      if (!Object.keys(baseByRatio).length) throw new Error("Không gen được ảnh base nào.\n" + genErrors.join("\n"));
+      setAgDalleImages(dalleImages);
 
-      // Step 3b: composite real app icon onto each DALL-E base image
-      setAgGenStatus("🏷️ Ghép icon app thật vào ảnh...");
-      const loadImg = (src: string): Promise<HTMLImageElement> => new Promise((res, rej) => {
-        const i = new Image(); i.crossOrigin = "anonymous";
-        i.onload = () => res(i); i.onerror = rej; i.src = src;
-      });
-
-      const compositeWithIcon = async (baseDataUrl: string, iconDataUrl: string | null, appBrief: Brief | null): Promise<string> => {
-        const base = await loadImg(baseDataUrl);
-        const canvas = document.createElement("canvas");
-        canvas.width = base.width; canvas.height = base.height;
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(base, 0, 0);
-        // Always draw branding bar at top — covers any AI-generated fake icon
-        const barH = Math.round(base.height * 0.10);
-        const iconS = Math.round(barH * 0.72);
-        const pad2 = Math.round((barH - iconS) / 2);
-        const appNameText = appBrief?.app_name || "";
-        // Solid dark bar background (covers AI icon entirely)
-        ctx.fillStyle = "rgba(10,10,20,0.88)";
-        ctx.fillRect(0, 0, base.width, barH);
-        if (iconDataUrl) {
-          const icon = await loadImg(iconDataUrl);
-          const ix = pad2, iy = pad2, r2 = iconS * 0.22;
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(ix+r2,iy); ctx.lineTo(ix+iconS-r2,iy);
-          ctx.quadraticCurveTo(ix+iconS,iy,ix+iconS,iy+r2);
-          ctx.lineTo(ix+iconS,iy+iconS-r2);
-          ctx.quadraticCurveTo(ix+iconS,iy+iconS,ix+iconS-r2,iy+iconS);
-          ctx.lineTo(ix+r2,iy+iconS); ctx.quadraticCurveTo(ix,iy+iconS,ix,iy+iconS-r2);
-          ctx.lineTo(ix,iy+r2); ctx.quadraticCurveTo(ix,iy,ix+r2,iy);
-          ctx.closePath(); ctx.clip();
-          ctx.drawImage(icon, ix, iy, iconS, iconS);
-          ctx.restore();
-        }
-        if (appNameText) {
-          const fontSize = Math.round(barH * 0.36);
-          ctx.font = `bold ${fontSize}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
-          ctx.fillStyle = "#ffffff";
-          ctx.textBaseline = "middle";
-          ctx.fillText(appNameText, iconS + pad2 * 2, barH / 2);
-        }
-        return canvas.toDataURL("image/png");
-      };
-
-      const dalleWithIcon: typeof dalleImages = await Promise.all(
-        dalleImages.map(async img => ({
-          ...img,
-          dataUrl: await compositeWithIcon(img.dataUrl, iconB64, brief),
-        }))
-      );
-      setAgDalleImages(dalleWithIcon);
-
-      // Step 4: resize 3 base images → 20 Google Ads sizes via canvas
-      setAgGenStatus("📐 Resize ra 20 kích thước chuẩn Google Ads...");
-      const { AD_SIZES } = await import("@/lib/adSizes");
-      const imgByKey: Record<string, string> = {};
-      for (const img of dalleWithIcon) imgByKey[img.key] = img.dataUrl;
-
-      // Pick best base ratio: landscape→landscape, portrait→portrait, otherwise square
-      const getBestBase = (w: number, h: number) => {
-        const ratio = w / h;
-        if (ratio >= 1.5) return imgByKey["landscape"] || dalleWithIcon[0]?.dataUrl;
-        if (ratio <= 0.75) return imgByKey["portrait"]  || dalleWithIcon[0]?.dataUrl;
-        return imgByKey["square"] || dalleWithIcon[0]?.dataUrl;
-      };
-
+      // Step 5: overlay logo + hook + CTA + Play badge → 20 sizes
+      setAgGenStatus(`📐 Overlay logo / hook / CTA / Play badge → ${AD_SIZES.length} kích thước chuẩn Google Ads...`);
+      const iconImg = iconB64 ? await _loadImg(iconB64) : null;
       const { default: JSZipMod } = await import("jszip");
       const zip = new JSZipMod();
       const top5Folder = zip.folder("top5")!;
-      const allFolder   = zip.folder("all_sizes")!;
-      const finalPreviews: {key:string;width:number;height:number;label:string;isTop5:boolean;dataUrl:string}[] = [];
+      const allFolder = zip.folder("all_sizes")!;
+      const finalPreviews: Preview[] = [];
 
       for (const sz of AD_SIZES) {
-        const baseDataUrl = getBestBase(sz.width, sz.height);
-        const canvas = document.createElement("canvas");
-        canvas.width = sz.width; canvas.height = sz.height;
-        const ctx = canvas.getContext("2d")!;
-        await new Promise<void>(resolve => {
-          const img = new Image();
-          img.onload = () => {
-            const srcRatio = img.width / img.height;
-            const dstRatio = sz.width / sz.height;
-            if (Math.abs(srcRatio - dstRatio) < 0.15) {
-              // Similar ratio → stretch to fill (minimal distortion)
-              ctx.drawImage(img, 0, 0, sz.width, sz.height);
-            } else {
-              // Different ratio → blur-extend + contain (no distortion)
-              ctx.save(); ctx.filter = "blur(28px)";
-              const cs = Math.max(sz.width / img.width, sz.height / img.height);
-              ctx.drawImage(img, (sz.width - img.width * cs) / 2, (sz.height - img.height * cs) / 2, img.width * cs, img.height * cs);
-              ctx.restore();
-              ctx.fillStyle = "rgba(0,0,0,0.05)"; ctx.fillRect(0, 0, sz.width, sz.height);
-              const cs2 = Math.min(sz.width / img.width, sz.height / img.height);
-              ctx.drawImage(img, (sz.width - img.width * cs2) / 2, (sz.height - img.height * cs2) / 2, img.width * cs2, img.height * cs2);
-            }
-            resolve();
-          };
-          img.src = baseDataUrl;
-        });
-        const dataUrl = canvas.toDataURL("image/png");
+        const ratio = pickBaseRatio(sz.width, sz.height);
+        const baseImg = baseByRatio[ratio] || baseByRatio.square || baseByRatio.portrait || baseByRatio.landscape;
+        if (!baseImg) continue;
+        const dataUrl = _renderFinalBanner(baseImg, sz.width, sz.height, theBrief, iconImg);
         finalPreviews.push({ key: sz.key, width: sz.width, height: sz.height, label: sz.label, isTop5: sz.isTop5, dataUrl });
-        const b64 = dataUrl.split(",")[1];
-        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), c => c.charCodeAt(0));
         if (sz.isTop5) top5Folder.file(`${sz.key}.png`, bytes);
         allFolder.file(`${sz.key}.png`, bytes);
       }
@@ -580,6 +620,7 @@ export default function Home() {
       const reader = new FileReader();
       reader.onload = () => setAgZipBase64((reader.result as string).split(",")[1]);
       reader.readAsDataURL(blob);
+      if (genErrors.length) setAgError("Cảnh báo: " + genErrors.join("; "));
       setAgStep("preview");
     } catch (e) { setAgError(String(e)); setAgStep("input"); }
   };
@@ -2182,6 +2223,36 @@ export default function Home() {
                 {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
 
                 {/* Quality toggle */}
+                {/* Mascot section */}
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
+                    <input type="checkbox" checked={agAutoMascot} onChange={e => setAgAutoMascot(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    🤖 Tự động tìm / tạo mascot
+                  </label>
+                  <p className="text-xs pl-6" style={{color: t.textMuted}}>Tool sẽ tìm nhân vật trong screenshots; nếu không có thì tự tạo mascot cho tất cả banner.</p>
+                  <div className="flex items-center gap-3 pl-6">
+                    {(agCharacterImage || agMascotUsed)
+                      ? <img src={(agCharacterImage || agMascotUsed) as string} alt="mascot" className="h-14 w-14 rounded-lg object-cover flex-shrink-0"/>
+                      : <div className="h-14 w-14 flex items-center justify-center rounded-lg border border-dashed text-2xl flex-shrink-0" style={{borderColor: t.border}}>🤖</div>
+                    }
+                    <div className="flex-1 space-y-1">
+                      <p className="text-xs" style={{color: t.textMuted}}>
+                        {agCharacterImage ? "Đang dùng mascot bạn upload." : agMascotUsed ? "Mascot dùng lần gen gần nhất." : "Tùy chọn: upload ảnh mascot để ghi đè auto."}
+                      </p>
+                      <div className="flex gap-2">
+                        <button onClick={() => agCharInputRef.current?.click()} className="text-xs px-3 py-1 rounded-md" style={{backgroundColor: t.border, color: t.text}}>Chọn ảnh</button>
+                        {agCharacterImage && <button onClick={() => setAgCharacterImage(null)} className="text-xs px-3 py-1 rounded-md" style={{backgroundColor: t.border, color: t.text}}>Bỏ override</button>}
+                      </div>
+                      <input ref={agCharInputRef} type="file" accept="image/*" hidden onChange={async e => { const f=e.target.files?.[0]; if(f){const r=new FileReader();r.onload=()=>setAgCharacterImage(r.result as string);r.readAsDataURL(f);}}}/>
+                    </div>
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm cursor-pointer" style={{color: t.text}}>
+                  <input type="checkbox" checked={agUseScreenshot} onChange={e => setAgUseScreenshot(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                  📱 Dùng screenshot app làm reference cho AI
+                </label>
+
                 <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                   <div>
                     <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng ảnh AI</div>
@@ -2200,7 +2271,7 @@ export default function Home() {
 
                 <button onClick={handleAgAnalyze} disabled={!agUrl.trim()}
                   className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
-                  ✨ Tạo banner AI →
+                  ✨ Tạo {AD_SIZES.length} banner AI →
                 </button>
               </div>
             )}
@@ -2214,7 +2285,7 @@ export default function Home() {
                 <div className="space-y-1.5 text-xs" style={{color: t.textMuted}}>
                   <div>📱 Lấy screenshot từ App Store / Play Store</div>
                   <div>🤖 GPT-4o phân tích app và tạo concept</div>
-                  <div>🎨 Render {AD_SIZES.length} kích thước chuẩn Google Ads</div>
+                  <div>🎨 Overlay logo / CTA → {AD_SIZES.length} kích thước chuẩn Google Ads</div>
                 </div>
                 <div className="w-56 h-1.5 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
                   <div className="h-full bg-gradient-to-r from-violet-500 to-purple-400 animate-pulse" style={{width:"70%"}}/>
