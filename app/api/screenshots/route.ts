@@ -4,25 +4,76 @@ import gplay from "google-play-scraper";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Map common country display names -> ISO 3166-1 alpha-2 codes.
+// Map country display names -> ISO 3166-1 alpha-2 codes.
+// Must cover every entry of COUNTRIES in app/page.tsx, otherwise the picker
+// silently falls back to the US store and returns the wrong localized assets.
 const COUNTRY_CODES: Record<string, string> = {
   global: "us",
-  vietnam: "vn",
-  "viet nam": "vn",
+  // Southeast Asia
+  vietnam: "vn", "viet nam": "vn",
   indonesia: "id",
-  "united states": "us",
-  usa: "us",
-  us: "us",
-  india: "in",
   thailand: "th",
   philippines: "ph",
   malaysia: "my",
   singapore: "sg",
+  myanmar: "mm",
+  cambodia: "kh",
+  // East Asia
   japan: "jp",
-  korea: "kr",
-  "south korea": "kr",
-  brazil: "br",
+  "south korea": "kr", korea: "kr",
+  china: "cn",
+  taiwan: "tw",
+  "hong kong": "hk",
+  // South Asia
+  india: "in",
+  pakistan: "pk",
+  bangladesh: "bd",
+  "sri lanka": "lk",
+  // Middle East
+  "saudi arabia": "sa",
+  uae: "ae", "united arab emirates": "ae",
+  egypt: "eg",
+  turkey: "tr",
+  israel: "il",
+  iraq: "iq",
+  // North America
+  usa: "us", us: "us", "united states": "us",
+  canada: "ca",
   mexico: "mx",
+  // South America
+  brazil: "br",
+  argentina: "ar",
+  colombia: "co",
+  chile: "cl",
+  peru: "pe",
+  // Europe
+  germany: "de",
+  france: "fr",
+  "united kingdom": "gb", uk: "gb",
+  italy: "it",
+  spain: "es",
+  netherlands: "nl",
+  poland: "pl",
+  sweden: "se",
+  norway: "no",
+  denmark: "dk",
+  finland: "fi",
+  belgium: "be",
+  switzerland: "ch",
+  austria: "at",
+  portugal: "pt",
+  greece: "gr",
+  ukraine: "ua",
+  russia: "ru",
+  // Oceania
+  australia: "au",
+  "new zealand": "nz",
+  // Africa
+  nigeria: "ng",
+  "south africa": "za",
+  kenya: "ke",
+  ethiopia: "et",
+  ghana: "gh",
 };
 
 function toCountryCode(country?: string): string {
@@ -76,7 +127,17 @@ async function fetchIOS(appUrl: string, cc: string) {
     fetchImagesToDataUrls(shots, 4),
   ]);
 
-  return { appName: app.trackName as string, iconBase64, screenshots };
+  return {
+    appName: app.trackName as string,
+    iconBase64,
+    screenshots,
+    platform: "ios" as const,
+    description: String(app.description || "").slice(0, 1200),
+    genre: app.primaryGenreName || "",
+    rating: app.averageUserRating ?? null,
+    developer: app.artistName || "",
+    totalScreenshots: shots.length,
+  };
 }
 
 // --- Android Play Store via google-play-scraper ---
@@ -92,7 +153,17 @@ async function fetchAndroid(appUrl: string, cc: string) {
     fetchImagesToDataUrls(app.screenshots || [], 4),
   ]);
 
-  return { appName: app.title as string, iconBase64, screenshots };
+  return {
+    appName: app.title as string,
+    iconBase64,
+    screenshots,
+    platform: "android" as const,
+    description: String(app.description || "").replace(/<[^>]+>/g, " ").slice(0, 1200),
+    genre: app.genre || "",
+    rating: app.score ?? null,
+    developer: app.developer || "",
+    totalScreenshots: (app.screenshots || []).length,
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -122,7 +193,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true, ...result });
+    return NextResponse.json({ success: true, countryCode: cc, ...result });
   } catch (err: any) {
     return NextResponse.json(
       { success: false, error: err?.message || "Lỗi không xác định khi fetch app." },

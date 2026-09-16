@@ -102,12 +102,30 @@ function _drawMarketingText(ctx:CanvasRenderingContext2D,w:number,h:number,brief
     const lines=_wrapText(ctx,headline,maxW).slice(0,2);
     for(let i=lines.length-1;i>=0;i--){ctx.fillStyle=lines.length>1&&i===lines.length-1?_lighten(accent,0.15):"#ffffff";ctx.fillText(lines[i],pad,y);y-=fs*1.12;}}
 }
+/** Run `tasks` with at most `limit` in flight, reporting each completion. */
+async function _pool<T>(tasks:(()=>Promise<T>)[],limit:number,onDone?:(n:number)=>void):Promise<PromiseSettledResult<T>[]>{
+  const results=new Array<PromiseSettledResult<T>>(tasks.length);
+  let next=0,done=0;
+  const worker=async()=>{
+    while(true){
+      const i=next++;
+      if(i>=tasks.length)return;
+      try{results[i]={status:"fulfilled",value:await tasks[i]()};}
+      catch(reason){results[i]={status:"rejected",reason};}
+      onDone?.(++done);
+    }
+  };
+  await Promise.all(Array.from({length:Math.min(limit,tasks.length)},worker));
+  return results;
+}
+
 function _renderFinalBanner(baseImg:HTMLImageElement,w:number,h:number,brief:Brief,iconImg:HTMLImageElement|null):string{
   const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d")!;
-  const srcR=baseImg.width/baseImg.height,dstR=w/h;
-  if(Math.abs(srcR-dstR)<0.15){ctx.drawImage(baseImg,0,0,w,h);}
-  else{ctx.save();ctx.filter="blur(28px)";const cs=Math.max(w/baseImg.width,h/baseImg.height);ctx.drawImage(baseImg,(w-baseImg.width*cs)/2,(h-baseImg.height*cs)/2,baseImg.width*cs,baseImg.height*cs);ctx.restore();
-    const cs2=Math.min(w/baseImg.width,h/baseImg.height);ctx.drawImage(baseImg,(w-baseImg.width*cs2)/2,(h-baseImg.height*cs2)/2,baseImg.width*cs2,baseImg.height*cs2);}
+  // Cover-crop: the source was generated at (or near) this ratio, so this only
+  // trims the safe margin the prompt reserved. No blur bars, no stretching.
+  const cs=Math.max(w/baseImg.width,h/baseImg.height);
+  const dw=baseImg.width*cs,dh=baseImg.height*cs;
+  ctx.drawImage(baseImg,(w-dw)/2,(h-dh)/2,dw,dh);
   const scale=_clamp(Math.min(w,h)/500,0.34,2.2),pad=Math.max(8,Math.round(Math.min(w,h)*0.06)),isStrip=h<=120;
   _drawMarketingText(ctx,w,h,brief,scale);
   if(isStrip){if(brief.cta_text){const est=160*scale;_drawCTA(ctx,w-pad-est,(h-46*scale)/2,est,brief.cta_text,brief.accent_color||"#FF6B35",scale*0.7);}return canvas.toDataURL("image/png");}
@@ -118,6 +136,11 @@ function _renderFinalBanner(baseImg:HTMLImageElement,w:number,h:number,brief:Bri
 }
 interface Preview { key: string; width: number; height: number; label: string; isTop5: boolean; dataUrl: string; }
 type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
+
+/** Parallel image requests in flight. Keeps us under OpenAI's images rate limit. */
+const AG_CONCURRENCY = 4;
+/** Rough OpenAI list price per image, for the cost hint in the UI. */
+const AG_COST_PER_IMAGE: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
 
 const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
   photo:  { primary_color: "#7B2FBE", secondary_color: "#E91E8C", accent_color: "#FF6B35", headline: "Edit Photos Like a Pro",      subheadline: "100+ Filters & AI Tools",   cta_text: "Edit for Free"    },
@@ -404,6 +427,8 @@ export default function Home() {
   const [agMascotUsed, setAgMascotUsed] = useState<string|null>(null);
   const [agUseScreenshot, setAgUseScreenshot] = useState(true);
   const [agAutoMascot, setAgAutoMascot] = useState(true);
+  const [agIndependent, setAgIndependent] = useState(true);
+  const [agPrecise, setAgPrecise] = useState(false);
   const agCharInputRef = useRef<HTMLInputElement>(null);
 
   // Google Ads Launch state
@@ -567,37 +592,75 @@ export default function Home() {
       }
       setAgMascotUsed(mascot);
       const referenceImages = agUseScreenshot ? shots.slice(0, 1) : [];
-
-      // Step 4: generate 3 base images in parallel (portrait · square · landscape)
-      setAgGenStatus("🎨 AI đang thiết kế 3 ảnh gốc — portrait · square · landscape (1-2 phút)...");
-      const genResults = await Promise.allSettled(
-        (["portrait","square","landscape"] as RatioKey[]).map(ratioKey =>
-          fetch("/api/banner-generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ brief: theBrief, userPrompt: agPrompt, quality: agQuality, ratioKey, referenceImages, characterImage: mascot }),
-          }).then(r => safeJson(r, `banner-generate:${ratioKey}`))
-        )
-      );
-      const dalleImages: {key:string;label:string;dataUrl:string}[] = [];
       const genErrors: string[] = [];
-      const baseByRatio: Partial<Record<RatioKey, HTMLImageElement>> = {};
-      for (let i = 0; i < genResults.length; i++) {
-        const r = genResults[i];
-        const ratioKey = (["portrait","square","landscape"] as RatioKey[])[i];
-        if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
-          dalleImages.push(...(r.value.images || []));
-          baseByRatio[ratioKey] = await _loadImg(r.value.images[0].dataUrl);
-        } else {
-          const reason = r.status === "rejected" ? r.reason?.message : r.value?.error || "unknown";
-          genErrors.push(`${ratioKey}: ${reason}`);
+      const dalleImages: {key:string;label:string;dataUrl:string}[] = [];
+      const baseFor: Record<string, HTMLImageElement> = {};
+
+      if (agIndependent) {
+        // Each ad size gets its own generation, composed for that exact ratio.
+        // The same mascot + brief go into every call, so the set stays on-concept.
+        const total = AD_SIZES.length;
+        setAgGenStatus(`🎨 Đang gen ${total} ảnh độc lập (0/${total})...`);
+        const results = await _pool(
+          AD_SIZES.map(sz => () =>
+            fetch("/api/banner-generate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                brief: theBrief, userPrompt: agPrompt, quality: agQuality,
+                width: sz.width, height: sz.height, key: sz.key,
+                referenceImages, characterImage: mascot, precise: agPrecise,
+              }),
+            }).then(r => safeJson(r, `banner-generate:${sz.key}`))
+          ),
+          AG_CONCURRENCY,
+          n => setAgGenStatus(`🎨 Đang gen ${total} ảnh độc lập (${n}/${total})...`),
+        );
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i], sz = AD_SIZES[i];
+          if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+            baseFor[sz.key] = await _loadImg(r.value.images[0].dataUrl);
+            if (["1200x628","1200x1200","1080x1920"].includes(sz.key)) {
+              dalleImages.push({ key: sz.key, label: sz.label, dataUrl: r.value.images[0].dataUrl });
+            }
+          } else {
+            genErrors.push(`${sz.key}: ${r.status === "rejected" ? r.reason?.message : r.value?.error || "unknown"}`);
+          }
+        }
+      } else {
+        // Fast mode: 3 base renders shared across all sizes (cheaper, less tailored).
+        setAgGenStatus("🎨 Fast mode: gen 3 ảnh gốc — portrait · square · landscape...");
+        const ratios = ["portrait","square","landscape"] as RatioKey[];
+        const results = await Promise.allSettled(
+          ratios.map(ratioKey =>
+            fetch("/api/banner-generate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ brief: theBrief, userPrompt: agPrompt, quality: agQuality, ratioKey, referenceImages, characterImage: mascot, precise: agPrecise }),
+            }).then(r => safeJson(r, `banner-generate:${ratioKey}`))
+          )
+        );
+        const baseByRatio: Partial<Record<RatioKey, HTMLImageElement>> = {};
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i], ratioKey = ratios[i];
+          if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+            baseByRatio[ratioKey] = await _loadImg(r.value.images[0].dataUrl);
+            dalleImages.push({ key: ratioKey, label: ratioKey, dataUrl: r.value.images[0].dataUrl });
+          } else {
+            genErrors.push(`${ratioKey}: ${r.status === "rejected" ? r.reason?.message : r.value?.error || "unknown"}`);
+          }
+        }
+        for (const sz of AD_SIZES) {
+          const img = baseByRatio[pickBaseRatio(sz.width, sz.height)] || baseByRatio.square || baseByRatio.portrait || baseByRatio.landscape;
+          if (img) baseFor[sz.key] = img;
         }
       }
-      if (!Object.keys(baseByRatio).length) throw new Error("Không gen được ảnh base nào.\n" + genErrors.join("\n"));
+
+      if (!Object.keys(baseFor).length) throw new Error("Không gen được ảnh nào.\n" + genErrors.join("\n"));
       setAgDalleImages(dalleImages);
 
-      // Step 5: overlay logo + hook + CTA + Play badge → 20 sizes
-      setAgGenStatus(`📐 Overlay logo / hook / CTA / Play badge → ${AD_SIZES.length} kích thước chuẩn Google Ads...`);
+      // Overlay logo + hook + CTA + Play badge onto every size.
+      setAgGenStatus(`📐 Overlay logo / hook / CTA / Play badge → ${AD_SIZES.length} kích thước...`);
       const iconImg = iconB64 ? await _loadImg(iconB64) : null;
       const { default: JSZipMod } = await import("jszip");
       const zip = new JSZipMod();
@@ -606,8 +669,7 @@ export default function Home() {
       const finalPreviews: Preview[] = [];
 
       for (const sz of AD_SIZES) {
-        const ratio = pickBaseRatio(sz.width, sz.height);
-        const baseImg = baseByRatio[ratio] || baseByRatio.square || baseByRatio.portrait || baseByRatio.landscape;
+        const baseImg = baseFor[sz.key];
         if (!baseImg) continue;
         const dataUrl = _renderFinalBanner(baseImg, sz.width, sz.height, theBrief, iconImg);
         finalPreviews.push({ key: sz.key, width: sz.width, height: sz.height, label: sz.label, isTop5: sz.isTop5, dataUrl });
@@ -2253,6 +2315,27 @@ export default function Home() {
                   📱 Dùng screenshot app làm reference cho AI
                 </label>
 
+                {/* Generation mode */}
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
+                    <input type="checkbox" checked={agIndependent} onChange={e => setAgIndependent(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    🎯 Gen độc lập từng kích thước ({AD_SIZES.length} ảnh)
+                  </label>
+                  <p className="text-xs pl-6" style={{color: t.textMuted}}>
+                    {agIndependent
+                      ? `Mỗi size được AI vẽ riêng đúng bố cục của nó — không co kéo. Cùng mascot + brief nên vẫn chung concept. Chậm & tốn hơn.`
+                      : `Fast mode: gen 3 ảnh gốc rồi crop ra ${AD_SIZES.length} size. Nhanh & rẻ nhưng bố cục kém sát hơn.`}
+                  </p>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer pl-6" style={{color: t.text}}>
+                    <input type="checkbox" checked={agPrecise} onChange={e => setAgPrecise(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    💎 Ưu tiên model Sunburst (nét hơn, chậm hơn)
+                  </label>
+                  <p className="text-xs pl-6" style={{color: t.textMuted}}>
+                    Ước tính: ~{(((agIndependent ? AD_SIZES.length : 3) + 1) * (AG_COST_PER_IMAGE[agQuality] ?? 0.211)).toFixed(2)}$ /lần chạy
+                    {" · "}{agIndependent ? `~${Math.ceil((AD_SIZES.length / AG_CONCURRENCY) * 35 / 60)}-${Math.ceil((AD_SIZES.length / AG_CONCURRENCY) * 70 / 60)} phút` : "~1-2 phút"}
+                  </p>
+                </div>
+
                 <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                   <div>
                     <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng ảnh AI</div>
@@ -2315,7 +2398,7 @@ export default function Home() {
                 {/* DALL-E base images */}
                 {agDalleImages.length > 0 && (
                   <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
-                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh gốc DALL-E 3 ({agDalleImages.length} tỉ lệ)</div>
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh gốc AI ({agDalleImages.length} mẫu)</div>
                     <div className="flex gap-3 overflow-x-auto pb-1">
                       {agDalleImages.map(img => (
                         <div key={img.key} className="flex-shrink-0 space-y-1.5">
@@ -2327,7 +2410,7 @@ export default function Home() {
                               width:  img.key === "portrait" ? 100 : img.key === "square" ? 120 : 160,
                             }}/>
                           <div className="text-[10px] text-center" style={{color: t.textMuted}}>{img.label}</div>
-                          <button onClick={() => { const a=document.createElement("a"); a.href=img.dataUrl; a.download=`dalle-${img.key}-${agBrief?.app_name||"banner"}.png`; a.click(); }}
+                          <button onClick={() => { const a=document.createElement("a"); a.href=img.dataUrl; a.download=`base-${img.key}-${agBrief?.app_name||"banner"}.png`; a.click(); }}
                             className="w-full text-[10px] py-1 rounded-lg bg-violet-600/20 text-violet-400 font-medium hover:bg-violet-600/40 transition-all">⬇ Tải</button>
                         </div>
                       ))}

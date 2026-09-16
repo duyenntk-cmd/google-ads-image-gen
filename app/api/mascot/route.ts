@@ -72,15 +72,38 @@ Polished modern 3D cartoon (Pixar-style), full body or 3/4 view, centered, expre
 Soft studio lighting. Plain simple neutral light-gradient background. Color hints: ${primary} and ${accent}.
 STRICT: only the character, NOTHING else. NO text, NO letters, NO logos, NO UI, NO phone, NO props with text. Clean and centered.`;
 
-    const gen = await openai.images.generate({
-      model: "gpt-image-1",
-      prompt,
-      size: "1024x1024",
-      quality: q as any,
-      n: 1,
-    });
-    const b64 = gen.data?.[0]?.b64_json;
-    if (!b64) throw new Error("Không tạo được mascot.");
+    // The mascot is the consistency anchor for all 20 banners — render it on the
+    // newest model available, falling back if the account can't reach one.
+    let b64: string | undefined;
+    const tried: string[] = [];
+    for (const model of ["gpt-image-2.5-flare", "gpt-image-2", "gpt-image-1"]) {
+      try {
+        const gen = await openai.images.generate({
+          model,
+          prompt,
+          size: "1024x1024",
+          quality: q as any,
+          n: 1,
+        } as any);
+        b64 = gen.data?.[0]?.b64_json;
+        if (b64) break;
+        tried.push(`${model}: không trả ảnh`);
+      } catch (e: any) {
+        const status = e?.status ?? e?.response?.status;
+        const msg = String(e?.message || "").toLowerCase();
+        const unavailable =
+          status === 404 ||
+          (status === 403 && (msg.includes("model") || msg.includes("access"))) ||
+          msg.includes("does not exist") ||
+          msg.includes("not found") ||
+          msg.includes("do not have access") ||
+          msg.includes("must be verified");
+        tried.push(`${model}: ${e?.message || e}`);
+        if (unavailable) continue;
+        throw e;
+      }
+    }
+    if (!b64) throw new Error("Không tạo được mascot. " + tried.join(" | "));
 
     return NextResponse.json({ success: true, source: "generated", dataUrl: `data:image/png;base64,${b64}` });
   } catch (err: any) {
