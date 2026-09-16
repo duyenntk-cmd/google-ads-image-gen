@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 30;
 
@@ -30,6 +31,8 @@ const COLOR_PALETTES: Record<string, { primary: string; secondary: string; accen
 };
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { app_name, niche, headline, subheadline, cta_text } = await req.json();
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 20;
 
@@ -8,6 +9,8 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const LIMITS: Record<string, number> = { headline: 30, description: 90, cta: 15 };
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { type, appName, message, country, language, existing } = await req.json() as {
       type: "headline" | "description" | "cta";

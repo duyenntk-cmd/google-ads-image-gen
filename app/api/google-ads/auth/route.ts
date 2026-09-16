@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { refreshAccessToken } from "@/lib/googleAdsClient";
+import { requireSession } from "@/lib/apiAuth";
 
 export async function GET(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   const action = new URL(req.url).searchParams.get("action");
 
   if (action === "connect") {

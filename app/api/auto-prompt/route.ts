@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { requireSession } from "@/lib/apiAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { appName, niche, screenshots, country, language } = await req.json();
 

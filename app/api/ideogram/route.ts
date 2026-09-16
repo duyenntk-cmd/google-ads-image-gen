@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 
@@ -113,6 +114,8 @@ async function generateOne(
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   const apiKey = process.env.IDEOGRAM_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ success: false, error: "IDEOGRAM_API_KEY chưa được cấu hình trong Vercel env" }, { status: 500 });

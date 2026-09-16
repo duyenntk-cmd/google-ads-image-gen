@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 
@@ -113,6 +114,8 @@ Return ONLY a valid JSON array, no markdown, no explanation:
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const body: LocalizeRequest = await req.json();
     const { appName, headlines, descriptions, ctas, markets, sourceLanguage = "English" } = body;

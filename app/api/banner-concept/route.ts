@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { requireSession } from "@/lib/apiAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -21,6 +22,8 @@ const BRIEF_SCHEMA = `Trả về DUY NHẤT một JSON object (không markdown, 
 }`;
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { appName, prompt, country, language, screenshots } = await req.json();
 

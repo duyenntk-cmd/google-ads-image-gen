@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 
@@ -204,6 +205,8 @@ async function fetchAndroidData(pkg: string, country = "Global") {
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const body = await req.json();
     const { appUrl, keywords, country, language, niche } = body as {

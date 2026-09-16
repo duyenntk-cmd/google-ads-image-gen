@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { refreshAccessToken, queryCustomer, mutate, uploadImageAsset } from "@/lib/googleAdsClient";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 
@@ -17,6 +18,8 @@ async function getAccessToken(): Promise<string> {
 
 // GET: list campaigns for an account
 export async function GET(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const customerId = new URL(req.url).searchParams.get("customerId");
     if (!customerId) return NextResponse.json({ success: false, error: "Missing customerId" }, { status: 400 });
@@ -47,6 +50,8 @@ export async function GET(req: NextRequest) {
 
 // POST: create App Campaign
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const body = await req.json();
     const {

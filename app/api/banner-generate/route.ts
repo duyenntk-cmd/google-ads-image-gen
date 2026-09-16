@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI, { toFile } from "openai";
 import { GEN_SIZES, RatioKey, planGenSize, shapeOf, ShapeKey } from "@/lib/adSizes";
+import { requireSession } from "@/lib/apiAuth";
 
 export const runtime = "nodejs";
 // One image per request. gpt-image-2.5-flare is ~50% faster than 2.0, but a
@@ -136,6 +137,8 @@ function isModelUnavailable(err: any): boolean {
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const body = await req.json();
     const { brief, userPrompt, quality, referenceImages, characterImage, precise } = body;

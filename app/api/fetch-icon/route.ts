@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 20;
 
@@ -61,6 +62,8 @@ async function fetchIconFromUrl(url: string): Promise<{ iconDataUrl: string | nu
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { url } = await req.json();
     if (!url) return NextResponse.json({ success: false, error: "Missing url" }, { status: 400 });

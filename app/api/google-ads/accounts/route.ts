@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { refreshAccessToken, listAccessibleCustomers, queryCustomer, NeedsBasicAccessError } from "@/lib/googleAdsClient";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 30;
 
@@ -20,6 +21,8 @@ async function getAccessToken(): Promise<string> {
 }
 
 export async function GET(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     void req;
     const accessToken = await getAccessToken();

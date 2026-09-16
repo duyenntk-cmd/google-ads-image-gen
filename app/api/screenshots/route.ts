@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import gplay from "google-play-scraper";
+import { requireSession } from "@/lib/apiAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -185,6 +186,8 @@ async function fetchAndroid(appUrl: string, cc: string, shotLimit = 4) {
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { appUrl, country, limit } = await req.json();
     if (!appUrl || typeof appUrl !== "string") {
