@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
-import { GOOGLE_ADS_FORMATS } from "@/lib/adFormats";
+import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 
 interface Brief {
@@ -266,6 +266,16 @@ function abDrawText(ctx: CanvasRenderingContext2D, w: number, h: number, brief: 
       y -= fs * 1.12;
     }
   }
+}
+
+/** Cover-crop to the exact asset size with no overlay at all. */
+function abRenderPlain(base: HTMLImageElement, w: number, h: number): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  const cs = Math.max(w / base.width, h / base.height);
+  ctx.drawImage(base, (w - base.width * cs) / 2, (h - base.height * cs) / 2, base.width * cs, base.height * cs);
+  return canvas.toDataURL("image/png");
 }
 
 function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Brief, icon: HTMLImageElement | null): string {
@@ -550,82 +560,57 @@ export default function Home() {
       const bases: {key:string;label:string;dataUrl:string}[] = [];
       const baseFor: Record<string, HTMLImageElement> = {};
 
-      if (abIndependent) {
-        const total = GOOGLE_ADS_FORMATS.length;
-        setAbStatus(`🎨 Đang gen ${total} ảnh độc lập (0/${total})...`);
-        const results = await abPool(
-          GOOGLE_ADS_FORMATS.map((f) => () =>
-            abFetchJson("/api/banner-generate", {
-              brief: theBrief, userPrompt: abPrompt, quality: abQuality,
-              width: f.width, height: f.height, key: f.key,
-              referenceImages, characterImage: mascot, precise: abPrecise,
-            }, 300000, `banner-generate:${f.key}`)),
-          AB_CONCURRENCY,
-          (n) => setAbStatus(`🎨 Đang gen ${total} ảnh độc lập (${n}/${total})...`),
-        );
-        for (let i = 0; i < results.length; i++) {
-          const r = results[i], f = GOOGLE_ADS_FORMATS[i];
-          if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
-            baseFor[f.key] = await abLoadImg(r.value.images[0].dataUrl);
-            if (["1200x628","1200x1200","1080x1920"].includes(f.key)) bases.push({ key: f.key, label: f.label, dataUrl: r.value.images[0].dataUrl });
-          } else {
-            errors.push(`${f.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
-          }
-        }
-      } else {
-        // Fast mode: 3 renders shared across all sizes. Cheaper, less tailored.
-        setAbStatus("🎨 Fast mode: gen 3 ảnh gốc...");
-        const seeds = [
-          { key: "landscape", w: 1200, h: 628 },
-          { key: "square", w: 1200, h: 1200 },
-          { key: "portrait", w: 1080, h: 1920 },
-        ];
-        const results = await abPool(
-          seeds.map((s) => () =>
-            abFetchJson("/api/banner-generate", {
-              brief: theBrief, userPrompt: abPrompt, quality: abQuality,
-              width: s.w, height: s.h, key: s.key,
-              referenceImages, characterImage: mascot, precise: abPrecise,
-            }, 300000, `banner-generate:${s.key}`)),
-          3,
-        );
-        const byShape: Record<string, HTMLImageElement> = {};
-        for (let i = 0; i < results.length; i++) {
-          const r = results[i], s = seeds[i];
-          if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
-            byShape[s.key] = await abLoadImg(r.value.images[0].dataUrl);
-            bases.push({ key: s.key, label: s.key, dataUrl: r.value.images[0].dataUrl });
-          } else {
-            errors.push(`${s.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
-          }
-        }
-        for (const f of GOOGLE_ADS_FORMATS) {
-          const ratio = f.width / f.height;
-          const pick = ratio >= 1.5 ? "landscape" : ratio <= 0.75 ? "portrait" : "square";
-          const img = byShape[pick] || byShape.square || byShape.landscape || byShape.portrait;
-          if (img) baseFor[f.key] = img;
+      // Core mode renders one asset per ratio — a cheap way to check the whole
+      // pipeline before committing to all 20.
+      const slots = abIndependent ? APP_CREATIVES : APP_CREATIVES.filter((c) => c.isCore);
+      const total = slots.length;
+      setAbStatus(`🎨 Đang gen ${total} ảnh (0/${total})...`);
+      const results = await abPool(
+        slots.map((c) => () =>
+          abFetchJson("/api/banner-generate", {
+            brief: theBrief, userPrompt: abPrompt, quality: abQuality,
+            width: c.width, height: c.height, key: c.key, angle: c.angle,
+            referenceImages, characterImage: mascot, precise: abPrecise,
+          }, 300000, `banner-generate:${c.key}`)),
+        AB_CONCURRENCY,
+        (n) => setAbStatus(`🎨 Đang gen ${total} ảnh (${n}/${total})...`),
+      );
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i], c = slots[i];
+        if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+          baseFor[c.key] = await abLoadImg(r.value.images[0].dataUrl);
+          if (c.isCore) bases.push({ key: c.key, label: c.label, dataUrl: r.value.images[0].dataUrl });
+        } else {
+          errors.push(`${c.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
         }
       }
 
       if (!Object.keys(baseFor).length) throw new Error("Không gen được ảnh nào.\n" + errors.join("\n"));
       setAbBaseImages(bases);
 
-      setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${GOOGLE_ADS_FORMATS.length} kích thước...`);
+      setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${total} ảnh...`);
       const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
       const { default: JSZipMod } = await import("jszip");
       const zip = new JSZipMod();
-      const top5 = zip.folder("top5")!;
-      const all = zip.folder("all_sizes")!;
+      // Foldered by ratio because that is how the assets get uploaded.
+      const folders: Record<string, import("jszip")> = {
+        landscape: zip.folder("1.91-1_landscape")!,
+        square: zip.folder("1-1_square")!,
+        portrait: zip.folder("4-5_portrait")!,
+      };
       const out: Preview[] = [];
 
-      for (const f of GOOGLE_ADS_FORMATS) {
-        const base = baseFor[f.key];
+      for (const c of slots) {
+        const base = baseFor[c.key];
         if (!base) continue;
-        const dataUrl = abRenderBanner(base, f.width, f.height, theBrief, iconImg);
-        out.push({ key: f.key, width: f.width, height: f.height, label: f.label, isTop5: f.isTop5, dataUrl });
-        const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), (c) => c.charCodeAt(0));
-        if (f.isTop5) top5.file(`${f.key}.png`, bytes);
-        all.file(`${f.key}.png`, bytes);
+        // Google advises at least one clean asset per ratio, so the first slot of
+        // each ratio ships without the canvas overlay.
+        const dataUrl = c.noOverlay
+          ? abRenderPlain(base, c.width, c.height)
+          : abRenderBanner(base, c.width, c.height, theBrief, iconImg);
+        out.push({ key: c.key, width: c.width, height: c.height, label: c.label, isTop5: c.isCore, dataUrl });
+        const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), (ch) => ch.charCodeAt(0));
+        folders[c.ratioKey].file(`${c.key}${c.noOverlay ? "_clean" : ""}.png`, bytes);
       }
       setAbPreviews(out);
 
@@ -2182,20 +2167,20 @@ export default function Home() {
                 <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                   <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
                     <input type="checkbox" checked={abIndependent} onChange={e => setAbIndependent(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
-                    🎯 Gen độc lập từng kích thước ({GOOGLE_ADS_FORMATS.length} ảnh)
+                    🎯 Gen đủ bộ {APP_CREATIVES.length} creative
                   </label>
                   <p className="text-xs pl-6" style={{color: t.textMuted}}>
                     {abIndependent
-                      ? "Mỗi size được AI vẽ riêng đúng bố cục của nó — không co kéo. Cùng mascot + brief nên vẫn chung concept."
-                      : `Fast mode: gen 3 ảnh gốc rồi crop ra ${GOOGLE_ADS_FORMATS.length} size. Nhanh & rẻ, bố cục kém sát hơn.`}
+                      ? `Đủ ${RATIO_SPECS.map(r => `${r.count}×${r.ratio}`).join(" + ")} — mỗi ảnh một góc sáng tạo khác nhau, cùng mascot nên vẫn chung nhân vật.`
+                      : `Test rẻ: chỉ 3 ảnh, 1 cho mỗi tỉ lệ. Dùng để kiểm tra pipeline trước khi gen đủ bộ.`}
                   </p>
                   <label className="flex items-center gap-2 text-sm cursor-pointer pl-6" style={{color: t.text}}>
                     <input type="checkbox" checked={abPrecise} onChange={e => setAbPrecise(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
                     💎 Ưu tiên model Sunburst (nét hơn, chậm hơn)
                   </label>
                   <p className="text-xs pl-6" style={{color: t.textMuted}}>
-                    Ước tính ~{(((abIndependent ? GOOGLE_ADS_FORMATS.length : 3) + 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211)).toFixed(2)}$ /lần
-                    {" · "}{abIndependent ? `~${Math.ceil((GOOGLE_ADS_FORMATS.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((GOOGLE_ADS_FORMATS.length / AB_CONCURRENCY) * 70 / 60)} phút` : "~1-2 phút"}
+                    Ước tính ~{(((abIndependent ? APP_CREATIVES.length : 3) + 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211)).toFixed(2)}$ /lần
+                    {" · "}{abIndependent ? `~${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 70 / 60)} phút` : "~1 phút"}
                   </p>
                 </div>
 
@@ -2216,7 +2201,7 @@ export default function Home() {
 
                 <button onClick={handleAbGenerate} disabled={!abUrl.trim()}
                   className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 transition-all text-white">
-                  ✨ Tạo {GOOGLE_ADS_FORMATS.length} banner AI →
+                  ✨ Tạo {abIndependent ? APP_CREATIVES.length : 3} creative →
                 </button>
               </div>
             )}
@@ -2251,7 +2236,7 @@ export default function Home() {
 
                 {abBaseImages.length > 0 && (
                   <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
-                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh gốc AI ({abBaseImages.length} mẫu)</div>
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh sạch, không overlay ({abBaseImages.length}) — Google khuyên nên có 1 ảnh/tỉ lệ</div>
                     <div className="flex gap-3 overflow-x-auto pb-1">
                       {abBaseImages.map(img => (
                         <div key={img.key} className="flex-shrink-0 space-y-1.5">
@@ -2282,7 +2267,7 @@ export default function Home() {
                 )}
 
                 <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
-                  {([["top5",`⭐ Top ${abPreviews.filter(p=>p.isTop5).length}`],["all",`Tất cả (${abPreviews.length})`]] as const).map(([tab,label])=>(
+                  {([["top5",`⭐ Mỗi tỉ lệ 1 ảnh (${abPreviews.filter(p=>p.isTop5).length})`],["all",`Tất cả (${abPreviews.length})`]] as const).map(([tab,label])=>(
                     <button key={tab} onClick={() => setAbTab(tab)} className="px-4 py-1.5 rounded-lg text-sm font-medium"
                       style={abTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>{label}</button>
                   ))}
