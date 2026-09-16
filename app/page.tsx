@@ -102,6 +102,37 @@ function _drawMarketingText(ctx:CanvasRenderingContext2D,w:number,h:number,brief
     const lines=_wrapText(ctx,headline,maxW).slice(0,2);
     for(let i=lines.length-1;i>=0;i--){ctx.fillStyle=lines.length>1&&i===lines.length-1?_lighten(accent,0.15):"#ffffff";ctx.fillText(lines[i],pad,y);y-=fs*1.12;}}
 }
+/** POST JSON with a timeout, turning a gateway HTML page into a readable error. */
+async function agFetchJson(url:string,body:unknown,timeoutMs:number,label:string):Promise<any>{
+  const ac=new AbortController();
+  const timer=setTimeout(()=>ac.abort(),timeoutMs);
+  let res:Response;
+  try{
+    res=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:ac.signal});
+  }catch(e:any){
+    if(e?.name==="AbortError")throw new Error(`${label}: quá ${Math.round(timeoutMs/1000)}s không phản hồi (server timeout).`);
+    throw new Error(`${label}: không gọi được API (${e?.message||e}).`);
+  }finally{clearTimeout(timer);}
+  const text=await res.text();
+  try{return JSON.parse(text);}
+  catch{
+    // A 504/500 from the platform returns HTML, not JSON — show the status.
+    throw new Error(`${label}: server trả về HTTP ${res.status} không phải JSON. ${text.slice(0,120).replace(/\s+/g," ")}`);
+  }
+}
+
+/** Last-resort app name when the store lookup is unavailable. */
+function agAppNameFromUrl(url:string):string{
+  const ios=url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id\d+/i);
+  if(ios) return decodeURIComponent(ios[1]).replace(/-/g," ").trim();
+  const pkg=url.match(/[?&]id=([^&]+)/);
+  if(pkg){
+    const parts=decodeURIComponent(pkg[1]).split(".").filter(p=>!/^(com|net|org|io|app|co|vn|xyz)$/i.test(p));
+    if(parts.length) return parts.join(" ");
+  }
+  return "";
+}
+
 /** Run `tasks` with at most `limit` in flight, reporting each completion. */
 async function _pool<T>(tasks:(()=>Promise<T>)[],limit:number,onDone?:(n:number)=>void):Promise<PromiseSettledResult<T>[]>{
   const results=new Array<PromiseSettledResult<T>>(tasks.length);
@@ -509,35 +540,57 @@ export default function Home() {
   const handleAutoPrompt = async () => {
     if (!agUrl.trim()) return;
     setAgAutoPromptLoading(true);
+    setAgError("");
+    let storeWarn = "";
     try {
-      // Quick fetch app info
-      const ssRes = await fetch("/api/screenshots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appUrl: agUrl, country: agCountry }),
-      });
-      const text = await ssRes.text();
-      let ssData: { success: boolean; appName?: string; screenshots?: string[]; niche?: string; error?: string };
-      try { ssData = JSON.parse(text); } catch { throw new Error("Invalid response"); }
-      if (!ssData.success) throw new Error(ssData.error);
+      // 1) Try the store. Auto Prompt can still write a direction without it,
+      //    so a store failure downgrades to a warning instead of killing the run.
+      let appName = "";
+      let shots: string[] = [];
+      let genre = "";
+      try {
+        const ss = await agFetchJson(
+          "/api/screenshots",
+          { appUrl: agUrl.trim(), country: agCountry, limit: 2 },
+          45000,
+          "screenshots",
+        );
+        if (ss.success) {
+          appName = ss.appName || "";
+          shots = (ss.screenshots || []).slice(0, 2);
+          genre = ss.genre || "";
+          // Cache so Generate doesn't have to re-download these.
+          if (ss.screenshots?.length) setAgScreenshots(ss.screenshots);
+          if (ss.iconBase64) setAgIcon(ss.iconBase64);
+        } else {
+          storeWarn = ss.error || "Không lấy được dữ liệu store.";
+        }
+      } catch (e) {
+        storeWarn = e instanceof Error ? e.message : String(e);
+      }
 
-      const promptRes = await fetch("/api/auto-prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName: ssData.appName || "",
-          niche: ssData.niche,
-          screenshots: (ssData.screenshots || []).slice(0, 2),
-          country: agCountry,
-          language: agLang,
-        }),
-      });
-      const promptText = await promptRes.text();
-      let promptData: { success: boolean; prompt?: string; error?: string };
-      try { promptData = JSON.parse(promptText); } catch { throw new Error("Invalid prompt response"); }
-      if (promptData.success && promptData.prompt) setAgPrompt(promptData.prompt);
-    } catch { /* silent fail */ }
-    finally { setAgAutoPromptLoading(false); }
+      if (!appName) appName = agAppNameFromUrl(agUrl);
+      if (!appName) throw new Error("Không xác định được tên app từ URL. " + storeWarn);
+
+      // 2) Write the creative direction.
+      const pd = await agFetchJson(
+        "/api/auto-prompt",
+        { appName, niche: genre, screenshots: shots, country: agCountry, language: agLang },
+        45000,
+        "auto-prompt",
+      );
+      if (!pd.success) throw new Error(pd.error || "auto-prompt thất bại.");
+      if (!pd.prompt?.trim()) throw new Error("GPT trả về prompt rỗng — thử lại hoặc viết tay.");
+
+      setAgPrompt(pd.prompt.trim());
+      if (storeWarn) {
+        setAgError(`⚠️ Auto Prompt chạy KHÔNG có screenshot (kém sát hơn): ${storeWarn}`);
+      }
+    } catch (e) {
+      setAgError("❌ Auto Prompt lỗi: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setAgAutoPromptLoading(false);
+    }
   };
 
   const handleAgAnalyze = async () => {
@@ -684,7 +737,10 @@ export default function Home() {
       reader.readAsDataURL(blob);
       if (genErrors.length) setAgError("Cảnh báo: " + genErrors.join("; "));
       setAgStep("preview");
-    } catch (e) { setAgError(String(e)); setAgStep("input"); }
+    } catch (e) {
+      setAgError("❌ " + (e instanceof Error ? e.message : String(e)));
+      setAgStep("input");
+    }
   };
 
   const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
@@ -2282,7 +2338,11 @@ export default function Home() {
                   </div>
                 </div>
 
-                {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
+                {agError && (
+                  <p className="text-red-400 text-xs bg-red-400/10 border border-red-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">
+                    {agError}
+                  </p>
+                )}
 
                 {/* Quality toggle */}
                 {/* Mascot section */}

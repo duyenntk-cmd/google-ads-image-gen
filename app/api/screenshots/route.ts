@@ -105,7 +105,7 @@ async function fetchImagesToDataUrls(urls: string[], limit: number): Promise<str
 }
 
 // --- iOS App Store via iTunes Lookup API ---
-async function fetchIOS(appUrl: string, cc: string) {
+async function fetchIOS(appUrl: string, cc: string, shotLimit = 4) {
   const idMatch = appUrl.match(/id(\d+)/);
   if (!idMatch) throw new Error("Không tìm thấy App ID trong URL App Store.");
   const id = idMatch[1];
@@ -124,7 +124,7 @@ async function fetchIOS(appUrl: string, cc: string) {
 
   const [iconBase64, screenshots] = await Promise.all([
     iconUrl ? toDataUrl(iconUrl) : Promise.resolve(null),
-    fetchImagesToDataUrls(shots, 4),
+    fetchImagesToDataUrls(shots, shotLimit),
   ]);
 
   return {
@@ -141,16 +141,34 @@ async function fetchIOS(appUrl: string, cc: string) {
 }
 
 // --- Android Play Store via google-play-scraper ---
-async function fetchAndroid(appUrl: string, cc: string) {
+async function fetchAndroid(appUrl: string, cc: string, shotLimit = 4) {
   const idMatch = appUrl.match(/[?&]id=([^&]+)/);
   if (!idMatch) throw new Error("Không tìm thấy package id (?id=...) trong URL Play Store.");
   const appId = decodeURIComponent(idMatch[1]);
 
-  const app = await (gplay as any).app({ appId, country: cc, lang: "en" });
+  let app: any;
+  try {
+    app = await (gplay as any).app({ appId, country: cc, lang: "en" });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    // google-play-scraper reads the public HTML page, so Google's bot protection
+    // can reject the datacenter IP outright. Say so instead of leaking "403".
+    if (/403|forbidden/i.test(msg)) {
+      throw new Error(
+        `Google Play chặn request (403) cho "${appId}" ở store ${cc.toUpperCase()}. ` +
+          `Thường do IP server bị bot-protection chặn, hoặc app không phát hành ở thị trường này. ` +
+          `Thử đổi Thị trường, hoặc dùng link App Store (iOS) thay thế.`,
+      );
+    }
+    if (/404|not found/i.test(msg)) {
+      throw new Error(`Không tìm thấy app "${appId}" trên Play Store ${cc.toUpperCase()}. Kiểm tra lại package id / Thị trường.`);
+    }
+    throw new Error(`Play Store lỗi cho "${appId}" (${cc.toUpperCase()}): ${msg}`);
+  }
 
   const [iconBase64, screenshots] = await Promise.all([
     app.icon ? toDataUrl(app.icon) : Promise.resolve(null),
-    fetchImagesToDataUrls(app.screenshots || [], 4),
+    fetchImagesToDataUrls(app.screenshots || [], shotLimit),
   ]);
 
   return {
@@ -168,18 +186,22 @@ async function fetchAndroid(appUrl: string, cc: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { appUrl, country } = await req.json();
+    const { appUrl, country, limit } = await req.json();
     if (!appUrl || typeof appUrl !== "string") {
       return NextResponse.json({ success: false, error: "Thiếu appUrl." }, { status: 400 });
     }
+
+    // Auto Prompt only needs a couple of images; downloading all 4 just to write
+    // two sentences is what made that button slow enough to time out.
+    const shotLimit = Number.isFinite(Number(limit)) ? Math.max(0, Math.min(4, Number(limit))) : 4;
 
     const cc = toCountryCode(country);
     const isIOS = /apps\.apple\.com|itunes\.apple\.com/i.test(appUrl);
     const isAndroid = /play\.google\.com/i.test(appUrl);
 
     let result;
-    if (isIOS) result = await fetchIOS(appUrl, cc);
-    else if (isAndroid) result = await fetchAndroid(appUrl, cc);
+    if (isIOS) result = await fetchIOS(appUrl, cc, shotLimit);
+    else if (isAndroid) result = await fetchAndroid(appUrl, cc, shotLimit);
     else
       return NextResponse.json(
         { success: false, error: "URL phải là App Store (apps.apple.com) hoặc Play Store (play.google.com)." },
