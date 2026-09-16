@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 30;
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { appName, message, country, language } = await req.json();
     if (!appName) return NextResponse.json({ success: false, error: "Missing appName" }, { status: 400 });

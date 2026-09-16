@@ -4,16 +4,299 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
+import { GOOGLE_ADS_FORMATS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 
 interface Brief {
-  app_name: string; headline: string; subheadline: string; cta_text: string;
+  app_name: string; tagline?: string; headline: string; subheadline: string; cta_text: string;
   primary_color: string; secondary_color: string; accent_color: string;
   background_style: string; mood: string; best_frame_index: number;
   niche: string; app_store_url: string; play_store_url: string;
 }
 interface Preview { key: string; width: number; height: number; label: string; isTop5: boolean; dataUrl: string; }
 type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
+
+/* ───────────────────────── AI Banner ─────────────────────────
+ * The model renders a text-free background; everything legible — logo, headline,
+ * CTA, Play badge — is drawn here on canvas. That keeps type crisp and identical
+ * across all 20 sizes, which an image model cannot guarantee.
+ */
+
+/** Parallel image requests in flight, to stay under OpenAI's images rate limit. */
+const AB_CONCURRENCY = 4;
+/** Rough OpenAI list price per image, for the cost hint in the UI. */
+const AB_COST_PER_IMAGE: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
+
+/** POST JSON with a timeout, turning a gateway HTML page into a readable error. */
+async function abFetchJson(url: string, body: unknown, timeoutMs: number, label: string): Promise<Record<string, any>> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ac.signal });
+  } catch (e) {
+    if ((e as Error)?.name === "AbortError") throw new Error(`${label}: quá ${Math.round(timeoutMs / 1000)}s không phản hồi (server timeout).`);
+    throw new Error(`${label}: không gọi được API (${(e as Error)?.message || e}).`);
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label}: server trả về HTTP ${res.status} không phải JSON. ${text.slice(0, 120).replace(/\s+/g, " ")}`);
+  }
+}
+
+/** Last-resort app name when the store lookup is unavailable. */
+function abAppNameFromUrl(url: string): string {
+  const ios = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id\d+/i);
+  if (ios) return decodeURIComponent(ios[1]).replace(/-/g, " ").trim();
+  const pkg = url.match(/[?&]id=([^&]+)/);
+  if (pkg) {
+    const parts = decodeURIComponent(pkg[1]).split(".").filter((p) => !/^(com|net|org|io|app|co|vn|xyz)$/i.test(p));
+    if (parts.length) return parts.join(" ");
+  }
+  return "";
+}
+
+/** Run `tasks` with at most `limit` in flight, reporting each completion. */
+async function abPool<T>(tasks: (() => Promise<T>)[], limit: number, onDone?: (n: number) => void): Promise<PromiseSettledResult<T>[]> {
+  const results = new Array<PromiseSettledResult<T>>(tasks.length);
+  let next = 0, done = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= tasks.length) return;
+      try { results[i] = { status: "fulfilled", value: await tasks[i]() }; }
+      catch (reason) { results[i] = { status: "rejected", reason }; }
+      onDone?.(++done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+}
+
+function abClamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
+function abHexToRgb(hex: string): [number, number, number] {
+  let h = (hex || "").replace("#", "").trim();
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (h.length !== 6) return [26, 26, 46];
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function abHexA(hex: string, a: number) { const [r, g, b] = abHexToRgb(hex); return `rgba(${r},${g},${b},${a})`; }
+function abContrast(hex: string) { const [r, g, b] = abHexToRgb(hex); return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? "#141414" : "#ffffff"; }
+function abLighten(hex: string, amt: number) { const [r, g, b] = abHexToRgb(hex); const f = (c: number) => Math.round(c + (255 - c) * amt); return `rgb(${f(r)},${f(g)},${f(b)})`; }
+function abRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+function abWrap(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = (text || "").split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const t = cur ? cur + " " + w : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+function abEllipsize(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return t + "…";
+}
+function abLoadImg(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Không load được ảnh."));
+    img.src = src;
+  });
+}
+
+/** Frosted chip + rounded icon + app name, so the logo reads on any background. */
+function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: HTMLImageElement | null, name: string, tagline: string, scale: number) {
+  const iconS = Math.round(44 * scale), gap = Math.round(10 * scale);
+  const nameFs = Math.round(24 * scale), tagFs = Math.round(12 * scale);
+  ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`;
+  const nameW = ctx.measureText(name).width;
+  ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`;
+  const textW = Math.max(nameW, tagline ? ctx.measureText(tagline).width : 0);
+  const padX = Math.round(12 * scale), padY = Math.round(10 * scale);
+  const chipW = padX * 2 + (icon ? iconS + gap : 0) + textW;
+  const chipH = padY * 2 + Math.max(iconS, nameFs + (tagline ? tagFs + 4 * scale : 0));
+
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 18 * scale; ctx.shadowOffsetY = 4 * scale;
+  ctx.fillStyle = "rgba(12,12,22,0.42)";
+  abRoundRect(ctx, x, y, chipW, chipH, chipH * 0.28);
+  ctx.fill();
+  ctx.restore();
+
+  let cx = x + padX;
+  const midY = y + chipH / 2;
+  if (icon) {
+    const iy = midY - iconS / 2;
+    ctx.save(); abRoundRect(ctx, cx, iy, iconS, iconS, iconS * 0.24); ctx.clip();
+    ctx.drawImage(icon, cx, iy, iconS, iconS); ctx.restore();
+    cx += iconS + gap;
+  }
+  if (tagline) {
+    ctx.textBaseline = "alphabetic";
+    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
+    ctx.fillText(name, cx, midY + nameFs * 0.05);
+    ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "rgba(255,255,255,0.82)";
+    ctx.fillText(abEllipsize(ctx, tagline, chipW - (cx - x) - padX), cx, midY + nameFs * 0.05 + tagFs + 4 * scale);
+  } else {
+    ctx.textBaseline = "middle";
+    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
+    ctx.fillText(name, cx, midY);
+  }
+}
+
+/** Accent pill: left circle with a download arrow, label, right chevron. */
+function abDrawCTA(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, label: string, accent: string, scale: number) {
+  const fs = abClamp(Math.round(22 * scale), 12, 46);
+  ctx.font = `bold ${fs}px system-ui,Arial,sans-serif`;
+  const labelW = ctx.measureText(label).width;
+  const circle = fs * 1.5, chev = fs * 0.9, gap = fs * 0.6;
+  const bh = Math.round(fs * 2.2);
+  const bw = Math.min(circle + gap + labelW + gap + chev + fs * 1.2, maxW);
+
+  ctx.save();
+  ctx.shadowColor = abHexA(accent, 0.5); ctx.shadowBlur = 22 * scale; ctx.shadowOffsetY = 6 * scale;
+  const grad = ctx.createLinearGradient(x, y, x + bw, y);
+  grad.addColorStop(0, accent); grad.addColorStop(1, abLighten(accent, 0.18));
+  ctx.fillStyle = grad;
+  abRoundRect(ctx, x, y, bw, bh, bh / 2);
+  ctx.fill();
+  ctx.restore();
+
+  const cc = abContrast(accent), ccx = x + bh / 2, ccy = y + bh / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.beginPath(); ctx.arc(ccx, ccy, circle / 2, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = cc; ctx.lineWidth = Math.max(2, fs * 0.11); ctx.lineCap = "round";
+  const a = circle * 0.24;
+  ctx.beginPath();
+  ctx.moveTo(ccx, ccy - a); ctx.lineTo(ccx, ccy + a * 0.7);
+  ctx.moveTo(ccx - a * 0.6, ccy + a * 0.1); ctx.lineTo(ccx, ccy + a * 0.7); ctx.lineTo(ccx + a * 0.6, ccy + a * 0.1);
+  ctx.moveTo(ccx - a * 0.9, ccy + a * 0.9); ctx.lineTo(ccx + a * 0.9, ccy + a * 0.9);
+  ctx.stroke();
+
+  ctx.fillStyle = cc; ctx.textBaseline = "middle";
+  ctx.font = `bold ${fs}px system-ui,Arial,sans-serif`;
+  ctx.fillText(abEllipsize(ctx, label, bw - bh - chev - fs * 1.6), x + bh + gap, ccy + 1);
+
+  const chx = x + bw - fs * 1.1;
+  ctx.beginPath();
+  ctx.moveTo(chx - chev * 0.3, ccy - chev * 0.5); ctx.lineTo(chx + chev * 0.3, ccy); ctx.lineTo(chx - chev * 0.3, ccy + chev * 0.5);
+  ctx.stroke();
+}
+
+function abDrawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
+  const bh = Math.round(46 * scale), bw = Math.round(150 * scale);
+  ctx.save();
+  ctx.fillStyle = "#000000"; abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale)); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = Math.max(1, scale);
+  abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale)); ctx.stroke();
+  const tx = x + bh * 0.28, ty = y + bh / 2, s = bh * 0.28;
+  ctx.fillStyle = "#12B5FF";
+  ctx.beginPath(); ctx.moveTo(tx - s * 0.7, ty - s); ctx.lineTo(tx - s * 0.7, ty + s); ctx.lineTo(tx + s * 0.9, ty); ctx.closePath(); ctx.fill();
+  const textX = x + bh * 0.95;
+  ctx.fillStyle = "#ffffff"; ctx.textBaseline = "alphabetic";
+  ctx.font = `500 ${Math.round(9 * scale)}px system-ui,Arial,sans-serif`; ctx.fillText("GET IT ON", textX, y + bh * 0.42);
+  ctx.font = `700 ${Math.round(17 * scale)}px system-ui,Arial,sans-serif`; ctx.fillText("Google Play", textX, y + bh * 0.82);
+  ctx.restore();
+}
+
+/** Scrim + headline + subheadline, drawn bottom-up above the CTA zone. */
+function abDrawText(ctx: CanvasRenderingContext2D, w: number, h: number, brief: Brief, scale: number) {
+  const secondary = brief.secondary_color || "#1A1A2E";
+  const accent = brief.accent_color || "#FF6B35";
+  const headline = brief.headline || brief.app_name || "";
+  const sub = brief.subheadline || "";
+  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.06));
+  ctx.textAlign = "left";
+
+  // Strips are too short for a scrim and a stack of lines; one line fills them.
+  if (h <= 120) {
+    const g = ctx.createLinearGradient(0, 0, w, 0);
+    g.addColorStop(0, abHexA(secondary, 0.94)); g.addColorStop(1, abHexA(secondary, 0.5));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const fs = Math.round(h * 0.34);
+    ctx.textBaseline = "middle";
+    ctx.font = `800 ${fs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
+    ctx.fillText(abEllipsize(ctx, headline, w - pad * 2), pad, h / 2);
+    return;
+  }
+
+  const scrimH = Math.round(h * (h / w >= 1.4 ? 0.52 : 0.6));
+  const g = ctx.createLinearGradient(0, h - scrimH, 0, h);
+  g.addColorStop(0, abHexA(secondary, 0)); g.addColorStop(0.45, abHexA(secondary, 0.6)); g.addColorStop(1, abHexA(secondary, 0.96));
+  ctx.fillStyle = g; ctx.fillRect(0, h - scrimH, w, scrimH);
+
+  const maxW = w - pad * 2;
+  let y = h - pad - (Math.round(64 * scale) + Math.round(52 * scale) + pad); // leave room for CTA + badge
+
+  if (sub && h >= 250) {
+    const fs = abClamp(Math.round(w * 0.04), 12, 32);
+    ctx.font = `500 ${fs}px system-ui,Arial,sans-serif`; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    const lines = abWrap(ctx, sub, maxW).slice(0, 2);
+    for (let i = lines.length - 1; i >= 0; i--) { ctx.fillText(lines[i], pad, y); y -= fs * 1.3; }
+    y -= fs * 0.3;
+  }
+  if (headline) {
+    const fs = abClamp(Math.round(w * 0.082), 16, 80);
+    ctx.font = `900 ${fs}px system-ui,Arial,sans-serif`; ctx.textBaseline = "alphabetic";
+    const lines = abWrap(ctx, headline, maxW).slice(0, 2);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      ctx.fillStyle = lines.length > 1 && i === lines.length - 1 ? abLighten(accent, 0.15) : "#ffffff";
+      ctx.fillText(lines[i], pad, y);
+      y -= fs * 1.12;
+    }
+  }
+}
+
+function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Brief, icon: HTMLImageElement | null): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+
+  // Cover-crop only. The source was generated at (or near) this ratio, so this
+  // trims the safe margin the prompt reserved — no stretching, no blur bars.
+  const cs = Math.max(w / base.width, h / base.height);
+  const dw = base.width * cs, dh = base.height * cs;
+  ctx.drawImage(base, (w - dw) / 2, (h - dh) / 2, dw, dh);
+
+  const scale = abClamp(Math.min(w, h) / 500, 0.34, 2.2);
+  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.06));
+  abDrawText(ctx, w, h, brief, scale);
+
+  if (h <= 120) {
+    if (brief.cta_text) {
+      const est = 160 * scale;
+      abDrawCTA(ctx, w - pad - est, (h - 46 * scale) / 2, est, brief.cta_text, brief.accent_color || "#FF6B35", scale * 0.7);
+    }
+    return canvas.toDataURL("image/png");
+  }
+
+  abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale);
+  abDrawCTA(ctx, pad, h - pad - Math.round(46 * scale) - Math.round(52 * scale) - pad * 0.4, w - pad * 2, brief.cta_text || "Download", brief.accent_color || "#FF6B35", scale);
+  if (h >= 320 && w >= 300) abDrawPlayBadge(ctx, pad, h - pad - Math.round(46 * scale), scale);
+
+  return canvas.toDataURL("image/png");
+}
 
 const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
   photo:  { primary_color: "#7B2FBE", secondary_color: "#E91E8C", accent_color: "#FF6B35", headline: "Edit Photos Like a Pro",      subheadline: "100+ Filters & AI Tools",   cta_text: "Edit for Free"    },
@@ -165,7 +448,209 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"autogen"|"localize">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"autogen"|"aibanner"|"localize">("home");
+
+  // ── AI Banner ──
+  type AbStep = "input" | "generating" | "preview";
+  const [abStep, setAbStep] = useState<AbStep>("input");
+  const [abUrl, setAbUrl] = useState("");
+  const [abPrompt, setAbPrompt] = useState("");
+  const [abCountry, setAbCountry] = useState("Global");
+  const [abLang, setAbLang] = useState("Vietnamese");
+  const [abQuality, setAbQuality] = useState<"low"|"medium"|"high">("medium");
+  const [abError, setAbError] = useState("");
+  const [abStatus, setAbStatus] = useState("");
+  const [abBrief, setAbBrief] = useState<Brief|null>(null);
+  const [abIcon, setAbIcon] = useState<string|null>(null);
+  const [abBaseImages, setAbBaseImages] = useState<{key:string;label:string;dataUrl:string}[]>([]);
+  const [abPreviews, setAbPreviews] = useState<Preview[]>([]);
+  const [abZipBase64, setAbZipBase64] = useState("");
+  const [abTab, setAbTab] = useState<"top5"|"all">("all");
+  const [abPromptLoading, setAbPromptLoading] = useState(false);
+  const [abCharacter, setAbCharacter] = useState<string|null>(null);
+  const [abMascotUsed, setAbMascotUsed] = useState<string|null>(null);
+  const [abUseScreenshot, setAbUseScreenshot] = useState(true);
+  const [abAutoMascot, setAbAutoMascot] = useState(true);
+  const [abIndependent, setAbIndependent] = useState(true);
+  const [abPrecise, setAbPrecise] = useState(false);
+  const abCharRef = useRef<HTMLInputElement>(null);
+
+  const abReset = () => {
+    setAbStep("input"); setAbPreviews([]); setAbBrief(null);
+    setAbBaseImages([]); setAbError(""); setAbStatus("");
+  };
+
+  const handleAbAutoPrompt = async () => {
+    if (!abUrl.trim()) return;
+    setAbPromptLoading(true);
+    setAbError("");
+    let storeWarn = "";
+    try {
+      // The store lookup is best-effort: Auto Prompt can still write a direction
+      // from the app name alone, so a store failure is a warning, not a stop.
+      let appName = "", shots: string[] = [], genre = "";
+      try {
+        const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abCountry, limit: 2 }, 45000, "screenshots");
+        if (ss.success) {
+          appName = ss.appName || "";
+          shots = (ss.screenshots || []).slice(0, 2);
+          genre = ss.genre || "";
+          if (ss.iconBase64) setAbIcon(ss.iconBase64);
+        } else storeWarn = ss.error || "Không lấy được dữ liệu store.";
+      } catch (e) { storeWarn = e instanceof Error ? e.message : String(e); }
+
+      if (!appName) appName = abAppNameFromUrl(abUrl);
+      if (!appName) throw new Error("Không xác định được tên app từ URL. " + storeWarn);
+
+      const pd = await abFetchJson("/api/auto-prompt", { appName, niche: genre, screenshots: shots, country: abCountry, language: abLang }, 45000, "auto-prompt");
+      if (!pd.success) throw new Error(pd.error || "auto-prompt thất bại.");
+      if (!pd.prompt?.trim()) throw new Error("GPT trả về prompt rỗng — thử lại hoặc viết tay.");
+
+      setAbPrompt(pd.prompt.trim());
+      if (storeWarn) setAbError(`⚠️ Auto Prompt chạy KHÔNG có screenshot (kém sát hơn): ${storeWarn}`);
+    } catch (e) {
+      setAbError("❌ Auto Prompt lỗi: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setAbPromptLoading(false);
+    }
+  };
+
+  const handleAbGenerate = async () => {
+    if (!abUrl.trim()) return;
+    setAbStep("generating"); setAbError(""); setAbMascotUsed(null);
+    setAbStatus("📱 Đang lấy thông tin app...");
+    try {
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abCountry }, 60000, "screenshots");
+      if (!ss.success) throw new Error(ss.error);
+      const shots: string[] = ss.screenshots || [];
+      const appName: string = ss.appName || "";
+      const iconB64: string | null = ss.iconBase64 || null;
+      setAbIcon(iconB64);
+
+      setAbStatus("🤖 GPT-4o đang phân tích app và tạo design brief...");
+      const bc = await abFetchJson("/api/banner-concept", { appName, prompt: abPrompt, country: abCountry, language: abLang, screenshots: shots.slice(0, 3), appUrl: abUrl }, 60000, "banner-concept");
+      if (!bc.success) throw new Error(bc.error);
+      const theBrief: Brief = bc.brief;
+      setAbBrief(theBrief);
+
+      // One mascot, reused as the reference for every size — this is what keeps
+      // the character identical across the whole set.
+      let mascot: string | null = abCharacter;
+      if (!mascot && abAutoMascot) {
+        setAbStatus("🎭 Đang tìm mascot trong screenshots (hoặc tạo mới)...");
+        try {
+          const md = await abFetchJson("/api/mascot", { appName, niche: theBrief.niche, screenshots: shots, brief: theBrief, quality: abQuality }, 120000, "mascot");
+          if (md.success) mascot = md.source === "screenshot" ? shots[md.index] || null : md.dataUrl || null;
+        } catch { /* non-fatal: carry on without a character reference */ }
+      }
+      setAbMascotUsed(mascot);
+      const referenceImages = abUseScreenshot ? shots.slice(0, 1) : [];
+
+      const errors: string[] = [];
+      const bases: {key:string;label:string;dataUrl:string}[] = [];
+      const baseFor: Record<string, HTMLImageElement> = {};
+
+      if (abIndependent) {
+        const total = GOOGLE_ADS_FORMATS.length;
+        setAbStatus(`🎨 Đang gen ${total} ảnh độc lập (0/${total})...`);
+        const results = await abPool(
+          GOOGLE_ADS_FORMATS.map((f) => () =>
+            abFetchJson("/api/banner-generate", {
+              brief: theBrief, userPrompt: abPrompt, quality: abQuality,
+              width: f.width, height: f.height, key: f.key,
+              referenceImages, characterImage: mascot, precise: abPrecise,
+            }, 300000, `banner-generate:${f.key}`)),
+          AB_CONCURRENCY,
+          (n) => setAbStatus(`🎨 Đang gen ${total} ảnh độc lập (${n}/${total})...`),
+        );
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i], f = GOOGLE_ADS_FORMATS[i];
+          if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+            baseFor[f.key] = await abLoadImg(r.value.images[0].dataUrl);
+            if (["1200x628","1200x1200","1080x1920"].includes(f.key)) bases.push({ key: f.key, label: f.label, dataUrl: r.value.images[0].dataUrl });
+          } else {
+            errors.push(`${f.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
+          }
+        }
+      } else {
+        // Fast mode: 3 renders shared across all sizes. Cheaper, less tailored.
+        setAbStatus("🎨 Fast mode: gen 3 ảnh gốc...");
+        const seeds = [
+          { key: "landscape", w: 1200, h: 628 },
+          { key: "square", w: 1200, h: 1200 },
+          { key: "portrait", w: 1080, h: 1920 },
+        ];
+        const results = await abPool(
+          seeds.map((s) => () =>
+            abFetchJson("/api/banner-generate", {
+              brief: theBrief, userPrompt: abPrompt, quality: abQuality,
+              width: s.w, height: s.h, key: s.key,
+              referenceImages, characterImage: mascot, precise: abPrecise,
+            }, 300000, `banner-generate:${s.key}`)),
+          3,
+        );
+        const byShape: Record<string, HTMLImageElement> = {};
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i], s = seeds[i];
+          if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+            byShape[s.key] = await abLoadImg(r.value.images[0].dataUrl);
+            bases.push({ key: s.key, label: s.key, dataUrl: r.value.images[0].dataUrl });
+          } else {
+            errors.push(`${s.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
+          }
+        }
+        for (const f of GOOGLE_ADS_FORMATS) {
+          const ratio = f.width / f.height;
+          const pick = ratio >= 1.5 ? "landscape" : ratio <= 0.75 ? "portrait" : "square";
+          const img = byShape[pick] || byShape.square || byShape.landscape || byShape.portrait;
+          if (img) baseFor[f.key] = img;
+        }
+      }
+
+      if (!Object.keys(baseFor).length) throw new Error("Không gen được ảnh nào.\n" + errors.join("\n"));
+      setAbBaseImages(bases);
+
+      setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${GOOGLE_ADS_FORMATS.length} kích thước...`);
+      const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
+      const { default: JSZipMod } = await import("jszip");
+      const zip = new JSZipMod();
+      const top5 = zip.folder("top5")!;
+      const all = zip.folder("all_sizes")!;
+      const out: Preview[] = [];
+
+      for (const f of GOOGLE_ADS_FORMATS) {
+        const base = baseFor[f.key];
+        if (!base) continue;
+        const dataUrl = abRenderBanner(base, f.width, f.height, theBrief, iconImg);
+        out.push({ key: f.key, width: f.width, height: f.height, label: f.label, isTop5: f.isTop5, dataUrl });
+        const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), (c) => c.charCodeAt(0));
+        if (f.isTop5) top5.file(`${f.key}.png`, bytes);
+        all.file(`${f.key}.png`, bytes);
+      }
+      setAbPreviews(out);
+
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const reader = new FileReader();
+      reader.onload = () => setAbZipBase64((reader.result as string).split(",")[1]);
+      reader.readAsDataURL(blob);
+
+      if (errors.length) setAbError("⚠️ Một số size lỗi:\n" + errors.join("\n"));
+      setAbStatus(`Xong: ${out.length} banner.`);
+      setAbStep("preview");
+    } catch (e) {
+      setAbError("❌ " + (e instanceof Error ? e.message : String(e)));
+      setAbStep("input");
+    }
+  };
+
+  const abDownloadZip = () => {
+    if (!abZipBase64) return;
+    const a = document.createElement("a");
+    a.href = `data:application/zip;base64,${abZipBase64}`;
+    a.download = `google-ads-${abBrief?.app_name || "banners"}.zip`;
+    a.click();
+  };
+  const abShown = abTab === "top5" ? abPreviews.filter((p) => p.isTop5) : abPreviews;
 
   // YouTube upload state
   const [ytAuthenticated, setYtAuthenticated] = useState(false);
@@ -859,6 +1344,7 @@ export default function Home() {
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
             ["autogen",  "⚡", "Auto Gen"],
+            ["aibanner", "✨", "AI Banner"],
             ["adcopy",   "✍️", "Ad Copy"],
             ["keywords", "🔑", "Keywords"],
             ["localize", "🌏", "Localize"],
@@ -937,7 +1423,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "⚡ Auto Gen từ URL" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "⚡ Auto Gen từ URL" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -1604,6 +2090,230 @@ export default function Home() {
         )}
 
         {/* AUTO GEN PAGE */}
+        {activePage === "aibanner" && (
+          <div className="space-y-6 max-w-2xl">
+            <div className="flex items-center gap-2 text-xs" style={{color: t.textMuted}}>
+              {([["input","1","Nhập thông tin"],["generating","2","AI tạo ảnh"],["preview","3","Kết quả"]] as [AbStep,string,string][]).map(([s,n,label],i) => {
+                const order: AbStep[] = ["input","generating","preview"];
+                const done = order.indexOf(abStep) > order.indexOf(s), active = abStep === s;
+                return (
+                  <div key={s} className="flex items-center gap-2">
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${active?"bg-violet-600 text-white":done?"bg-violet-600/40 text-violet-400":""}`}
+                      style={!active&&!done?{backgroundColor:t.tabBg,color:t.textMuted}:{}}>{n}</span>
+                    <span style={active?{color:"#A78BFA"}:{}}>{label}</span>
+                    {i<2&&<span>→</span>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {abStep === "input" && (
+              <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
+                    🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
+                  </label>
+                  <input value={abUrl} onChange={e => setAbUrl(e.target.value)}
+                    placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>💡 Creative direction</label>
+                    <button onClick={handleAbAutoPrompt} disabled={!abUrl.trim() || abPromptLoading}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold disabled:opacity-40"
+                      style={{background: abPromptLoading ? "transparent" : "linear-gradient(135deg,#7C3AED,#EC4899)", color:"#fff", border: abPromptLoading ? "1px solid #7C3AED44" : "none"}}>
+                      {abPromptLoading ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>Đang tạo...</> : <>✨ Auto Prompt</>}
+                    </button>
+                  </div>
+                  <textarea value={abPrompt} onChange={e => setAbPrompt(e.target.value)} rows={5}
+                    placeholder="VD: Phong cách cinematic bold, gradient tím đậm, mascot vui vẻ cầm điện thoại, truyền cảm hứng cho người dùng 18-35 tuổi..."
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-y"
+                    style={{...inputStyle, minHeight: 100, lineHeight: "1.6"}}/>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
+                    <select value={abCountry} onChange={e => { setAbCountry(e.target.value); const dl = COUNTRY_DEFAULT_LANG[e.target.value]; if (dl) setAbLang(dl); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                      {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
+                    <select value={abLang} onChange={e => setAbLang(e.target.value)}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                      {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Mascot — the consistency anchor across all sizes */}
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
+                    <input type="checkbox" checked={abAutoMascot} onChange={e => setAbAutoMascot(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    🤖 Tự động tìm / tạo mascot
+                  </label>
+                  <p className="text-xs pl-6" style={{color: t.textMuted}}>Tìm nhân vật trong screenshots của app; không có thì tự tạo, rồi tái dùng cho mọi size.</p>
+                  <div className="flex items-center gap-3 pl-6">
+                    {(abCharacter || abMascotUsed)
+                      ? <img src={(abCharacter || abMascotUsed) as string} alt="mascot" className="h-14 w-14 rounded-lg object-cover flex-shrink-0"/>
+                      : <div className="h-14 w-14 flex items-center justify-center rounded-lg border border-dashed text-2xl flex-shrink-0" style={{borderColor: t.border}}>🤖</div>}
+                    <div className="flex-1 space-y-1">
+                      <p className="text-xs" style={{color: t.textMuted}}>
+                        {abCharacter ? "Đang dùng mascot bạn upload." : abMascotUsed ? "Mascot dùng lần gen gần nhất." : "Tùy chọn: upload ảnh để ghi đè auto."}
+                      </p>
+                      <div className="flex gap-2">
+                        <button onClick={() => abCharRef.current?.click()} className="text-xs px-3 py-1 rounded-md" style={{backgroundColor: t.border, color: t.text}}>Chọn ảnh</button>
+                        {abCharacter && <button onClick={() => setAbCharacter(null)} className="text-xs px-3 py-1 rounded-md" style={{backgroundColor: t.border, color: t.text}}>Bỏ override</button>}
+                      </div>
+                      <input ref={abCharRef} type="file" accept="image/*" hidden onChange={e => { const f=e.target.files?.[0]; if(f){const r=new FileReader(); r.onload=()=>setAbCharacter(r.result as string); r.readAsDataURL(f);} }}/>
+                    </div>
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm cursor-pointer" style={{color: t.text}}>
+                  <input type="checkbox" checked={abUseScreenshot} onChange={e => setAbUseScreenshot(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                  📱 Dùng screenshot thật của app làm reference
+                </label>
+
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
+                    <input type="checkbox" checked={abIndependent} onChange={e => setAbIndependent(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    🎯 Gen độc lập từng kích thước ({GOOGLE_ADS_FORMATS.length} ảnh)
+                  </label>
+                  <p className="text-xs pl-6" style={{color: t.textMuted}}>
+                    {abIndependent
+                      ? "Mỗi size được AI vẽ riêng đúng bố cục của nó — không co kéo. Cùng mascot + brief nên vẫn chung concept."
+                      : `Fast mode: gen 3 ảnh gốc rồi crop ra ${GOOGLE_ADS_FORMATS.length} size. Nhanh & rẻ, bố cục kém sát hơn.`}
+                  </p>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer pl-6" style={{color: t.text}}>
+                    <input type="checkbox" checked={abPrecise} onChange={e => setAbPrecise(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    💎 Ưu tiên model Sunburst (nét hơn, chậm hơn)
+                  </label>
+                  <p className="text-xs pl-6" style={{color: t.textMuted}}>
+                    Ước tính ~{(((abIndependent ? GOOGLE_ADS_FORMATS.length : 3) + 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211)).toFixed(2)}$ /lần
+                    {" · "}{abIndependent ? `~${Math.ceil((GOOGLE_ADS_FORMATS.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((GOOGLE_ADS_FORMATS.length / AB_CONCURRENCY) * 70 / 60)} phút` : "~1-2 phút"}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <div>
+                    <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng ảnh AI</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>High đẹp nhất nhưng đắt gấp ~4× Medium</div>
+                  </div>
+                  <div className="flex gap-1 rounded-lg p-0.5 ml-3 flex-shrink-0" style={{backgroundColor: t.border}}>
+                    {(["low","medium","high"] as const).map(q => (
+                      <button key={q} onClick={() => setAbQuality(q)} className="px-3 py-1 rounded-md text-xs font-semibold capitalize"
+                        style={abQuality===q?{backgroundColor:"#7C3AED",color:"#fff"}:{color:t.textMuted}}>{q}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {abError && <p className="text-red-400 text-xs bg-red-400/10 border border-red-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{abError}</p>}
+
+                <button onClick={handleAbGenerate} disabled={!abUrl.trim()}
+                  className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 transition-all text-white">
+                  ✨ Tạo {GOOGLE_ADS_FORMATS.length} banner AI →
+                </button>
+              </div>
+            )}
+
+            {abStep === "generating" && (
+              <div className="text-center py-20 space-y-6">
+                <div className="text-5xl animate-pulse">✨</div>
+                <div className="text-lg font-bold" style={{color: t.text}}>Đang tạo banner AI...</div>
+                <div className="text-sm font-medium" style={{color:"#A78BFA"}}>{abStatus}</div>
+                <div className="w-56 h-1.5 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
+                  <div className="h-full bg-gradient-to-r from-violet-500 to-purple-400 animate-pulse" style={{width:"70%"}}/>
+                </div>
+              </div>
+            )}
+
+            {abStep === "preview" && (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <div className="text-lg font-bold" style={{color: t.text}}>✅ {abPreviews.length} banner sẵn sàng</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>
+                      {abBrief?.app_name} · {abCountry}{abBrief?.headline && <span> · &ldquo;{abBrief.headline}&rdquo;</span>}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={abReset} className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>🔄 Gen lại</button>
+                    <button onClick={abDownloadZip} className="bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl">⬇ Tải tất cả (.zip)</button>
+                  </div>
+                </div>
+
+                {abError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{abError}</p>}
+
+                {abBaseImages.length > 0 && (
+                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh gốc AI ({abBaseImages.length} mẫu)</div>
+                    <div className="flex gap-3 overflow-x-auto pb-1">
+                      {abBaseImages.map(img => (
+                        <div key={img.key} className="flex-shrink-0 space-y-1.5">
+                          {/* Not a Preview, so it cannot open the shared lightbox — open the raw PNG instead. */}
+                          <a href={img.dataUrl} target="_blank" rel="noreferrer" title="Mở ảnh gốc">
+                            <img src={img.dataUrl} alt={img.label} className="rounded-xl object-cover shadow-lg cursor-zoom-in" style={{height:140, width:"auto", maxWidth:200}}/>
+                          </a>
+                          <div className="text-[10px] text-center" style={{color: t.textMuted}}>{img.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {abBrief && (
+                  <div className="p-3 rounded-xl border text-xs flex flex-wrap gap-3 items-center" style={{...cardStyle, borderColor:"#7C3AED44"}}>
+                    {abIcon && <img src={abIcon} alt="" className="w-8 h-8 rounded-lg flex-shrink-0"/>}
+                    <div className="flex flex-wrap gap-2 flex-1 min-w-0">
+                      <span className="px-2 py-0.5 rounded-full font-medium" style={{backgroundColor:"#7C3AED22",color:"#A78BFA"}}>H: {abBrief.headline}</span>
+                      <span className="px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>CTA: {abBrief.cta_text}</span>
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>
+                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:abBrief.primary_color}}/>
+                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:abBrief.accent_color}}/>
+                        {abBrief.mood}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
+                  {([["top5",`⭐ Top ${abPreviews.filter(p=>p.isTop5).length}`],["all",`Tất cả (${abPreviews.length})`]] as const).map(([tab,label])=>(
+                    <button key={tab} onClick={() => setAbTab(tab)} className="px-4 py-1.5 rounded-lg text-sm font-medium"
+                      style={abTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>{label}</button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {abShown.map(p => {
+                    const scale = Math.min(1, 340/Math.max(p.width, p.height));
+                    return (
+                      <div key={p.key} onClick={() => setSelectedPreview(p)} className="group rounded-2xl p-4 cursor-pointer border" style={cardStyle}>
+                        <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
+                          <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
+                            <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
+                          </div>
+                          <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
+                            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white"
+                            style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {activePage === "autogen" && (
           <div className="space-y-6 max-w-2xl">
 
