@@ -39,22 +39,12 @@ const NICHE_VISUALS: Record<string, string> = {
 /* Layout per final ad shape. The overlay zones are reserved here so the canvas
  * pass (logo / headline / CTA / Play badge) never lands on the subject. */
 const SHAPE_LAYOUT: Record<ShapeKey, string> = {
-  ultrawide: `- Place the character at the LEFT third, full body visible, facing right.
-- Place the phone mockup at the RIGHT third.
-- Keep the CENTRE horizontal band clean: it is the only part that survives the crop.
-- The middle 40% of the width must stay an uncluttered gradient (reserved for the headline).`,
-  wide: `- Place the character on the RIGHT half, cheerful, holding the phone.
-- Phone mockup beside the character, slightly behind.
-- Keep the LEFT 45% and the BOTTOM 30% as clean gradient (reserved for logo, headline, button).`,
-  square: `- Place the character on the RIGHT side, cheerful, holding the phone.
-- Phone mockup on the right, slightly behind the character.
+  wide: `- Compose for a wide 1.91:1 frame: character on one side, phone mockup on the other.
+- Keep the BOTTOM 30% and one upper corner as clean gradient (reserved for logo, headline, button).`,
+  square: `- Compose for a 1:1 frame: character slightly off-centre, phone mockup beside or behind.
 - Keep the TOP-LEFT corner and the BOTTOM 35% as clean gradient (reserved for logo, headline, button).`,
-  tall: `- Place the character in the CENTRE-UPPER area, full body, cheerful, holding the phone.
-- Phone mockup beside or behind the character.
-- Keep the TOP 12% and the BOTTOM 38% as clean gradient with NO objects (reserved for logo, headline, button).`,
-  ultratall: `- Stack the composition vertically: character in the UPPER-CENTRE, phone mockup below.
-- Keep everything inside a narrow CENTRED vertical column — the sides get cropped away.
-- Keep the TOP 12% and the BOTTOM 34% as clean gradient with NO objects.`,
+  tall: `- Compose for a tall 4:5 frame: character full body in the upper-centre, phone mockup beside or below.
+- Keep the TOP 12% and the BOTTOM 34% as clean gradient with NO objects (reserved for logo, headline, button).`,
 };
 
 function buildPrompt(
@@ -65,6 +55,7 @@ function buildPrompt(
   cropKeep: number,
   hasCharacter: boolean,
   hasScreenshot: boolean,
+  angle: string,
 ): string {
   const b = (brief || {}) as Record<string, string>;
   const shape = shapeOf(targetW, targetH);
@@ -97,6 +88,10 @@ App: "${b.app_name || ""}"
 Mood: ${moodStyle}
 Atmosphere: ${nicheVisual}
 Client brief: ${userPrompt || "(none)"}
+
+CREATIVE ANGLE for this specific asset — this is what makes it differ from the
+others in the set, so commit to it rather than falling back on a generic layout:
+${angle || "Classic hero shot of the mascot with the phone."}
 
 ${heroLine}
 ${screenLine}
@@ -143,7 +138,7 @@ export async function POST(req: NextRequest) {
   if (unauth) return unauth;
   try {
     const body = await req.json();
-    const { brief, userPrompt, quality, referenceImages, characterImage, precise } = body;
+    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle } = body;
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
@@ -174,7 +169,7 @@ export async function POST(req: NextRequest) {
     if (hasCharacter) refFiles.push(await dataUrlToFile(characterImage, "character.png"));
     if (hasScreenshot) refFiles.push(await dataUrlToFile(shots[0], "screenshot.png"));
 
-    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot);
+    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "");
     const chain = precise ? PRECISE_CHAIN : MODEL_CHAIN;
 
     let b64: string | undefined;

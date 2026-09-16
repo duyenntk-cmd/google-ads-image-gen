@@ -1,63 +1,109 @@
 /**
- * Output formats for the AI Banner feature.
+ * Creative set for Google App campaigns (app install).
  *
- * Deliberately separate from AD_SIZES in adSizes.ts. That list holds 20 entries
- * across only three shapes (7x 1200x628, 7x 1200x1200, 6x 1080x1920) because
- * canvasGen.ts renders one UAC *variant* per entry, each from a different video
- * frame. These are 20 *distinct* Google Ads placements instead, so the two must
- * not be merged.
+ * App campaigns do NOT take fixed placement sizes. They take image *assets* in
+ * three aspect ratios and Google crops and scales them across its inventory, so
+ * the job is to supply 20 visually DIFFERENT creatives spread over those three
+ * ratios — not 20 different pixel sizes.
+ *
+ * Deliberately separate from AD_SIZES in adSizes.ts, which canvasGen.ts uses to
+ * render one UAC variant per video frame. Different feature, different list.
+ *
+ * Ratios and limits confirmed by the account owner against the Google Ads UI:
+ *   1.91:1 landscape  min 600x314   recommended 1200x628
+ *   1:1    square     min 200x200   recommended 1200x1200
+ *   4:5    portrait   min 320x400   recommended 1200x1500
+ *   up to 20 images per ad group, <=5MB each, PNG or JPG.
+ *
+ * Note 9:16 (1080x1920) is the *video* ratio. It is not one of the three image
+ * ratios, which is what the earlier 1080x1920 entry in this project got wrong.
  */
 
-export type ShapeKey = "ultrawide" | "wide" | "square" | "tall" | "ultratall";
+export type RatioKey = "landscape" | "square" | "portrait";
+export type ShapeKey = "wide" | "square" | "tall";
 
-export interface AdFormat {
+export interface RatioSpec {
+  key: RatioKey;
+  /** As Google labels it in the asset UI. */
+  ratio: string;
+  width: number;
+  height: number;
+  minWidth: number;
+  minHeight: number;
+  /** How many of the 20 slots this ratio gets. */
+  count: number;
+}
+
+/** 7 + 7 + 6 = 20, the per-ad-group maximum. */
+export const RATIO_SPECS: RatioSpec[] = [
+  { key: "landscape", ratio: "1.91:1", width: 1200, height: 628,  minWidth: 600, minHeight: 314, count: 7 },
+  { key: "square",    ratio: "1:1",    width: 1200, height: 1200, minWidth: 200, minHeight: 200, count: 7 },
+  { key: "portrait",  ratio: "4:5",    width: 1200, height: 1500, minWidth: 320, minHeight: 400, count: 6 },
+];
+
+/**
+ * Distinct creative angles, rotated across the slots so the 20 assets differ in
+ * idea rather than only in random seed. Variety is the point of uploading 20.
+ */
+const ANGLES: { id: string; label: string; direction: string }[] = [
+  { id: "hero",     label: "Hero mascot",   direction: "Classic hero shot: the mascot front and centre, confident and welcoming, presenting the phone toward the viewer." },
+  { id: "feature",  label: "Feature focus", direction: "Push the phone mockup forward and large so the app UI is the clear subject; the mascot leans in from the side, gesturing at the screen." },
+  { id: "benefit",  label: "Benefit",       direction: "Show the outcome, not the tool: the mascot visibly delighted mid-celebration, phone held loosely, energy and motion in the background." },
+  { id: "lifestyle",label: "Lifestyle",     direction: "Everyday context: the mascot casually using the phone as if on a commute or at a desk, relaxed posture, softer natural lighting." },
+  { id: "social",   label: "Social proof",  direction: "Two or three friendly characters together around the phone, sharing the moment — the main mascot stays the clear focal point." },
+  { id: "bold",     label: "Bold minimal",  direction: "Minimal and graphic: the mascot very large and close, few props, flat bold colour blocking, lots of clean negative space." },
+  { id: "discovery",label: "Discovery",     direction: "Curiosity: the mascot pointing or looking toward the phone with an inviting expression, subtle sparkle or glow drawing the eye to the screen." },
+];
+
+export interface AdCreative {
+  /** Stable id and filename, e.g. "landscape-3". */
   key: string;
   width: number;
   height: number;
-  /** Where the placement is served, for the UI. */
-  usage: string;
-  /** Shown under the preview. */
+  ratioKey: RatioKey;
+  ratio: string;
+  /** Shown in the UI under the preview. */
   label: string;
-  /** Part of the minimal set worth shipping first. */
-  isTop5: boolean;
+  usage: string;
+  /** Creative direction appended to the prompt for this slot. */
+  angle: string;
+  angleLabel: string;
+  /**
+   * Google advises supplying at least one clean image per ratio with no text
+   * burned in, so the first slot of each ratio skips the canvas overlay.
+   */
+  noOverlay: boolean;
+  /** First slot of each ratio — the 3-image set worth generating as a cheap test. */
+  isCore: boolean;
 }
 
-export const GOOGLE_ADS_FORMATS: AdFormat[] = [
-  // UAC (Universal App Campaigns) — required for app-install
-  { key: "1200x628",  width: 1200, height: 628,  usage: "UAC Landscape",       label: "Landscape 1.91:1",      isTop5: true  },
-  { key: "1200x1200", width: 1200, height: 1200, usage: "UAC Square",          label: "Square 1:1",            isTop5: true  },
-  { key: "1080x1920", width: 1080, height: 1920, usage: "UAC Stories",         label: "Portrait 9:16",         isTop5: true  },
-  // Display — Rectangles
-  { key: "300x250",   width: 300,  height: 250,  usage: "Medium Rectangle",    label: "Rectangle 300×250",     isTop5: true  },
-  { key: "336x280",   width: 336,  height: 280,  usage: "Large Rectangle",     label: "Rectangle 336×280",     isTop5: false },
-  { key: "250x250",   width: 250,  height: 250,  usage: "Square",              label: "Square 250×250",        isTop5: false },
-  { key: "200x200",   width: 200,  height: 200,  usage: "Small Square",        label: "Small Square 200×200",  isTop5: false },
-  // Display — Leaderboards & Banners
-  { key: "728x90",    width: 728,  height: 90,   usage: "Leaderboard",         label: "Leaderboard 728×90",    isTop5: false },
-  { key: "970x250",   width: 970,  height: 250,  usage: "Billboard",           label: "Billboard 970×250",     isTop5: false },
-  { key: "970x90",    width: 970,  height: 90,   usage: "Large Leaderboard",   label: "Lg Leaderboard 970×90", isTop5: false },
-  { key: "930x180",   width: 930,  height: 180,  usage: "Top Banner",          label: "Top Banner 930×180",    isTop5: false },
-  { key: "468x60",    width: 468,  height: 60,   usage: "Banner",              label: "Banner 468×60",         isTop5: false },
-  { key: "980x120",   width: 980,  height: 120,  usage: "Panorama",            label: "Panorama 980×120",      isTop5: false },
-  // Display — Skyscrapers
-  { key: "160x600",   width: 160,  height: 600,  usage: "Wide Skyscraper",     label: "Wide Sky 160×600",      isTop5: false },
-  { key: "120x600",   width: 120,  height: 600,  usage: "Skyscraper",          label: "Skyscraper 120×600",    isTop5: false },
-  { key: "300x600",   width: 300,  height: 600,  usage: "Half Page",           label: "Half Page 300×600",     isTop5: false },
-  { key: "300x1050",  width: 300,  height: 1050, usage: "Portrait",            label: "Portrait 300×1050",     isTop5: false },
-  // Display — Mobile
-  { key: "320x50",    width: 320,  height: 50,   usage: "Mobile Banner",       label: "Mobile Banner 320×50",  isTop5: true  },
-  { key: "320x100",   width: 320,  height: 100,  usage: "Large Mobile Banner", label: "Lg Mobile 320×100",     isTop5: false },
-  { key: "300x50",    width: 300,  height: 50,   usage: "Mobile Banner Alt",   label: "Mobile Banner 300×50",  isTop5: false },
-];
+export const APP_CREATIVES: AdCreative[] = RATIO_SPECS.flatMap((spec) =>
+  Array.from({ length: spec.count }, (_, i) => {
+    const angle = ANGLES[i % ANGLES.length];
+    return {
+      key: `${spec.key}-${i + 1}`,
+      width: spec.width,
+      height: spec.height,
+      ratioKey: spec.key,
+      ratio: spec.ratio,
+      label: `${spec.ratio} · ${angle.label}`,
+      usage: `${spec.width}×${spec.height}`,
+      angle: angle.direction,
+      angleLabel: angle.label,
+      noOverlay: i === 0,
+      isCore: i === 0,
+    };
+  }),
+);
 
-/* ─────────────────── native per-size generation ───────────────────
+/* ─────────────────── native generation ───────────────────
  * gpt-image-2.5 accepts an arbitrary WIDTHxHEIGHT, subject to:
  *   - both edges divisible by 16
  *   - aspect ratio between 1:3 and 3:1
  *   - each edge <= 3840px
  *   - total pixels between 655,360 and 8,294,400
- * Google Ads strips (728x90 = 8:1, 120x600 = 1:5) exceed the ratio limit, so we
- * render at the closest legal ratio and centre-crop down to the exact size.
+ * All three App campaign ratios sit comfortably inside those bounds, so the only
+ * adjustment is rounding the height up to the 16px grid and trimming it back.
  */
 const GEN_MIN_PIXELS = 655_360;
 const GEN_MAX_PIXELS = 8_294_400;
@@ -70,42 +116,29 @@ export interface GenPlan {
   size: string;
   genW: number;
   genH: number;
-  /** Aspect ratio the model actually renders at. */
   genRatio: number;
-  /** True when the model renders the target ratio directly (scale only, no crop). */
+  /** True when the model renders the target ratio directly. */
   native: boolean;
-  /** Fraction of the generated frame that survives the crop (1 = all of it). */
+  /** Fraction of the generated frame kept by the crop (1 = all of it). */
   cropKeep: number;
 }
 
 const up16 = (v: number) => Math.max(16, Math.ceil(v / 16) * 16);
 const down16 = (v: number) => Math.max(16, Math.floor(v / 16) * 16);
 
-/**
- * Plan one native generation for a single Google Ads size: the largest legal
- * canvas at the closest legal aspect ratio, so cropping to `targetW x targetH`
- * never has to upscale.
- */
 export function planGenSize(targetW: number, targetH: number): GenPlan {
   const targetRatio = targetW / targetH;
   const genRatio = Math.min(GEN_MAX_RATIO, Math.max(GEN_MIN_RATIO, targetRatio));
 
-  // Pixels needed so the crop still yields at least the target resolution.
   let needed: number;
-  if (targetRatio > genRatio) needed = (targetW * targetW) / genRatio; // crop top/bottom
-  else if (targetRatio < genRatio) needed = targetH * targetH * genRatio; // crop left/right
+  if (targetRatio > genRatio) needed = (targetW * targetW) / genRatio;
+  else if (targetRatio < genRatio) needed = targetH * targetH * genRatio;
   else needed = targetW * targetH;
 
   const pixels = Math.min(GEN_MAX_PIXELS, Math.max(GEN_MIN_PIXELS, needed));
+  let genH = up16(Math.sqrt(pixels / genRatio));
+  let genW = up16(Math.sqrt(pixels / genRatio) * genRatio);
 
-  let genH = Math.sqrt(pixels / genRatio);
-  let genW = genH * genRatio;
-
-  // Snap to the 16px grid, rounding up so we never fall under the pixel floor.
-  genW = up16(genW);
-  genH = up16(genH);
-
-  // Respect the edge cap, then the pixel ceiling, shrinking on the 16px grid.
   if (genW > GEN_MAX_EDGE) { genW = down16(GEN_MAX_EDGE); genH = up16(genW / genRatio); }
   if (genH > GEN_MAX_EDGE) { genH = down16(GEN_MAX_EDGE); genW = up16(genH * genRatio); }
   while (genW * genH > GEN_MAX_PIXELS && genW > 16 && genH > 16) {
@@ -126,12 +159,9 @@ export function planGenSize(targetW: number, targetH: number): GenPlan {
   };
 }
 
-/** Coarse shape bucket, used to pick a composition brief for the model. */
 export function shapeOf(width: number, height: number): ShapeKey {
   const r = width / height;
-  if (r >= 2.5) return "ultrawide";
   if (r >= 1.3) return "wide";
-  if (r > 0.8) return "square";
-  if (r > 0.4) return "tall";
-  return "ultratall";
+  if (r > 0.9) return "square";
+  return "tall";
 }
