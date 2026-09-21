@@ -16,39 +16,41 @@ const PRECISE_CHAIN = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare", "gpt-ima
 const FIXED_SIZE_MODELS = new Set(["gpt-image-1"]);
 
 const MOOD_STYLES: Record<string, string> = {
-  bold: "bold high-contrast, deep shadows, electric energy, cinematic lighting",
-  lifestyle: "warm aspirational lifestyle, soft golden-hour light, premium brand feel",
-  minimal: "ultra-clean minimalist, generous whitespace, refined",
+  bold: "bold and high-contrast, confident, strong shapes",
+  lifestyle: "warm aspirational lifestyle, soft natural light, premium brand feel",
+  minimal: "ultra-clean minimalist, generous negative space, refined",
   product: "sharp product showcase, crisp studio lighting, feature-focused",
-  playful: "fun vibrant, bright cheerful colors, rounded shapes, friendly",
-  professional: "sophisticated, authoritative palette, premium business",
+  playful: "fun and vibrant, bright cheerful colours, rounded friendly shapes",
+  professional: "sophisticated and authoritative, restrained palette, premium business",
 };
 
-const NICHE_VISUALS: Record<string, string> = {
-  photo: "colorful bokeh, soft glows, creative energy",
-  tool: "clean modern tech atmosphere, subtle glow",
-  office: "professional airy workspace atmosphere",
-  game: "playful particle effects, energetic mood",
-  health: "wellness glow, soft greens and blues",
-  finance: "premium wealth aesthetic, subtle gold accents",
-  social: "vibrant friendly connected energy",
-  travel: "dreamy wanderlust light, airy",
-  education: "friendly bright learning atmosphere",
+/* Background treatment. The old prompt always asked for a dark gradient, which
+ * fought the bright, airy look most app-install creative uses. */
+const BG_MODES: Record<string, string> = {
+  light: "BACKGROUND: bright and airy. Near-white or very light tinted base, with ONE soft sweeping colour shape (a wide curve or blob) in the brand colours behind the subject. Keep it clean and uncluttered — this is a high-key advertising background, not a detailed scene.",
+  dark: "BACKGROUND: rich and saturated. Deep gradient built from the brand colours, with a soft radial glow behind the subject to lift it off the background. Keep it clean and uncluttered — no busy detail.",
 };
 
-/* Layout per final ad shape. The overlay zones are reserved here so the canvas
- * pass (logo / headline / CTA / Play badge) never lands on the subject. */
+/* Composition per final shape. Reserved zones are stated as percentages because
+ * the canvas pass draws the logo, headline, CTA and Play badge into them, and
+ * anything the model puts there gets covered. */
 const SHAPE_LAYOUT: Record<ShapeKey, string> = {
-  wide: `- Compose for a wide 1.91:1 frame: character on one side, phone mockup on the other.
-- Keep the BOTTOM 30% and one upper corner as clean gradient (reserved for logo, headline, button).`,
-  square: `- Compose for a 1:1 frame: character slightly off-centre, phone mockup beside or behind.
-- Keep the TOP-LEFT corner and the BOTTOM 35% as clean gradient (reserved for logo, headline, button).`,
-  tall: `- Compose for a tall 4:5 frame: character full body in the upper-centre, phone mockup beside or below.
-- Keep the TOP 12% and the BOTTOM 34% as clean gradient with NO objects (reserved for logo, headline, button).`,
+  wide: `FRAME: wide 1.91:1.
+- Subject occupies the RIGHT 40% of the frame, full or three-quarter view, facing slightly left into the frame.
+- Supporting props sit around the subject, never crossing into the left half.
+- RESERVED, keep as clean background with NO objects: the LEFT 45% of the width, and the BOTTOM 28% of the height.`,
+  square: `FRAME: square 1:1.
+- Subject occupies the RIGHT 45% of the frame, full or three-quarter view, facing slightly left into the frame.
+- Supporting props cluster in the upper-middle, around the subject.
+- RESERVED, keep as clean background with NO objects: the LEFT 40% of the width, the TOP-LEFT corner, and the BOTTOM 32% of the height.`,
+  tall: `FRAME: tall 4:5.
+- Subject centred horizontally, occupying the MIDDLE 45% of the height, full body or waist-up.
+- Supporting props sit beside and just above the subject.
+- RESERVED, keep as clean background with NO objects: the TOP 14% and the BOTTOM 34% of the height.`,
 };
 
 function buildPrompt(
-  brief: Record<string, unknown> | null,
+  brief: any,
   userPrompt: string,
   targetW: number,
   targetH: number,
@@ -57,59 +59,66 @@ function buildPrompt(
   hasScreenshot: boolean,
   angle: string,
 ): string {
-  const b = (brief || {}) as Record<string, string>;
   const shape = shapeOf(targetW, targetH);
-  const moodStyle = MOOD_STYLES[b.mood] || MOOD_STYLES.playful;
-  const nicheVisual = NICHE_VISUALS[b.niche] || "";
-  const primary = b.primary_color || "#7B2FBE";
-  const secondary = b.secondary_color || "#1A1A2E";
-  const accent = b.accent_color || "#FF6B35";
+  const moodStyle = MOOD_STYLES[brief?.mood] || MOOD_STYLES.playful;
+  const bgMode = BG_MODES[brief?.bg_mode === "dark" ? "dark" : "light"];
+  const primary = brief?.primary_color || "#7B2FBE";
+  const secondary = brief?.secondary_color || "#1A1A2E";
+  const accent = brief?.accent_color || "#FF6B35";
+  const heroSubject = brief?.hero_subject || "a friendly person happily using the app on a smartphone";
+  // Props come from the brief so they match THIS app. They used to be hardcoded
+  // as flag chips, which only ever made sense for a language-learning app.
+  const keyVisual = brief?.key_visual || "soft floating UI cards and gentle sparkles";
 
   const heroLine = hasCharacter
-    ? `HERO CHARACTER: reuse the EXACT character from the provided reference image — same face, same hair, same outfit, same colors, same art style. This character appears across a whole ad set, so identity must stay perfectly consistent. Only the pose and framing may change.`
-    : `HERO CHARACTER: a friendly, expressive 3D cartoon mascot (Pixar-style), engaging pose, holding a smartphone.`;
+    ? `HERO: reuse the EXACT character from the provided reference image — same face, same hairstyle, same outfit, same colours, same art style. This character runs across a whole ad set, so identity must stay perfectly consistent; only pose, expression and framing may change. Here: ${heroSubject}.`
+    : `HERO: ${heroSubject}. Render as a polished 3D cartoon character (Pixar-like), appealing and expressive.`;
 
   const screenLine = hasScreenshot
-    ? `PHONE UI: on the phone screen, show the app interface from the provided app-screenshot reference — keep the real UI recognizable, do not invent a fake UI.`
-    : `PHONE UI: show a sleek clean app interface on the phone screen.`;
+    ? `PHONE: include a clean 3D phone mockup showing the app interface from the provided screenshot reference. Keep the real UI recognisable — do not invent a fake interface. Screen must be sharp and upright, not tilted away.`
+    : `PHONE: include a clean 3D phone mockup with a simple, plausible app interface on screen.`;
 
-  // Warn the model when the crop throws away a large part of the frame.
   const cropLine =
     cropKeep < 0.95
-      ? `\nCRITICAL CROP: the final ad is ${targetW}x${targetH}. Only the CENTRED ${Math.round(cropKeep * 100)}% ${
+      ? `\nCROP WARNING: the delivered ad is ${targetW}x${targetH}. Only the CENTRED ${Math.round(cropKeep * 100)}% ${
           targetW / targetH > 1 ? "horizontal band" : "vertical column"
-        } of this image is kept — everything outside it is discarded. Keep the character, the phone and every important element fully inside that safe area. Do not let the character's head or feet drift outside it.`
+        } survives — everything outside is discarded. Keep the subject and every important element fully inside that safe area.`
       : "";
 
-  return `You are a world-class mobile-app advertising art director.
-Design ONE advertising background for a ${targetW}x${targetH} Google Ads banner.
-
-App: "${b.app_name || ""}"
-Mood: ${moodStyle}
-Atmosphere: ${nicheVisual}
-Client brief: ${userPrompt || "(none)"}
-
-CREATIVE ANGLE for this specific asset — this is what makes it differ from the
-others in the set, so commit to it rather than falling back on a generic layout:
-${angle || "Classic hero shot of the mascot with the phone."}
+  return `You are an award-winning art director for mobile app install advertising.
+Produce ONE finished advertising background, ${targetW}x${targetH}, for the app "${brief?.app_name || ""}".
 
 ${heroLine}
 ${screenLine}
 
-Add 2-3 small rounded chat/speech chips floating near the character, EACH showing only a single tiny country-flag icon (NO text inside them).
+SUPPORTING VISUALS (specific to this app — include these, not generic filler):
+${keyVisual}
 
-COMPOSITION for this ${shape} format:
+CREATIVE ANGLE for this particular asset — commit to it, this is what makes it
+differ from the others in the set:
+${angle || "Classic hero shot: the subject front and centre, confident and welcoming."}
+
+ART DIRECTION: ${moodStyle}
+${userPrompt ? `CLIENT BRIEF: ${userPrompt}` : ""}
+
+${bgMode}
+Brand palette: ${primary} as the dominant colour, ${secondary} as the supporting
+tone, ${accent} reserved for small high-energy highlights only.
+
 ${SHAPE_LAYOUT[shape]}${cropLine}
 
-STYLE:
-- Bright, premium, high-end mobile game / app launch ad quality.
-- Soft studio gradient background built from ${primary} and ${secondary}, with ${accent} highlights.
-- Cinematic soft lighting, glossy 3D, clean and uncluttered.
+RENDER QUALITY:
+- Advertising-grade finish: crisp edges, clean silhouettes, believable soft shadows grounding every element.
+- Even, flattering light on the subject's face. No harsh shadows across features.
+- Subject in sharp focus; background elements may fall off softly.
+- Colours vivid but not oversaturated; no muddy greys.
 
-ABSOLUTELY STRICT:
-- Render NO text, NO letters, NO words, NO numbers, NO captions, NO logos, NO app-store badges anywhere. 100% text-free.
-- Keep the reserved zones clean and simple — NO objects there.
-- No watermarks, no borders. Fill the canvas edge to edge.`;
+MUST NOT APPEAR — these ruin the asset:
+- ANY text, letters, words, numbers, captions, labels, logos, watermarks or app-store badges. The frame must be 100% text-free; all copy is composited afterwards.
+- Anything at all inside the RESERVED zones — they get covered by the layout.
+- Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.
+- Borders, frames, drop-shadow edges, collage panels, or a visible canvas edge. Fill the frame completely, edge to edge.
+- Cluttered or busy composition. Fewer, better elements.`;
 }
 
 async function dataUrlToFile(dataUrl: string, name: string) {

@@ -16,16 +16,26 @@ const BRIEF_SCHEMA = `Trả về DUY NHẤT một JSON object (không markdown, 
   "secondary_color": string, // hex
   "accent_color": string,    // hex
   "mood": "bold" | "lifestyle" | "minimal" | "product" | "playful" | "professional",
-  "niche": "photo" | "tool" | "office" | "game" | "health" | "finance" | "social" | "travel" | "education",
+  "niche": "photo" | "tool" | "office" | "game" | "health" | "finance" | "social" | "travel" | "education" | "beauty" | "shopping",
+  "bg_mode": "light" | "dark",  // nền sáng (trắng/pastel, thoáng) hay tối (gradient đậm, tương phản cao)
+  "hero_subject": string,    // TIẾNG ANH. Nhân vật/chủ thể chính nên là gì và đang làm gì.
+                             // vd "a young woman admiring her newly coloured hair in a hand mirror"
+  "key_visual": string,      // TIẾNG ANH. 2-3 đạo cụ/hiệu ứng ĐẶC TRƯNG của app này, KHÔNG chung chung.
+                             // vd app làm tóc: "floating hair-colour swatch circles, a before/after split, soft sparkles"
+                             // vd app học ngôn ngữ: "speech bubbles with small country flags, a globe"
+                             // TUYỆT ĐỐI không dùng cờ quốc gia trừ khi app thật sự về ngôn ngữ/du lịch
   "text_zone": "top" | "bottom" | "left" | "right",
   "subject_position": "center" | "left" | "right"
-}`;
+}
+
+LƯU Ý NGÔN NGỮ: headline/subheadline/cta_text/tagline viết bằng ngôn ngữ ad copy được chỉ định.
+Riêng hero_subject và key_visual PHẢI viết bằng TIẾNG ANH vì chúng được đưa thẳng vào model tạo ảnh.`;
 
 export async function POST(req: NextRequest) {
   const unauth = await requireSession();
   if (unauth) return unauth;
   try {
-    const { appName, prompt, country, language, screenshots } = await req.json();
+    const { appName, prompt, country, language, screenshots, description, genre } = await req.json();
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
@@ -34,20 +44,27 @@ export async function POST(req: NextRequest) {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const outLang = language || "Vietnamese";
 
-    const system = `Bạn là senior art director cho quảng cáo app mobile trên Google Ads. Phân tích screenshots + creative direction để tạo design brief. Headline/subheadline/cta viết bằng ${outLang}, ngắn và chuyển đổi cao. Màu sắc PHẢI trích từ screenshots thật.\n\n${BRIEF_SCHEMA}`;
+    const system = `Bạn là senior art director cho quảng cáo app mobile trên Google Ads. Phân tích mô tả app + screenshots + creative direction để tạo design brief.\nHeadline/subheadline/cta viết bằng ${outLang}, ngắn và chuyển đổi cao.\nMàu sắc PHẢI trích từ screenshots thật, không đoán.\nhero_subject và key_visual phải bám SÁT chức năng thật của app — đọc kỹ mô tả để biết app làm gì, đừng suy diễn từ tên app.\n\n${BRIEF_SCHEMA}`;
 
     const shots: string[] = Array.isArray(screenshots) ? screenshots.slice(0, 3) : [];
     const userContent: any[] = [
       {
         type: "text",
-        text: `App: "${appName}"\nThị trường: ${country || "Global"}\nCreative direction: ${prompt || "(chưa có, tự đề xuất)"}\n\nDựa vào screenshots dưới đây, tạo brief.`,
+        text:
+          `App: "${appName}"\n` +
+          (genre ? `Thể loại trên store: ${genre}\n` : "") +
+          (description ? `Mô tả từ store (nguồn đáng tin nhất về chức năng app):\n"""${String(description).slice(0, 900)}"""\n` : "") +
+          `Thị trường: ${country || "Global"}\n` +
+          `Ngôn ngữ ad copy: ${outLang}\n` +
+          `Creative direction: ${prompt || "(chưa có, tự đề xuất)"}\n\n` +
+          `Dựa vào mô tả và screenshots dưới đây, tạo brief.`,
       },
       ...shots.map((url) => ({ type: "image_url", image_url: { url, detail: "low" } })),
     ];
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      max_tokens: 500,
+      max_tokens: 700,
       temperature: 0.7,
       response_format: { type: "json_object" },
       messages: [
@@ -78,6 +95,9 @@ export async function POST(req: NextRequest) {
     brief.accent_color ||= "#FF6B35";
     brief.mood ||= "bold";
     brief.niche ||= "tool";
+    brief.bg_mode = brief.bg_mode === "dark" ? "dark" : "light";
+    brief.hero_subject ||= "a friendly person happily using the app on a smartphone";
+    brief.key_visual ||= "soft floating UI cards and gentle sparkles";
     brief.text_zone ||= "bottom";
     brief.subject_position ||= "center";
 

@@ -26,6 +26,12 @@ type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
 const AB_CONCURRENCY = 4;
 /** Rough OpenAI list price per image, for the cost hint in the UI. */
 const AB_COST_PER_IMAGE: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
+/** Rough USD→VND rate, only for the on-screen estimate. Adjust if it drifts. */
+const AB_VND_PER_USD = 26000;
+const abVnd = (usd: number) => {
+  const v = Math.round(usd * AB_VND_PER_USD);
+  return v >= 1000 ? `${Math.round(v / 1000).toLocaleString("vi-VN")}k₫` : `${v.toLocaleString("vi-VN")}₫`;
+};
 
 /** POST JSON with a timeout, turning a gateway HTML page into a readable error. */
 async function abFetchJson(url: string, body: unknown, timeoutMs: number, label: string): Promise<Record<string, any>> {
@@ -572,7 +578,11 @@ export default function Home() {
       setAbIcon(iconB64);
 
       setAbStatus("🤖 GPT-4o đang phân tích app và tạo design brief...");
-      const bc = await abFetchJson("/api/banner-concept", { appName, prompt: abPrompt, country: abCountry, language: abLang, screenshots: shots.slice(0, 3), appUrl: abUrl }, 60000, "banner-concept");
+      const bc = await abFetchJson("/api/banner-concept", {
+        appName, prompt: abPrompt, country: abCountry, language: abLang,
+        screenshots: shots.slice(0, 3), appUrl: abUrl,
+        description: ss.description || "", genre: ss.genre || "",
+      }, 60000, "banner-concept");
       if (!bc.success) throw new Error(bc.error);
       const theBrief: Brief = bc.brief;
       setAbBrief(theBrief);
@@ -2254,10 +2264,31 @@ export default function Home() {
                     <input type="checkbox" checked={abPrecise} onChange={e => setAbPrecise(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
                     💎 Ưu tiên model Sunburst (nét hơn, chậm hơn)
                   </label>
-                  <p className="text-xs pl-6" style={{color: t.textMuted}}>
-                    Ước tính ~{(((abIndependent ? APP_CREATIVES.length : 3) + 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211)).toFixed(2)}$ /lần
-                    {" · "}{abIndependent ? `~${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 70 / 60)} phút` : "~1 phút"}
-                  </p>
+                  {(() => {
+                    const unit = AB_COST_PER_IMAGE[abQuality] ?? 0.211;
+                    const nImg = abIndependent ? APP_CREATIVES.length : 3;
+                    const total = (nImg + 1) * unit; // +1 for the mascot render
+                    return (
+                      <div className="pl-6 mt-1.5 rounded-lg border px-3 py-2 text-xs" style={{borderColor: t.border, backgroundColor: t.card}}>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span style={{color: t.textMuted}}>Đơn giá mỗi ảnh</span>
+                          <span className="font-semibold" style={{color: t.text}}>${unit.toFixed(3)} <span style={{color: t.textMuted}}>· {abVnd(unit)}</span></span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                          <span style={{color: t.textMuted}}>Số ảnh gen</span>
+                          <span style={{color: t.text}}>{nImg} banner + 1 mascot = {nImg + 1}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 mt-1 pt-1 border-t" style={{borderColor: t.border}}>
+                          <span className="font-semibold" style={{color: t.text}}>Tổng mỗi lượt gen</span>
+                          <span className="font-bold" style={{color: "#A78BFA"}}>${total.toFixed(2)} <span style={{color: t.textMuted, fontWeight: 400}}>· ~{abVnd(total)}</span></span>
+                        </div>
+                        <div className="mt-1 text-[11px]" style={{color: t.textMuted}}>
+                          Thời gian ~{abIndependent ? `${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 70 / 60)} phút` : "1 phút"}
+                          {" · tỉ giá tạm tính "}{AB_VND_PER_USD.toLocaleString("vi-VN")}₫/$
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
