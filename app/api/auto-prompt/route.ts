@@ -17,14 +17,26 @@ export async function POST(req: NextRequest) {
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const outLang = language || "Vietnamese";
-    const system = `Bạn là creative director Google Ads chuyên app mobile. Nhìn app và (nếu có) screenshots, viết 1-2 câu mô tả creative direction: visual style, hero element, cảm xúc muốn truyền tải. Viết bằng ${outLang}. Chỉ trả về text prompt, KHÔNG giải thích, KHÔNG markdown, KHÔNG tiền tố.`;
+    // The creative direction is a working note for the operator to read and edit,
+    // so it is ALWAYS Vietnamese. `language` is the language of the ad copy that
+    // ends up printed on the banner — a different thing, and passing it through
+    // as the output language is what previously produced English directions.
+    const adCopyLang = language || "Vietnamese";
+    const system =
+      "Bạn là creative director Google Ads chuyên app mobile. Nhìn app và (nếu có) screenshots, " +
+      "viết 1-2 câu mô tả creative direction: visual style, hero element, cảm xúc muốn truyền tải.\n" +
+      "BẮT BUỘC: viết bằng TIẾNG VIỆT, kể cả khi ad copy sẽ chạy bằng ngôn ngữ khác. " +
+      "Đây là ghi chú để người Việt đọc và chỉnh sửa, không phải chữ in lên banner.\n" +
+      "Chỉ trả về đoạn mô tả, KHÔNG giải thích, KHÔNG markdown, KHÔNG tiền tố.";
 
     const shots: string[] = Array.isArray(screenshots) ? screenshots.slice(0, 2) : [];
     const userContent: any[] = [
       {
         type: "text",
-        text: `App: "${appName}"\nNiche: ${niche || "unknown"}\nThị trường: ${country || "Global"}\nViết creative direction ngắn gọn, punchy.`,
+        text:
+          `App: "${appName}"\nNiche: ${niche || "unknown"}\nThị trường: ${country || "Global"}\n` +
+          `Ad copy sẽ viết bằng: ${adCopyLang} (chỉ để bạn tham khảo — phần mô tả bên dưới vẫn phải bằng tiếng Việt)\n` +
+          `Viết creative direction ngắn gọn, punchy, BẰNG TIẾNG VIỆT.`,
       },
       ...shots.map((url) => ({ type: "image_url", image_url: { url, detail: "low" } })),
     ];

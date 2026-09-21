@@ -434,6 +434,8 @@ export default function Home() {
   const [agNoText] = useState(false);
   const [agIdeogramImages] = useState<{landscape:string;square:string;portrait:string}|null>(null);
   const [agUrl, setAgUrl] = useState("");
+  const [agFetching, setAgFetching] = useState(false);
+  const [agFetched, setAgFetched] = useState<{name:string;icon:string|null;shots:number;genre:string;cc:string}|null>(null);
   const [agPrompt, setAgPrompt] = useState("");
   const [agCountry, setAgCountry] = useState("Global");
   const [agLang, setAgLang] = useState("English");
@@ -535,6 +537,34 @@ export default function Home() {
       if (data.success) loadAdsCampaigns(adsSelectedAccount);
     } catch (e) { setAdsResult({ success: false, error: String(e) }); }
     setAdsLaunching(false);
+  };
+
+  /**
+   * Confirms the URL resolves to a real app before the user spends anything.
+   * Asks for a single screenshot — this is an identity check, not the real
+   * fetch, so it stays fast.
+   */
+  const handleAgFetch = async () => {
+    if (!agUrl.trim() || agFetching) return;
+    setAgFetching(true);
+    setAgError("");
+    setAgFetched(null);
+    try {
+      const ss = await agFetchJson("/api/screenshots", { appUrl: agUrl.trim(), country: agCountry, limit: 1 }, 45000, "screenshots");
+      if (!ss.success) throw new Error(ss.error || "Không lấy được thông tin app.");
+      setAgFetched({
+        name: ss.appName || "(không rõ tên)",
+        icon: ss.iconBase64 || null,
+        shots: ss.totalScreenshots ?? (ss.screenshots?.length || 0),
+        genre: ss.genre || "",
+        cc: ss.countryCode || "",
+      });
+      if (ss.iconBase64) setAgIcon(ss.iconBase64);
+    } catch (e) {
+      setAgError("❌ Kiểm tra app lỗi: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setAgFetching(false);
+    }
   };
 
   const handleAutoPrompt = async () => {
@@ -2238,10 +2268,37 @@ export default function Home() {
                   <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
                     🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
                   </label>
-                  <input value={agUrl} onChange={e => setAgUrl(e.target.value)}
-                    placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                    style={inputStyle}/>
+                  <div className="flex gap-2">
+                    <input value={agUrl}
+                      onChange={e => { setAgUrl(e.target.value); setAgFetched(null); }}
+                      onKeyDown={e => { if (e.key === "Enter") handleAgFetch(); }}
+                      placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
+                      className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
+                      style={inputStyle}/>
+                    <button onClick={handleAgFetch} disabled={!agUrl.trim() || agFetching}
+                      className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2">
+                      {agFetching
+                        ? <><span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Đang lấy...</>
+                        : <>🔍 Kiểm tra</>}
+                    </button>
+                  </div>
+
+                  {agFetched && (
+                    <div className="mt-2.5 flex items-center gap-3 p-2.5 rounded-xl border" style={{borderColor:"#10B98144", backgroundColor:"#10B9810F"}}>
+                      {agFetched.icon
+                        ? <img src={agFetched.icon} alt="" className="w-11 h-11 rounded-xl flex-shrink-0"/>
+                        : <div className="w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center text-lg" style={{backgroundColor:t.tabBg}}>📱</div>}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate" style={{color:t.text}}>{agFetched.name}</div>
+                        <div className="text-xs" style={{color:t.textMuted}}>
+                          {agFetched.shots} screenshot
+                          {agFetched.genre && <> · {agFetched.genre}</>}
+                          {agFetched.cc && <> · store {agFetched.cc.toUpperCase()}</>}
+                        </div>
+                      </div>
+                      <span className="text-emerald-500 text-lg flex-shrink-0">✓</span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
