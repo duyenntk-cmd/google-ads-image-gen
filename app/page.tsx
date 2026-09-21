@@ -491,13 +491,25 @@ export default function Home() {
   const [abMascotUsed, setAbMascotUsed] = useState<string|null>(null);
   const [abUseScreenshot, setAbUseScreenshot] = useState(true);
   const [abAutoMascot, setAbAutoMascot] = useState(true);
-  const [abIndependent, setAbIndependent] = useState(true);
+  /** one = a single asset to approve · core = 1 per ratio · full = all 20. */
+  const [abMode, setAbMode] = useState<"one"|"core"|"full">("one");
+  /** Which mode produced what is on screen, so the result step offers the right next action. */
+  const [abLastMode, setAbLastMode] = useState<"one"|"core"|"full">("one");
+  /**
+   * Store data, brief and mascot from the last run. Regenerating reuses them so
+   * a retry bills for one image instead of repeating the store call, the brief
+   * and the mascot render.
+   */
+  const abRun = useRef<{shots:string[];icon:string|null;brief:Brief;mascot:string|null}|null>(null);
   const [abPrecise, setAbPrecise] = useState(false);
   const abCharRef = useRef<HTMLInputElement>(null);
 
   const abReset = () => {
     setAbStep("input"); setAbPreviews([]); setAbBrief(null);
     setAbBaseImages([]); setAbError(""); setAbStatus("");
+    // Drop the cached run too, so the next generate re-reads the store.
+    abRun.current = null;
+    setAbMascotUsed(null);
   };
 
   /**
@@ -565,16 +577,24 @@ export default function Home() {
     }
   };
 
-  const handleAbGenerate = async () => {
+  const handleAbGenerate = async (mode: "one"|"core"|"full" = abMode, reuse = false) => {
     if (!abUrl.trim()) return;
-    setAbStep("generating"); setAbError(""); setAbMascotUsed(null);
-    setAbStatus("📱 Đang lấy thông tin app...");
+    setAbStep("generating"); setAbError("");
     try {
+      let shots: string[], iconB64: string | null, theBrief: Brief, mascot: string | null;
+
+      if (reuse && abRun.current) {
+        // Retry path: the store call, brief and mascot are already paid for.
+        ({ shots, icon: iconB64, brief: theBrief, mascot } = abRun.current);
+        setAbStatus("♻️ Dùng lại brief + mascot, chỉ gen lại ảnh...");
+      } else {
+      setAbMascotUsed(null);
+      setAbStatus("📱 Đang lấy thông tin app...");
       const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abCountry }, 60000, "screenshots");
       if (!ss.success) throw new Error(ss.error);
-      const shots: string[] = ss.screenshots || [];
+      shots = ss.screenshots || [];
       const appName: string = ss.appName || "";
-      const iconB64: string | null = ss.iconBase64 || null;
+      iconB64 = ss.iconBase64 || null;
       setAbIcon(iconB64);
 
       setAbStatus("🤖 GPT-4o đang phân tích app và tạo design brief...");
@@ -584,12 +604,12 @@ export default function Home() {
         description: ss.description || "", genre: ss.genre || "",
       }, 60000, "banner-concept");
       if (!bc.success) throw new Error(bc.error);
-      const theBrief: Brief = bc.brief;
+      theBrief = bc.brief;
       setAbBrief(theBrief);
 
       // One mascot, reused as the reference for every size — this is what keeps
       // the character identical across the whole set.
-      let mascot: string | null = abCharacter;
+      mascot = abCharacter;
       if (!mascot && abAutoMascot) {
         setAbStatus("🎭 Đang tìm mascot trong screenshots (hoặc tạo mới)...");
         try {
@@ -598,6 +618,9 @@ export default function Home() {
         } catch { /* non-fatal: carry on without a character reference */ }
       }
       setAbMascotUsed(mascot);
+      abRun.current = { shots, icon: iconB64, brief: theBrief, mascot };
+      }
+
       const referenceImages = abUseScreenshot ? shots.slice(0, 1) : [];
 
       const errors: string[] = [];
@@ -606,7 +629,13 @@ export default function Home() {
 
       // Core mode renders one asset per ratio — a cheap way to check the whole
       // pipeline before committing to all 20.
-      const slots = abIndependent ? APP_CREATIVES : APP_CREATIVES.filter((c) => c.isCore);
+      // "one" previews a single square asset: the shape that reads composition
+      // most clearly, and the cheapest thing to iterate on.
+      const slots =
+        mode === "full" ? APP_CREATIVES
+        : mode === "core" ? APP_CREATIVES.filter((c) => c.isCore)
+        : [APP_CREATIVES.find((c) => c.ratioKey === "square") ?? APP_CREATIVES[0]];
+      setAbLastMode(mode);
       const total = slots.length;
       setAbStatus(`🎨 Đang gen ${total} ảnh (0/${total})...`);
       const results = await abPool(
@@ -2251,25 +2280,41 @@ export default function Home() {
                 </label>
 
                 <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
-                    <input type="checkbox" checked={abIndependent} onChange={e => setAbIndependent(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
-                    🎯 Gen đủ bộ {APP_CREATIVES.length} creative
-                  </label>
-                  <p className="text-xs pl-6" style={{color: t.textMuted}}>
-                    {abIndependent
-                      ? `Đủ ${RATIO_SPECS.map(r => `${r.count}×${r.ratio}`).join(" + ")} — mỗi ảnh một góc sáng tạo khác nhau, cùng mascot nên vẫn chung nhân vật.`
-                      : `Test rẻ: chỉ 3 ảnh, 1 cho mỗi tỉ lệ. Dùng để kiểm tra pipeline trước khi gen đủ bộ.`}
+                  <div className="text-sm font-semibold" style={{color: t.text}}>🎯 Phạm vi gen</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {([
+                      ["one",  "1 ảnh duyệt", "Xem thử rồi quyết"],
+                      ["core", "3 ảnh",        "1 cho mỗi tỉ lệ"],
+                      ["full", `${APP_CREATIVES.length} creative`, "Đủ bộ để upload"],
+                    ] as const).map(([m, title, sub]) => (
+                      <button key={m} onClick={() => setAbMode(m)}
+                        className="rounded-lg px-2 py-2 text-left border transition-all"
+                        style={abMode === m
+                          ? {borderColor:"#7C3AED", backgroundColor:"#7C3AED14"}
+                          : {borderColor:t.border, backgroundColor:"transparent"}}>
+                        <div className="text-xs font-semibold" style={{color: abMode === m ? "#A78BFA" : t.text}}>{title}</div>
+                        <div className="text-[10px] mt-0.5" style={{color:t.textMuted}}>{sub}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs" style={{color: t.textMuted}}>
+                    {abMode === "one"
+                      ? "Gen 1 ảnh vuông để duyệt. Ưng thì bấm gen đủ bộ ngay ở bước kết quả — brief và mascot dùng lại, không mất tiền lần nữa."
+                      : abMode === "core"
+                        ? "1 ảnh cho mỗi tỉ lệ, đủ để kiểm tra bố cục cả 3 khung."
+                        : `Đủ ${RATIO_SPECS.map(r => `${r.count}×${r.ratio}`).join(" + ")} — mỗi ảnh một góc sáng tạo khác nhau, cùng mascot nên vẫn chung nhân vật.`}
                   </p>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer pl-6" style={{color: t.text}}>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer" style={{color: t.text}}>
                     <input type="checkbox" checked={abPrecise} onChange={e => setAbPrecise(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
                     💎 Ưu tiên model Sunburst (nét hơn, chậm hơn)
                   </label>
                   {(() => {
                     const unit = AB_COST_PER_IMAGE[abQuality] ?? 0.211;
-                    const nImg = abIndependent ? APP_CREATIVES.length : 3;
-                    const total = (nImg + 1) * unit; // +1 for the mascot render
+                    const nImg = abMode === "full" ? APP_CREATIVES.length : abMode === "core" ? 3 : 1;
+                    // The mascot is rendered once per run and reused on a retry.
+                    const total = (nImg + (abRun.current ? 0 : 1)) * unit;
                     return (
-                      <div className="pl-6 mt-1.5 rounded-lg border px-3 py-2 text-xs" style={{borderColor: t.border, backgroundColor: t.card}}>
+                      <div className="mt-1.5 rounded-lg border px-3 py-2 text-xs" style={{borderColor: t.border, backgroundColor: t.card}}>
                         <div className="flex items-baseline justify-between gap-2">
                           <span style={{color: t.textMuted}}>Đơn giá mỗi ảnh</span>
                           <span className="font-semibold" style={{color: t.text}}>${unit.toFixed(3)} <span style={{color: t.textMuted}}>· {abVnd(unit)}</span></span>
@@ -2283,7 +2328,7 @@ export default function Home() {
                           <span className="font-bold" style={{color: "#A78BFA"}}>${total.toFixed(2)} <span style={{color: t.textMuted, fontWeight: 400}}>· ~{abVnd(total)}</span></span>
                         </div>
                         <div className="mt-1 text-[11px]" style={{color: t.textMuted}}>
-                          Thời gian ~{abIndependent ? `${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 70 / 60)} phút` : "1 phút"}
+                          Thời gian ~{abMode === "full" ? `${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 70 / 60)} phút` : abMode === "core" ? "1 phút" : "30-60 giây"}
                           {" · tỉ giá tạm tính "}{AB_VND_PER_USD.toLocaleString("vi-VN")}₫/$
                         </div>
                       </div>
@@ -2306,9 +2351,9 @@ export default function Home() {
 
                 {abError && <p className="text-red-400 text-xs bg-red-400/10 border border-red-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{abError}</p>}
 
-                <button onClick={handleAbGenerate} disabled={!abUrl.trim()}
+                <button onClick={() => handleAbGenerate(abMode, false)} disabled={!abUrl.trim()}
                   className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 transition-all text-white">
-                  ✨ Tạo {abIndependent ? APP_CREATIVES.length : 3} creative →
+                  ✨ {abMode === "one" ? "Gen 1 ảnh duyệt" : `Tạo ${abMode === "core" ? 3 : APP_CREATIVES.length} creative`} →
                 </button>
               </div>
             )}
@@ -2333,8 +2378,21 @@ export default function Home() {
                       {abBrief?.app_name} · {abCountry}{abBrief?.headline && <span> · &ldquo;{abBrief.headline}&rdquo;</span>}
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={abReset} className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>🔄 Gen lại</button>
+                  <div className="flex gap-2 flex-wrap">
+                    {/* Retries reuse the cached brief and mascot, so they bill for
+                        the images only — worth saying, since the difference is 10x. */}
+                    <button onClick={() => handleAbGenerate(abLastMode, true)}
+                      className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>
+                      🔄 Gen lại ({abVnd((abLastMode === "full" ? APP_CREATIVES.length : abLastMode === "core" ? 3 : 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
+                    </button>
+                    {abLastMode !== "full" && (
+                      <button onClick={() => handleAbGenerate("full", true)}
+                        className="text-sm font-semibold px-4 py-2 rounded-xl text-white"
+                        style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                        ✓ Duyệt → gen đủ {APP_CREATIVES.length} ({abVnd(APP_CREATIVES.length * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
+                      </button>
+                    )}
+                    <button onClick={abReset} className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>↩ Về đầu</button>
                     <button onClick={abDownloadZip} className="bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl">⬇ Tải tất cả (.zip)</button>
                   </div>
                 </div>
