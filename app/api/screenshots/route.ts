@@ -141,47 +141,129 @@ async function fetchIOS(appUrl: string, cc: string, shotLimit = 4) {
   };
 }
 
-// --- Android Play Store via google-play-scraper ---
+/**
+ * Reads the Play Store listing page directly.
+ *
+ * google-play-scraper parses that same page, so it breaks whenever Google
+ * reshuffles the markup — which is how "Cannot read properties of undefined
+ * (reading 'length')" reached the UI. This is deliberately cruder: it only
+ * looks for the handful of things we need, using patterns that survive layout
+ * changes, so a future break degrades to fewer screenshots rather than nothing.
+ */
+async function fetchAndroidFromHtml(appId: string, cc: string) {
+  const url = `https://play.google.com/store/apps/details?id=${encodeURIComponent(appId)}&hl=en&gl=${cc.toUpperCase()}`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} khi đọc trang Play Store.`);
+  const html = await res.text();
+
+  const title =
+    html.match(/<title>([^<]+?)\s*-\s*Apps on Google Play<\/title>/)?.[1] ||
+    html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/)?.[1] ||
+    "";
+  const description = (html.match(/<meta\s+name="description"\s+content="([^"]+)"/)?.[1] || "")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .slice(0, 1200);
+  const ogImage = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/)?.[1] || "";
+
+  // Every Play Store asset is served from this CDN. The icon is the og:image;
+  // the rest, in document order, are the listing screenshots.
+  const cdn = [...html.matchAll(/https:\/\/play-lh\.googleusercontent\.com\/[A-Za-z0-9_\-]+/g)].map((m) => m[0]);
+  const iconBase = ogImage.split("=")[0];
+  const shots = [...new Set(cdn)].filter((u) => u !== iconBase);
+
+  if (!title && !shots.length) throw new Error("Không đọc được nội dung trang Play Store (markup đã đổi?).");
+
+  return {
+    title,
+    icon: ogImage,
+    // Ask the CDN for a usable width; bare URLs come back tiny.
+    screenshots: shots.map((u) => `${u}=w1280`),
+    description,
+  };
+}
+
+// --- Android Play Store: library first, direct HTML as the safety net ---
 async function fetchAndroid(appUrl: string, cc: string, shotLimit = 4) {
   const idMatch = appUrl.match(/[?&]id=([^&]+)/);
   if (!idMatch) throw new Error("Không tìm thấy package id (?id=...) trong URL Play Store.");
   const appId = decodeURIComponent(idMatch[1]);
 
-  let app: any;
+  let title = "";
+  let iconUrl = "";
+  let shotUrls: string[] = [];
+  let description = "";
+  let genre = "";
+  let rating: number | null = null;
+  let developer = "";
+  let via = "scraper";
+  let libError = "";
+
   try {
-    app = await (gplay as any).app({ appId, country: cc, lang: "en" });
+    const app = await (gplay as any).app({ appId, country: cc, lang: "en" });
+    title = app.title || "";
+    iconUrl = app.icon || "";
+    shotUrls = app.screenshots || [];
+    description = String(app.description || "").replace(/<[^>]+>/g, " ").slice(0, 1200);
+    genre = app.genre || "";
+    rating = app.score ?? null;
+    developer = app.developer || "";
   } catch (e: any) {
-    const msg = String(e?.message || e);
-    // google-play-scraper reads the public HTML page, so Google's bot protection
-    // can reject the datacenter IP outright. Say so instead of leaking "403".
-    if (/403|forbidden/i.test(msg)) {
+    libError = String(e?.message || e);
+
+    // Bot protection rejects the request outright; the fallback hits the same
+    // endpoint from the same IP, so retrying it would only waste time.
+    if (/403|forbidden/i.test(libError)) {
       throw new Error(
         `Google Play chặn request (403) cho "${appId}" ở store ${cc.toUpperCase()}. ` +
           `Thường do IP server bị bot-protection chặn, hoặc app không phát hành ở thị trường này. ` +
           `Thử đổi Thị trường, hoặc dùng link App Store (iOS) thay thế.`,
       );
     }
-    if (/404|not found/i.test(msg)) {
-      throw new Error(`Không tìm thấy app "${appId}" trên Play Store ${cc.toUpperCase()}. Kiểm tra lại package id / Thị trường.`);
+
+    try {
+      const fb = await fetchAndroidFromHtml(appId, cc);
+      title = fb.title;
+      iconUrl = fb.icon;
+      shotUrls = fb.screenshots;
+      description = fb.description;
+      via = "html-fallback";
+    } catch (e2: any) {
+      if (/404|not found/i.test(libError)) {
+        throw new Error(`Không tìm thấy app "${appId}" trên Play Store ${cc.toUpperCase()}. Kiểm tra lại package id / Thị trường.`);
+      }
+      throw new Error(
+        `Không đọc được Play Store cho "${appId}" (${cc.toUpperCase()}). ` +
+          `Thư viện lỗi: ${libError}. Đọc trực tiếp cũng lỗi: ${e2?.message || e2}`,
+      );
     }
-    throw new Error(`Play Store lỗi cho "${appId}" (${cc.toUpperCase()}): ${msg}`);
   }
 
   const [iconBase64, screenshots] = await Promise.all([
-    app.icon ? toDataUrl(app.icon) : Promise.resolve(null),
-    fetchImagesToDataUrls(app.screenshots || [], shotLimit),
+    iconUrl ? toDataUrl(iconUrl) : Promise.resolve(null),
+    fetchImagesToDataUrls(shotUrls, shotLimit),
   ]);
 
   return {
-    appName: app.title as string,
+    appName: title,
     iconBase64,
     screenshots,
     platform: "android" as const,
-    description: String(app.description || "").replace(/<[^>]+>/g, " ").slice(0, 1200),
-    genre: app.genre || "",
-    rating: app.score ?? null,
-    developer: app.developer || "",
-    totalScreenshots: (app.screenshots || []).length,
+    description,
+    genre,
+    rating,
+    developer,
+    totalScreenshots: shotUrls.length,
+    /** "scraper" or "html-fallback" — tells you which path produced this. */
+    via,
+    ...(libError && via === "html-fallback" ? { scraperError: libError } : {}),
   };
 }
 
