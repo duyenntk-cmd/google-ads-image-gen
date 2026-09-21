@@ -464,6 +464,10 @@ export default function Home() {
   type AbStep = "input" | "generating" | "preview";
   const [abStep, setAbStep] = useState<AbStep>("input");
   const [abUrl, setAbUrl] = useState("");
+  const [abFetching, setAbFetching] = useState(false);
+  const [abFetched, setAbFetched] = useState<{name:string;icon:string|null;shots:number;genre:string;cc:string}|null>(null);
+  /** Which step Auto Prompt is on — it makes two calls and can take a minute. */
+  const [abPromptStep, setAbPromptStep] = useState("");
   const [abPrompt, setAbPrompt] = useState("");
   const [abCountry, setAbCountry] = useState("Global");
   const [abLang, setAbLang] = useState("Vietnamese");
@@ -490,10 +494,38 @@ export default function Home() {
     setAbBaseImages([]); setAbError(""); setAbStatus("");
   };
 
+  /**
+   * Confirms the URL resolves to a real app before anything is spent on it.
+   * Asks for a single screenshot — this is an identity check, not the real fetch.
+   */
+  const handleAbFetch = async () => {
+    if (!abUrl.trim() || abFetching) return;
+    setAbFetching(true);
+    setAbError("");
+    setAbFetched(null);
+    try {
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abCountry, limit: 1 }, 45000, "screenshots");
+      if (!ss.success) throw new Error(ss.error || "Không lấy được thông tin app.");
+      setAbFetched({
+        name: ss.appName || "(không rõ tên)",
+        icon: ss.iconBase64 || null,
+        shots: ss.totalScreenshots ?? (ss.screenshots?.length || 0),
+        genre: ss.genre || "",
+        cc: ss.countryCode || "",
+      });
+      if (ss.iconBase64) setAbIcon(ss.iconBase64);
+    } catch (e) {
+      setAbError("❌ Kiểm tra app lỗi: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setAbFetching(false);
+    }
+  };
+
   const handleAbAutoPrompt = async () => {
-    if (!abUrl.trim()) return;
+    if (!abUrl.trim() || abPromptLoading) return;
     setAbPromptLoading(true);
     setAbError("");
+    setAbPromptStep("Đang lấy dữ liệu từ store...");
     let storeWarn = "";
     try {
       // The store lookup is best-effort: Auto Prompt can still write a direction
@@ -512,6 +544,7 @@ export default function Home() {
       if (!appName) appName = abAppNameFromUrl(abUrl);
       if (!appName) throw new Error("Không xác định được tên app từ URL. " + storeWarn);
 
+      setAbPromptStep(`GPT đang phân tích "${appName}" và viết creative direction...`);
       const pd = await abFetchJson("/api/auto-prompt", { appName, niche: genre, screenshots: shots, country: abCountry, language: abLang }, 45000, "auto-prompt");
       if (!pd.success) throw new Error(pd.error || "auto-prompt thất bại.");
       if (!pd.prompt?.trim()) throw new Error("GPT trả về prompt rỗng — thử lại hoặc viết tay.");
@@ -522,6 +555,7 @@ export default function Home() {
       setAbError("❌ Auto Prompt lỗi: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       setAbPromptLoading(false);
+      setAbPromptStep("");
     }
   };
 
@@ -2098,23 +2132,65 @@ export default function Home() {
                   <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
                     🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
                   </label>
-                  <input value={abUrl} onChange={e => setAbUrl(e.target.value)}
-                    placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                  <div className="flex gap-2">
+                    <input value={abUrl}
+                      onChange={e => { setAbUrl(e.target.value); setAbFetched(null); }}
+                      onKeyDown={e => { if (e.key === "Enter") handleAbFetch(); }}
+                      placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
+                      className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                    <button onClick={handleAbFetch} disabled={!abUrl.trim() || abFetching}
+                      className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2">
+                      {abFetching
+                        ? <><span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Đang lấy...</>
+                        : <>🔍 Kiểm tra</>}
+                    </button>
+                  </div>
+
+                  {abFetched && (
+                    <div className="mt-2.5 flex items-center gap-3 p-2.5 rounded-xl border" style={{borderColor:"#10B98144", backgroundColor:"#10B9810F"}}>
+                      {abFetched.icon
+                        ? <img src={abFetched.icon} alt="" className="w-11 h-11 rounded-xl flex-shrink-0"/>
+                        : <div className="w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center text-lg" style={{backgroundColor:t.tabBg}}>📱</div>}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate" style={{color:t.text}}>{abFetched.name}</div>
+                        <div className="text-xs" style={{color:t.textMuted}}>
+                          {abFetched.shots} screenshot
+                          {abFetched.genre && <> · {abFetched.genre}</>}
+                          {abFetched.cc && <> · store {abFetched.cc.toUpperCase()}</>}
+                        </div>
+                      </div>
+                      <span className="text-emerald-500 text-lg flex-shrink-0">✓</span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>💡 Creative direction</label>
+                    {/* Keep a filled background while loading: a transparent one
+                        left white text on a white card, so the spinner vanished
+                        and the button looked like it had done nothing. */}
                     <button onClick={handleAbAutoPrompt} disabled={!abUrl.trim() || abPromptLoading}
-                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold disabled:opacity-40"
-                      style={{background: abPromptLoading ? "transparent" : "linear-gradient(135deg,#7C3AED,#EC4899)", color:"#fff", border: abPromptLoading ? "1px solid #7C3AED44" : "none"}}>
-                      {abPromptLoading ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>Đang tạo...</> : <>✨ Auto Prompt</>}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-white disabled:cursor-not-allowed"
+                      style={{background: abPromptLoading ? "#A78BFA" : "linear-gradient(135deg,#7C3AED,#EC4899)", opacity: !abUrl.trim() && !abPromptLoading ? 0.4 : 1, border: "none"}}>
+                      {abPromptLoading
+                        ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>Đang tạo...</>
+                        : <>✨ Auto Prompt</>}
                     </button>
                   </div>
+
+                  {abPromptLoading && (
+                    <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-lg text-xs" style={{backgroundColor:"#7C3AED14", color:"#A78BFA"}}>
+                      <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin flex-shrink-0" style={{borderColor:"#A78BFA", borderTopColor:"transparent"}}/>
+                      <span>{abPromptStep || "Đang xử lý..."}</span>
+                      <span className="ml-auto flex-shrink-0" style={{color:t.textMuted}}>có thể mất 10-40s</span>
+                    </div>
+                  )}
+
                   <textarea value={abPrompt} onChange={e => setAbPrompt(e.target.value)} rows={5}
+                    disabled={abPromptLoading}
                     placeholder="VD: Phong cách cinematic bold, gradient tím đậm, mascot vui vẻ cầm điện thoại, truyền cảm hứng cho người dùng 18-35 tuổi..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-y"
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-y disabled:opacity-60"
                     style={{...inputStyle, minHeight: 100, lineHeight: "1.6"}}/>
                 </div>
 
