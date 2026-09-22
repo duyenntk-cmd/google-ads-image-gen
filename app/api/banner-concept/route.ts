@@ -53,10 +53,17 @@ export async function POST(req: NextRequest) {
     const system =
       `Bạn là senior art director cho quảng cáo app mobile trên Google Ads. ` +
       `Phân tích mô tả app + screenshots + creative direction để tạo design brief.\n\n` +
-      `QUAN TRỌNG NHẤT — TÔN TRỌNG CREATIVE DIRECTION:\n` +
-      `Creative direction bên dưới do người dùng viết hoặc đã duyệt. Nếu trong đó đã ghi rõ\n` +
-      `Headline / Phụ đề / Tagline / CTA thì PHẢI DÙNG ĐÚNG NGUYÊN VĂN những câu đó,\n` +
-      `chỉ cắt bớt nếu vượt giới hạn ký tự. TUYỆT ĐỐI KHÔNG tự nghĩ câu khác thay thế.\n` +
+      `LUẬT SỐ 1 — NGÔN NGỮ, CAO HƠN MỌI LUẬT KHÁC:\n` +
+      `headline, subheadline, cta_text, tagline PHẢI viết bằng ${outLang}. Không ngoại lệ.\n` +
+      `Creative direction bên dưới là ghi chú nội bộ, thường viết bằng TIẾNG VIỆT — đó chỉ là\n` +
+      `ngôn ngữ ghi chú, KHÔNG phải ngôn ngữ của banner.\n` +
+      `Nếu câu chữ trong đó KHÔNG phải ${outLang} thì DỊCH tự nhiên sang ${outLang}\n` +
+      `(dịch theo ý, cho thuận tai người bản xứ, không dịch máy từng từ), giữ nguyên thông điệp.\n` +
+      `Nếu có phần nghĩa ghi trong ngoặc (thường là tiếng Việt) thì BỎ HẲN phần trong ngoặc đó.\n\n` +
+      `TÔN TRỌNG CREATIVE DIRECTION (sau khi đã tuân thủ luật số 1):\n` +
+      `Creative direction do người dùng viết hoặc đã duyệt. Nếu trong đó đã ghi rõ\n` +
+      `Headline / Phụ đề / Tagline / CTA thì GIỮ ĐÚNG Ý những câu đó — dùng nguyên văn khi\n` +
+      `câu đó đã đúng ${outLang}, còn lại thì dịch. TUYỆT ĐỐI KHÔNG tự nghĩ thông điệp khác.\n` +
       `Tương tự với bố cục, màu sắc, đạo cụ: nếu đã được nêu thì bám theo, đừng sáng tạo lại.\n` +
       `Chỉ tự đề xuất khi creative direction không nói gì về mục đó.\n\n` +
       `Headline/subheadline/cta viết bằng ${outLang}, ngắn và chuyển đổi cao.\n` +
@@ -131,6 +138,37 @@ export async function POST(req: NextRequest) {
     brief.key_visual ||= "soft floating UI cards and gentle sparkles";
     brief.text_zone ||= "bottom";
     brief.subject_position ||= "center";
+
+    // Last line of defence on the language rule. The creative direction is
+    // written in Vietnamese by design, and told to copy it the model sometimes
+    // copies the language too — which is how a German campaign shipped a
+    // Vietnamese headline. Characters below are Vietnamese-only; accented
+    // French or Spanish does not match, so this cannot fire on those.
+    if (outLang !== "Vietnamese") {
+      const VI_ONLY = /[ăâđêôơưĂÂĐÊÔƠƯầấậẩẫằắặẳẵềếệểễồốộổỗờớợởỡừứựửữạảẹẻịỉọỏụủỵỷỹ]/;
+      const COPY_FIELDS = ["headline", "subheadline", "cta_text", "tagline"] as const;
+      const offenders = COPY_FIELDS.filter((f) => typeof brief[f] === "string" && VI_ONLY.test(brief[f]));
+      if (offenders.length) {
+        try {
+          const fix = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            max_tokens: 200,
+            temperature: 0.4,
+            response_format: { type: "json_object" },
+            messages: [{
+              role: "user",
+              content:
+                `Dịch các câu quảng cáo sau sang ${outLang}, dịch THOÁT ý cho thuận tai người bản xứ, ` +
+                `giữ đúng giới hạn ký tự: headline <=30, subheadline <=45, cta_text <=12, tagline <=32. ` +
+                `Trả về JSON đúng các key đã cho, không thêm key nào khác.\n` +
+                JSON.stringify(Object.fromEntries(offenders.map((f) => [f, brief[f]]))),
+            }],
+          });
+          const t = JSON.parse(fix.choices[0]?.message?.content?.trim() || "{}");
+          for (const f of offenders) if (typeof t[f] === "string" && t[f].trim()) brief[f] = t[f].trim();
+        } catch { /* non-fatal: better a Vietnamese headline than no brief at all */ }
+      }
+    }
 
     return NextResponse.json({ success: true, brief });
   } catch (err: any) {

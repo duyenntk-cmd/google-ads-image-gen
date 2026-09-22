@@ -817,6 +817,8 @@ export default function Home() {
   const [abZipBase64, setAbZipBase64] = useState("");
   const [abTab, setAbTab] = useState<"top5"|"all">("all");
   const [abPromptLoading, setAbPromptLoading] = useState(false);
+  /** Ad-copy language the current creative direction was written for. */
+  const [abPromptLang, setAbPromptLang] = useState("");
   const [abCharacter, setAbCharacter] = useState<string|null>(null);
   const [abMascotUsed, setAbMascotUsed] = useState<string|null>(null);
   const [abUseScreenshot, setAbUseScreenshot] = useState(true);
@@ -918,6 +920,7 @@ export default function Home() {
       if (!pd.prompt?.trim()) throw new Error("GPT trả về prompt rỗng — thử lại hoặc viết tay.");
 
       setAbPrompt(pd.prompt.trim());
+      setAbPromptLang(abLang);
       if (storeWarn) setAbError(`⚠️ Auto Prompt chạy KHÔNG có screenshot (kém sát hơn): ${storeWarn}`);
     } catch (e) {
       setAbError("❌ Auto Prompt lỗi: " + (e instanceof Error ? e.message : String(e)));
@@ -2647,6 +2650,15 @@ export default function Home() {
                     placeholder={"Bấm ✨ Auto Prompt để GPT viết brief chi tiết, hoặc tự viết theo mẫu:\n\nBỐ CỤC\n- Nhân vật: ...\n- Phone mockup: ...\n- Đạo cụ: ...\n\nTEXT TRÊN BANNER\n- Headline: \"...\"\n- Phụ đề: \"...\"\n\nCTA\n- Nút: \"...\""}
                     className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-y disabled:opacity-60"
                     style={{...inputStyle, minHeight: 240, lineHeight: "1.65", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5}}/>
+                  {abPrompt.trim() && abPromptLang && abPromptLang !== abLang && (
+                    /* The direction quotes the headline and CTA in the language
+                       it was written for. Generating now would carry that copy
+                       into a campaign for a different market. */
+                    <p className="text-[11px] mt-1.5 px-2.5 py-1.5 rounded-lg" style={{backgroundColor:"#F59E0B14", color:"#F59E0B"}}>
+                      ⚠️ Creative direction này viết cho ad copy <b>{abPromptLang}</b>, nhưng bạn đang chọn <b>{abLang}</b>.
+                      Bấm ✨ Auto Prompt lại để viết theo <b>{abLang}</b>, nếu không chữ trên banner có thể ra sai ngôn ngữ.
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
