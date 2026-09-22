@@ -142,6 +142,54 @@ function isModelUnavailable(err: unknown): boolean {
   );
 }
 
+/**
+ * Models that rejected input_fidelity, remembered for the life of the instance.
+ *
+ * input_fidelity: "high" holds a reference character's identity across renders,
+ * which is exactly what an ad set needs — but it is not supported on every
+ * model. gpt-image-2.5-flare answers 400 "does not support the 'input_fidelity'
+ * parameter", and since that is a legitimate 400 rather than a missing model,
+ * the fallback chain used to surface it and abandon the whole run.
+ *
+ * Rather than hardcode which models accept it — a guess that ages badly — try it
+ * once, and drop it for that model if it is refused.
+ */
+const noInputFidelity = new Set<string>();
+
+function rejectsInputFidelity(err: unknown): boolean {
+  const e = err as { status?: number; message?: string };
+  return (e?.status === 400 || e?.status === 422) && /input_fidelity/i.test(String(e?.message || ""));
+}
+
+async function editWithOptionalFidelity(
+  openai: OpenAI,
+  model: string,
+  refFiles: Awaited<ReturnType<typeof toFile>>[],
+  prompt: string,
+  size: string,
+  quality: "low" | "medium" | "high",
+) {
+  const base = {
+    model,
+    image: refFiles.length === 1 ? refFiles[0] : refFiles,
+    prompt,
+    size,
+    quality,
+    n: 1,
+  };
+
+  if (!noInputFidelity.has(model)) {
+    try {
+      return await openai.images.edit({ ...base, input_fidelity: "high" });
+    } catch (e) {
+      if (!rejectsInputFidelity(e)) throw e;
+      noInputFidelity.add(model);
+      // fall through and retry without it
+    }
+  }
+  return await openai.images.edit(base);
+}
+
 export async function POST(req: NextRequest) {
   const unauth = await requireSession();
   if (unauth) return unauth;
@@ -198,16 +246,7 @@ export async function POST(req: NextRequest) {
 
       try {
         const result = useEdit
-          ? await openai.images.edit({
-              model,
-              image: refFiles.length === 1 ? refFiles[0] : refFiles,
-              prompt,
-              size,
-              quality: q,
-              // Holds the reference character's identity across all 20 renders.
-              input_fidelity: "high",
-              n: 1,
-            })
+          ? await editWithOptionalFidelity(openai, model, refFiles, prompt, size, q)
           : await openai.images.generate({ model, prompt, size, quality: q, n: 1 });
 
         b64 = result.data?.[0]?.b64_json;
