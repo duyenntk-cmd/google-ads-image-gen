@@ -61,6 +61,7 @@ function buildPrompt(
   platform: string,
   uiLanguage: string,
   revision: string,
+  removals: string[],
 ): string {
   const shape = shapeOf(targetW, targetH);
   const moodStyle = MOOD_STYLES[brief?.mood] || MOOD_STYLES.playful;
@@ -123,6 +124,14 @@ Leave everything else as described.
 `
     : "";
 
+  // Removals are listed as their own prohibitions as well as being edited out of
+  // the description above. A described thing tends to survive a mere "no X", so
+  // it has to be absent from the description AND named here.
+  const removalLines = (removals || [])
+    .filter((r) => r && r.trim())
+    .map((r) => `- ${r.trim()}. Do not substitute anything similar in its place — leave that area EMPTY background.`)
+    .join("\n");
+
   return `You are an award-winning art director for mobile app install advertising.
 Produce ONE finished advertising background, ${targetW}x${targetH}, for the app "${brief?.app_name || ""}".
 
@@ -157,7 +166,7 @@ RENDER QUALITY:
 MUST NOT APPEAR — these ruin the asset:
 - Any headline, slogan, caption, watermark, brand logo or app-store badge anywhere in the artwork. All ad copy is composited afterwards, so leave the artwork free of it.
   The ONLY exception is the interface INSIDE the phone screen, which is part of the device and may carry its own small UI labels.
-- Anything at all inside the RESERVED zones — they get covered by the layout.${localise ? `\n- English words on the phone screen. Every label there must read in ${uiLanguage}.` : ""}
+- Anything at all inside the RESERVED zones — they get covered by the layout.${removalLines ? `\n${removalLines}` : ""}${localise ? `\n- English words on the phone screen. Every label there must read in ${uiLanguage}.` : ""}
 - A SECOND character, mascot, robot or creature. Exactly ONE character in frame — the hero. An app icon shown as a flat badge is fine; a second animated face is not.
 - Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.
 - Borders, frames, drop-shadow edges, collage panels, or a visible canvas edge. Fill the frame completely, edge to edge.
@@ -238,7 +247,7 @@ export async function POST(req: NextRequest) {
   if (unauth) return unauth;
   try {
     const body = await req.json();
-    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle, platform, uiLanguage, revision } = body;
+    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle, platform, uiLanguage, revision, removals } = body;
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
@@ -269,7 +278,7 @@ export async function POST(req: NextRequest) {
     if (hasCharacter) refFiles.push(await dataUrlToFile(characterImage, "character.png"));
     if (hasScreenshot) refFiles.push(await dataUrlToFile(shots[0], "screenshot.png"));
 
-    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android", typeof uiLanguage === "string" ? uiLanguage : "", typeof revision === "string" ? revision : "");
+    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android", typeof uiLanguage === "string" ? uiLanguage : "", typeof revision === "string" ? revision : "", Array.isArray(removals) ? removals : []);
     const chain = precise ? PRECISE_CHAIN : MODEL_CHAIN;
 
     let b64: string | undefined;

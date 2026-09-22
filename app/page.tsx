@@ -814,6 +814,8 @@ export default function Home() {
    * twenty assets that share the tweak.
    */
   const [abRevision, setAbRevision] = useState("");
+  /** Things the revision asked to remove, forbidden explicitly in the prompt. */
+  const [abRemovals, setAbRemovals] = useState<string[]>([]);
   /**
    * Store data, brief and mascot from the last run. Regenerating reuses them so
    * a retry bills for one image instead of repeating the store call, the brief
@@ -829,7 +831,7 @@ export default function Home() {
     // Drop the cached run too, so the next generate re-reads the store.
     abRun.current = null;
     setAbMascotUsed(null);
-    setAbRevision("");
+    setAbRevision(""); setAbRemovals([]);
   };
 
   /**
@@ -901,7 +903,8 @@ export default function Home() {
     if (!abUrl.trim()) return;
     setAbStep("generating"); setAbError("");
     try {
-      let shots: string[], iconB64: string | null, theBrief: Brief, mascot: string | null, platform: string;
+      let shots: string[], iconB64: string | null, mascot: string | null, platform: string;
+      let theBrief: Brief;
 
       if (reuse && abRun.current) {
         // Retry path: the store call, brief and mascot are already paid for.
@@ -942,6 +945,24 @@ export default function Home() {
       abRun.current = { shots, icon: iconB64, brief: theBrief, mascot, platform };
       }
 
+      // Fold the revision into the brief before rendering. Bolting "remove X"
+      // onto a prompt that still describes X leaves X in the picture, so the
+      // description itself has to change. Pennies on gpt-4o-mini.
+      let removals: string[] = abRemovals;
+      if (abRevision.trim()) {
+        setAbStatus("✏️ Đang áp yêu cầu sửa vào mô tả...");
+        try {
+          const rv = await abFetchJson("/api/banner-revise", { brief: theBrief, revision: abRevision.trim() }, 45000, "banner-revise");
+          if (rv.success && rv.brief) {
+            theBrief = rv.brief;
+            setAbBrief(theBrief);
+            removals = Array.isArray(rv.removals) ? rv.removals : [];
+            setAbRemovals(removals);
+            if (abRun.current) abRun.current.brief = theBrief;
+          }
+        } catch { /* non-fatal: fall back to the prompt-level instruction alone */ }
+      }
+
       const referenceImages = abUseScreenshot ? shots.slice(0, 1) : [];
 
       const errors: string[] = [];
@@ -967,7 +988,7 @@ export default function Home() {
             brief: theBrief, userPrompt: abPrompt, quality: abQuality,
             width: c.width, height: c.height, key: c.key, angle: c.angle,
             referenceImages, characterImage: mascot, precise: abPrecise, platform, uiLanguage: abLang,
-              revision: abRevision.trim(),
+              revision: abRevision.trim(), removals,
           }, 300000, `banner-generate:${c.key}`)),
         AB_CONCURRENCY,
         (n) => setAbStatus(`🎨 Đang gen ${total} ảnh (${n}/${total})...`),
