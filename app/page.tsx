@@ -36,6 +36,8 @@ const AB_CONCURRENCY = 2;
 const AB_COST_PER_IMAGE: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
 /** Rough USD→VND rate, only for the on-screen estimate. Adjust if it drifts. */
 const AB_VND_PER_USD = 26000;
+/** abBusyKey sentinel for a multi-slot retry, which is not tied to one card. */
+const AB_BUSY_BATCH = "__batch";
 
 /**
  * Store country to pull screenshots from.
@@ -831,6 +833,12 @@ export default function Home() {
   const [abRevision, setAbRevision] = useState("");
   /** Things the revision asked to remove, forbidden explicitly in the prompt. */
   const [abRemovals, setAbRemovals] = useState<string[]>([]);
+  /** Slots that came back empty, so they can be retried without paying for the set. */
+  const [abFailed, setAbFailed] = useState<string[]>([]);
+  /** Which single slot is being regenerated, for the per-card spinner. */
+  const [abBusyKey, setAbBusyKey] = useState<string|null>(null);
+  /** Mirror of abPreviews: a partial regenerate merges into this synchronously. */
+  const abPrevRef = useRef<Preview[]>([]);
   /**
    * Store data, brief and mascot from the last run. Regenerating reuses them so
    * a retry bills for one image instead of repeating the store call, the brief
@@ -846,6 +854,8 @@ export default function Home() {
     // Drop the cached run too, so the next generate re-reads the store.
     abRun.current = null;
     setAbMascotUsed(null);
+    setAbFailed([]);
+    abPrevRef.current = [];
     setAbRevision(""); setAbRemovals([]);
   };
 
@@ -914,9 +924,19 @@ export default function Home() {
     }
   };
 
-  const handleAbGenerate = async (mode: "one"|"core"|"full" = abMode, reuse = false) => {
+  /**
+   * @param onlyKeys regenerate just these slots and merge them into what is on
+   *   screen. Retrying three failures cost a full set before this — 28,000₫ to
+   *   replace 4,200₫ of images.
+   */
+  const handleAbGenerate = async (mode: "one"|"core"|"full" = abMode, reuse = false, onlyKeys?: string[]) => {
     if (!abUrl.trim()) return;
-    setAbStep("generating"); setAbError("");
+    const partial = Boolean(onlyKeys?.length);
+    // A partial retry stays on the results screen: switching to the progress
+    // view would hide the very images being compared against.
+    if (partial) setAbBusyKey(onlyKeys!.length === 1 ? onlyKeys![0] : AB_BUSY_BATCH);
+    else setAbStep("generating");
+    setAbError("");
     try {
       let shots: string[], iconB64: string | null, mascot: string | null, platform: string;
       let theBrief: Brief;
@@ -981,6 +1001,7 @@ export default function Home() {
       const referenceImages = abUseScreenshot ? shots.slice(0, 1) : [];
 
       const errors: string[] = [];
+      const failedKeys: string[] = [];
       const bases: {key:string;label:string;dataUrl:string}[] = [];
       const baseFor: Record<string, HTMLImageElement> = {};
 
@@ -988,13 +1009,14 @@ export default function Home() {
       // pipeline before committing to all 20.
       // "one" previews a single square asset: the shape that reads composition
       // most clearly, and the cheapest thing to iterate on.
-      const slots =
-        mode === "full" ? APP_CREATIVES
+      const slots = partial
+        ? APP_CREATIVES.filter((c) => onlyKeys!.includes(c.key))
+        : mode === "full" ? APP_CREATIVES
         : mode === "core" ? APP_CREATIVES.filter((c) => c.isCore)
         : [APP_CREATIVES.find((c) => c.ratioKey === "square" && c.isCore)
            ?? APP_CREATIVES.find((c) => c.ratioKey === "square")
            ?? APP_CREATIVES[0]];
-      setAbLastMode(mode);
+      if (!partial) setAbLastMode(mode);
       const total = slots.length;
       setAbStatus(`🎨 Đang gen ${total} ảnh (0/${total})...`);
       const results = await abPool(
@@ -1015,11 +1037,16 @@ export default function Home() {
           if (c.isCore) bases.push({ key: c.key, label: c.label, dataUrl: r.value.images[0].dataUrl });
         } else {
           errors.push(`${c.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
+          failedKeys.push(c.key);
         }
       }
+      // A partial run only knows about the slots it retried; failures it did not
+      // touch are still failures.
+      setAbFailed((prev) =>
+        partial ? [...prev.filter((k) => !onlyKeys!.includes(k)), ...failedKeys] : failedKeys);
 
       if (!Object.keys(baseFor).length) throw new Error("Không gen được ảnh nào.\n" + errors.join("\n"));
-      setAbBaseImages(bases);
+      if (!partial || bases.length) setAbBaseImages(bases);
 
       setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${total} ảnh...`);
       const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
@@ -1042,22 +1069,37 @@ export default function Home() {
           ? abRenderPlain(base, c.width, c.height)
           : abRenderBanner(base, c.width, c.height, theBrief, iconImg);
         out.push({ key: c.key, width: c.width, height: c.height, label: c.label, isTop5: c.isCore, dataUrl });
-        const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), (ch) => ch.charCodeAt(0));
+      }
+
+      // Keep what is already on screen and swap in the slots just rendered, in
+      // the canonical order so the grid does not reshuffle around the new ones.
+      const byKey = new Map((partial ? abPrevRef.current : []).map((p) => [p.key, p]));
+      out.forEach((p) => byKey.set(p.key, p));
+      const merged = APP_CREATIVES.map((c) => byKey.get(c.key)).filter(Boolean) as Preview[];
+      abPrevRef.current = merged;
+      setAbPreviews(merged);
+
+      for (const p of merged) {
+        const c = APP_CREATIVES.find((x) => x.key === p.key)!;
+        const bytes = Uint8Array.from(atob(p.dataUrl.split(",")[1]), (ch) => ch.charCodeAt(0));
         folders[c.ratioKey].file(`${c.key}${c.noOverlay ? "_clean" : ""}.png`, bytes);
       }
-      setAbPreviews(out);
 
       const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
       const reader = new FileReader();
       reader.onload = () => setAbZipBase64((reader.result as string).split(",")[1]);
       reader.readAsDataURL(blob);
 
-      if (errors.length) setAbError("⚠️ Một số size lỗi:\n" + errors.join("\n"));
-      setAbStatus(`Xong: ${out.length} banner.`);
+      setAbError(errors.length ? "⚠️ Một số size lỗi:\n" + errors.join("\n") : "");
+      setAbStatus(`Xong: ${merged.length} banner.`);
       setAbStep("preview");
     } catch (e) {
       setAbError("❌ " + (e instanceof Error ? e.message : String(e)));
-      setAbStep("input");
+      // Dropping back to the form would throw away a finished set of 20 just
+      // because one retry failed.
+      if (!partial) setAbStep("input");
+    } finally {
+      setAbBusyKey(null);
     }
   };
 
@@ -2741,13 +2783,23 @@ export default function Home() {
                   <div className="flex gap-2 flex-wrap">
                     {/* Retries reuse the cached brief and mascot, so they bill for
                         the images only — worth saying, since the difference is 10x. */}
-                    <button onClick={() => handleAbGenerate(abLastMode, true)}
-                      className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>
+                    <button onClick={() => handleAbGenerate(abLastMode, true)} disabled={abBusyKey !== null}
+                      className="text-xs px-3 py-2 rounded-lg border disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
                       🔄 Gen lại ({abVnd((abLastMode === "full" ? APP_CREATIVES.length : abLastMode === "core" ? 3 : 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
                     </button>
+                    {abFailed.length > 0 && (
+                      /* Retrying the whole set to replace three failures cost
+                         the price of twenty images. This bills for three. */
+                      <button onClick={() => handleAbGenerate(abLastMode, true, abFailed)}
+                        disabled={abBusyKey !== null}
+                        className="text-xs font-semibold px-3 py-2 rounded-lg border disabled:opacity-40"
+                        style={{borderColor:"#F59E0B66", color:"#F59E0B", backgroundColor:"#F59E0B14"}}>
+                        {abBusyKey === AB_BUSY_BATCH ? "⏳ Đang gen lại..." : `↻ Gen lại ${abFailed.length} ảnh lỗi (${abVnd(abFailed.length * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})`}
+                      </button>
+                    )}
                     {abLastMode !== "full" && (
-                      <button onClick={() => handleAbGenerate("full", true)}
-                        className="text-sm font-semibold px-4 py-2 rounded-xl text-white"
+                      <button onClick={() => handleAbGenerate("full", true)} disabled={abBusyKey !== null}
+                        className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40"
                         style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
                         ✓ Duyệt → gen đủ {APP_CREATIVES.length} ({abVnd(APP_CREATIVES.length * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
                       </button>
@@ -2772,7 +2824,7 @@ export default function Home() {
                     className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-y"
                     style={{ ...inputStyle, minHeight: 56 }} />
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={() => handleAbGenerate(abLastMode, true)} disabled={!abRevision.trim()}
+                    <button onClick={() => handleAbGenerate(abLastMode, true)} disabled={!abRevision.trim() || abBusyKey !== null}
                       className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
                       style={{ background: abRevision.trim() ? "linear-gradient(135deg,#7C3AED,#EC4899)" : "#9CA3AF" }}>
                       ✏️ Sửa và gen lại ({abVnd((abLastMode === "full" ? APP_CREATIVES.length : abLastMode === "core" ? 3 : 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
@@ -2845,9 +2897,21 @@ export default function Home() {
                             </div>
                             <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
                           </div>
-                          <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
-                            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white"
-                            style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                          <div className="flex gap-1 flex-shrink-0">
+                            {/* One bad frame out of twenty is now a 1,400₫ fix
+                                rather than a reason to rerun the whole set. */}
+                            <button
+                              onClick={e => { e.stopPropagation(); handleAbGenerate(abLastMode, true, [p.key]); }}
+                              disabled={abBusyKey !== null}
+                              title={`Gen lại riêng ảnh này (${abVnd(AB_COST_PER_IMAGE[abQuality] ?? 0.211)})`}
+                              className={`${abBusyKey === p.key ? "" : "opacity-0 group-hover:opacity-100 "}text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white disabled:cursor-not-allowed`}
+                              style={{backgroundColor: t.tabBg, color: t.textSub}}>
+                              {abBusyKey === p.key ? "⏳" : "↻"}
+                            </button>
+                            <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
+                              className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white"
+                              style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                          </div>
                         </div>
                       </div>
                     );
