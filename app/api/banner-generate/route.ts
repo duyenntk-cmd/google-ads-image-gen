@@ -34,20 +34,37 @@ const BG_MODES: Record<string, string> = {
 /* Composition per final shape. Reserved zones are stated as percentages because
  * the canvas pass draws the logo, headline, CTA and Play badge into them, and
  * anything the model puts there gets covered. */
+/* Composition per final shape.
+ *
+ * The reserved area is stated FIRST and as an absolute. Listed after the props,
+ * it read as an afterthought: "props cluster in the upper-middle" put flashcards
+ * across the headline, because the upper middle of a square overlaps the column.
+ *
+ * The prop count is capped too. Left open, the model kept adding — an icon, two
+ * flashcards, a chart, a progress ring, sparkles — until the frame was noise.
+ */
 const SHAPE_LAYOUT: Record<ShapeKey, string> = {
   wide: `FRAME: wide 1.91:1.
-- Subject occupies the RIGHT 40% of the frame, full or three-quarter view, facing slightly left into the frame.
-- Supporting props sit around the subject, never crossing into the left half.
-- RESERVED, keep as clean background with NO objects: the LEFT 45% of the width, and the BOTTOM 28% of the height.`,
+- RESERVED AREA — absolutely nothing may enter it. Not the subject, not the phone,
+  not one prop, not a sparkle: the LEFT 45% of the width, and the BOTTOM 26% of
+  the height. Plain background only.
+- Subject inside the RIGHT 40%, three-quarter or full view, facing slightly left.
+- Phone mockup beside the subject, fully inside the right 55%.
+- AT MOST 2 supporting props, both inside the right 55%.`,
   square: `FRAME: square 1:1.
-- Subject occupies the RIGHT 45% of the frame, full or three-quarter view, facing slightly left into the frame.
-- Supporting props cluster in the upper-middle, around the subject.
-- RESERVED, keep as clean background with NO objects: the LEFT 40% of the width, the TOP-LEFT corner, and the BOTTOM 32% of the height.`,
+- RESERVED AREA — absolutely nothing may enter it. Not the subject, not the phone,
+  not one prop, not a sparkle: the LEFT 42% of the width, and the BOTTOM 30% of
+  the height. Plain background only.
+- Subject inside the RIGHT 45%, three-quarter or full view, facing slightly left.
+- Phone mockup beside the subject, fully inside the right 58%.
+- AT MOST 3 supporting props, all inside the right 58%, grouped near the top.`,
   tall: `FRAME: tall 4:5.
-- Subject centred horizontally, occupying the MIDDLE 45% of the height, full body or waist-up.
-- Supporting props sit beside and just above the subject.
-- RESERVED, keep as clean background with NO objects: the TOP 14% and the BOTTOM 34% of the height.`,
+- RESERVED AREA — absolutely nothing may enter it: the TOP 14% and the BOTTOM 34%
+  of the height. Plain background only.
+- Subject centred horizontally in the MIDDLE band, full body or waist-up.
+- AT MOST 3 supporting props, beside and just above the subject, inside that band.`,
 };
+
 
 function buildPrompt(
   brief: any,
@@ -101,6 +118,13 @@ section titles, button labels, tab names, status text. Translate them.
 Keep the same layout, icons, colours and arrangement as the reference — only the
 words change. Spell them correctly, with every diacritic in place.\n`
     : "";
+  // An open palm facing the viewer with fingers spread is where hands go wrong;
+  // saying "no malformed hands" does not help, naming the pose does.
+  const handsLine =
+    "HANDS: keep them simple. Holding the phone, resting relaxed, or one hand in a " +
+    "soft closed gesture. Do NOT show an open palm facing the viewer with fingers " +
+    "spread apart, and never two open hands at once.";
+
   const screenLine = hasScreenshot
     ? `PHONE: include a clean 3D mockup of ${device}, showing the app interface from the provided screenshot reference. Keep the real UI layout recognisable — same structure, do not invent a different interface.${uiLangLine} Screen sharp and upright, not tilted away.`
     : `PHONE: include a clean 3D mockup of ${device}, with a simple, plausible app interface on screen.${uiLangLine}`;
@@ -137,6 +161,7 @@ Produce ONE finished advertising background, ${targetW}x${targetH}, for the app 
 
 ${revisionBlock}
 ${heroLine}
+${handsLine}
 ${screenLine}
 ${uiLangBlock}
 SUPPORTING VISUALS (specific to this app — include these, not generic filler):
@@ -168,7 +193,9 @@ MUST NOT APPEAR — these ruin the asset:
   The ONLY exception is the interface INSIDE the phone screen, which is part of the device and may carry its own small UI labels.
 - Anything at all inside the RESERVED zones — they get covered by the layout.${removalLines ? `\n${removalLines}` : ""}${localise ? `\n- English words on the phone screen. Every label there must read in ${uiLanguage}.` : ""}
 - A SECOND character, mascot, robot or creature. Exactly ONE character in frame — the hero. An app icon shown as a flat badge is fine; a second animated face is not.
+- An open palm facing the viewer with spread fingers — the pose fingers come out wrong in.
 - Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.
+- More props than the frame calls for. A crowded frame reads as noise; stop at the stated count.
 - Borders, frames, drop-shadow edges, collage panels, or a visible canvas edge. Fill the frame completely, edge to edge.
 - Cluttered or busy composition. Fewer, better elements.`;
 }
