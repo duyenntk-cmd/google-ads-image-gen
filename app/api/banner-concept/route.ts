@@ -21,6 +21,8 @@ const BRIEF_SCHEMA = `Trả về DUY NHẤT một JSON object (không markdown, 
   "hero_subject": string,    // TIẾNG ANH. Nhân vật/chủ thể chính nên là gì và đang làm gì.
                              // vd "a young woman admiring her newly coloured hair in a hand mirror"
   "key_visual": string,      // TIẾNG ANH. 2-3 đạo cụ/hiệu ứng ĐẶC TRƯNG của app này, KHÔNG chung chung.
+                             // CHỈ là ĐỒ VẬT/hiệu ứng. KHÔNG được là nhân vật/mascot/robot thứ hai —
+                             // banner chỉ có DUY NHẤT một nhân vật là hero_subject.
                              // vd app làm tóc: "floating hair-colour swatch circles, a before/after split, soft sparkles"
                              // vd app học ngôn ngữ: "speech bubbles with small country flags, a globe"
                              // TUYỆT ĐỐI không dùng cờ quốc gia trừ khi app thật sự về ngôn ngữ/du lịch

@@ -92,7 +92,11 @@ function abHexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 function abHexA(hex: string, a: number) { const [r, g, b] = abHexToRgb(hex); return `rgba(${r},${g},${b},${a})`; }
-function abContrast(hex: string) { const [r, g, b] = abHexToRgb(hex); return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? "#141414" : "#ffffff"; }
+/** Whichever of black or white actually contrasts better — a 0.6 luminance cut
+ * put white type on mid tones where black would have read far better. */
+function abContrast(hex: string) {
+  return abContrastRatio(hex, "#141414") >= abContrastRatio(hex, "#FFFFFF") ? "#141414" : "#ffffff";
+}
 function abLighten(hex: string, amt: number) { const [r, g, b] = abHexToRgb(hex); const f = (c: number) => Math.round(c + (255 - c) * amt); return `rgb(${f(r)},${f(g)},${f(b)})`; }
 function abRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   r = Math.min(r, w / 2, h / 2);
@@ -137,10 +141,18 @@ function abLoadImg(src: string): Promise<HTMLImageElement> {
  * a light background — which is now the default, and what the reference the
  * owner supplied uses — so colour follows bg_mode instead.
  */
-/** Relative luminance, 0 (black) to 1 (white). */
-function abLum(hex: string) {
-  const [r, g, b] = abHexToRgb(hex);
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+/** WCAG relative luminance. */
+function abRelLum(hex: string) {
+  const [r, g, b] = abHexToRgb(hex).map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+/** WCAG contrast ratio, 1 (identical) to 21 (black on white). */
+function abContrastRatio(a: string, b: string) {
+  const la = abRelLum(a), lb = abRelLum(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 function abDarken(hex: string, amt: number) {
   const [r, g, b] = abHexToRgb(hex);
@@ -149,27 +161,84 @@ function abDarken(hex: string, amt: number) {
 }
 
 /**
- * A usable accent for light art.
+ * An accent strong enough to carry the CTA.
  *
- * The brief takes its palette from the app's screenshots, and those are often
- * mostly white — so accent_color came back near-white. That made the accent
- * headline line invisible and rendered the CTA pill as a white blob. Anything
- * too pale is darkened until it carries, falling back to the primary colour and
- * finally to a fixed violet.
+ * A filled button reads as the primary action when it is a saturated block with
+ * white type — that is the convention, and a pale fill reads as secondary even
+ * when technically legible. So the test is white-on-fill specifically, not the
+ * better of white or black: the earlier guard accepted #29B6F6 on a max() of
+ * both, and the button drew white on light blue at 2.2:1.
+ *
+ * Greyscale results are rejected rather than accepted as a dark grey button,
+ * which is what darkening a near-white accent would otherwise produce.
  */
 function abUsableAccent(brief: Brief): string {
-  const candidates = [brief.accent_color, brief.primary_color, "#7C3AED"];
-  for (const c of candidates) {
-    if (!c) continue;
-    if (abLum(c) <= 0.62) return c;
-    // Pale but not white: darken it rather than discard the brand hue.
-    if (abLum(c) < 0.9) {
-      let out = c;
-      for (let i = 0; i < 6 && abLum(out) > 0.55; i++) out = abDarken(out, 0.22);
-      if (abLum(out) <= 0.62) return out;
-    }
+  const chromatic = (c: string) => { const [r, g, b] = abHexToRgb(c); return Math.max(r, g, b) - Math.min(r, g, b) >= 25; };
+  const ok = (c: string) => abContrastRatio(c, "#FFFFFF") >= 4.5;
+  for (const c of [brief.accent_color, brief.primary_color]) {
+    if (!c || !chromatic(c)) continue;
+    let out = c;
+    for (let i = 0; i < 8 && !ok(out); i++) out = abDarken(out, 0.16);
+    if (ok(out) && chromatic(out)) return out;
   }
-  return "#7C3AED";
+  return "#6D28D9";
+}
+
+/**
+ * Brand name for the logo lockup.
+ *
+ * Store titles carry their positioning — "AI Language Tutor - Speka" — and set
+ * whole gave the lockup more width and weight than the headline, inverting the
+ * hierarchy. Splitting on the usual separators and keeping the shortest part
+ * recovers the brand from either ordering.
+ */
+function abBrandName(full: string): string {
+  const parts = (full || "").split(/\s*[-–—:|]\s*/).map((p) => p.trim()).filter((p) => p.length >= 2);
+  if (parts.length < 2) return (full || "").trim();
+  return parts.reduce((a, b) => {
+    const aw = a.split(/\s+/).length, bw = b.split(/\s+/).length;
+    if (bw !== aw) return bw < aw ? b : a;
+    return b.length < a.length ? b : a;
+  });
+}
+
+/**
+ * Wrap into balanced lines.
+ *
+ * Plain greedy wrapping fills each line to the edge and strands the remainder,
+ * giving "Học Ngôn Ngữ Thông / Minh". Pulling a word down just moves the stub,
+ * producing "Học Ngôn / Ngữ / Thông Minh". Instead, once the minimum line count
+ * is known, narrow the measure as far as it can go without adding a line — the
+ * lines even out on their own.
+ */
+function abBalancedWrap(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines = 3): string[] {
+  const natural = abWrap(ctx, text, maxW);
+  const target = Math.min(natural.length, maxLines);
+  if (target <= 1) return natural.slice(0, maxLines);
+  let best = natural;
+  for (let f = 0.98; f >= 0.55; f -= 0.02) {
+    const tryLines = abWrap(ctx, text, maxW * f);
+    if (tryLines.length > target) break;
+    best = tryLines;
+  }
+  return best.slice(0, maxLines);
+}
+
+/**
+ * Largest font at which `text` still fits `maxLines`, with the wrap balanced.
+ *
+ * Capping the line count alone silently dropped the remainder: a subheadline
+ * limited to two lines but wrapping to three lost its last words entirely.
+ * Shrinking instead keeps every word.
+ */
+function abFitLines(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines: number, startFs: number, weight: number) {
+  let fs = startFs;
+  for (; fs > 9; fs -= 1) {
+    ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
+    if (abWrap(ctx, text, maxW).length <= maxLines) break;
+  }
+  ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
+  return { fs, lines: abBalancedWrap(ctx, text, maxW, maxLines) };
 }
 
 function abInk(brief: Brief) {
@@ -182,9 +251,21 @@ function abInk(brief: Brief) {
 }
 
 /** Icon + app name. Gets a frosted chip only on dark art, where plain type would not read. */
-function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: HTMLImageElement | null, name: string, tagline: string, scale: number, ink: ReturnType<typeof abInk>) {
-  const iconS = Math.round(44 * scale), gap = Math.round(10 * scale);
-  const nameFs = Math.round(24 * scale), tagFs = Math.round(12 * scale);
+function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: HTMLImageElement | null, rawName: string, tagline: string, scale: number, ink: ReturnType<typeof abInk>, maxW = Infinity, headFs = Infinity) {
+  // The lockup identifies; the headline sells. Keep the brand mark clearly
+  // below the headline in weight, and never wider than the column.
+  const name = abBrandName(rawName);
+  const iconS = Math.round(40 * scale), gap = Math.round(9 * scale);
+  let nameFs = Math.round(Math.min(22 * scale, headFs * 0.52));
+  let tagFs = Math.max(9, Math.round(nameFs * 0.46));
+  if (Number.isFinite(maxW)) {
+    const fits = (f: number) => {
+      ctx.font = `800 ${f}px system-ui,Arial,sans-serif`;
+      return (icon ? iconS + gap : 0) + ctx.measureText(name).width <= maxW;
+    };
+    while (nameFs > 11 && !fits(nameFs)) nameFs -= 1;
+    tagFs = Math.max(9, Math.round(nameFs * 0.46));
+  }
   ctx.textAlign = "left";
   ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`;
   const nameW = ctx.measureText(name).width;
@@ -217,7 +298,7 @@ function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: H
     ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.logoText;
     ctx.fillText(name, cx, midY + nameFs * 0.05);
     ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.body;
-    ctx.fillText(abEllipsize(ctx, tagline, Math.max(40, chipW - (cx - x) - padX)), cx, midY + nameFs * 0.05 + tagFs + 4 * scale);
+    ctx.fillText(abEllipsize(ctx, tagline, Math.max(40, Math.min(maxW, chipW) - (cx - x) - padX)), cx, midY + nameFs * 0.05 + tagFs + 4 * scale);
   } else {
     ctx.textBaseline = "middle";
     ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.logoText;
@@ -348,14 +429,17 @@ function abDrawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, sc
  * The last headline line takes the accent colour, as in the reference.
  * Returns the y just below the block.
  */
-function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, brief: Brief, ink: ReturnType<typeof abInk>, headFs: number, subFs: number, maxLines = 3): number {
+function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, brief: Brief, ink: ReturnType<typeof abInk>, headFs0: number, subFs0: number, maxLines = 3): number {
+  let headFs = headFs0, subFs = subFs0;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   let cy = y;
   const headline = brief.headline || brief.app_name || "";
   if (headline) {
+    const fit = abFitLines(ctx, headline, maxW, maxLines, headFs, 900);
+    headFs = fit.fs;
+    const lines = fit.lines;
     ctx.font = `900 ${headFs}px system-ui,Arial,sans-serif`;
-    const lines = abWrap(ctx, headline, maxW).slice(0, maxLines);
     // One colour for the whole headline. Accenting the last line copied a
     // reference where the highlight fell on a chosen word; here it falls
     // wherever the text happens to wrap, which splits a phrase at random —
@@ -371,9 +455,11 @@ function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number
   const sub = brief.subheadline || "";
   if (sub) {
     cy += subFs * 0.7;
+    const sf = abFitLines(ctx, sub, maxW, 2, subFs, 500);
+    subFs = sf.fs;
     ctx.font = `500 ${subFs}px system-ui,Arial,sans-serif`;
     ctx.fillStyle = ink.body;
-    abWrap(ctx, sub, maxW).slice(0, 2).forEach((ln) => {
+    sf.lines.forEach((ln) => {
       cy += subFs;
       ctx.fillText(ln, x, cy);
       cy += subFs * 0.25;
@@ -448,9 +534,8 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
       ctx.fillStyle = g; ctx.fillRect(0, 0, colW + pad * 2, h);
     }
 
-    const logoH = abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink);
-
     const headFs = abClamp(Math.round(colW * 0.145), 15, 74);
+    const logoH = abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink, colW, headFs);
     const subFs = abClamp(Math.round(colW * 0.062), 11, 30);
     const ctaLabel = brief.cta_text || "Download";
     const ctaH = abCtaHeight(ctx, colW, ctaLabel, scale);
@@ -461,7 +546,9 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
     const blockTop = pad + logoH + pad * 0.8;
     const blockBottom = h - pad - ctaH - (showBadge ? badgeH + pad * 0.5 : 0) - pad * 0.8;
     const est = headFs * 2.4 + subFs * 2.6;
-    const startY = Math.max(blockTop, blockTop + (blockBottom - blockTop - est) / 2);
+    // Sit nearer the logo. Centring left a slack band above the CTA and
+    // another under the lockup, so neither read as deliberate.
+    const startY = Math.max(blockTop, blockTop + (blockBottom - blockTop - est) * 0.22);
 
     abDrawHeadlineBlock(ctx, pad, startY, colW, brief, ink, headFs, subFs);
 
@@ -481,10 +568,9 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
   g.addColorStop(1, abHexA(bandBase, 0.97));
   ctx.fillStyle = g; ctx.fillRect(0, h - bandH, w, bandH);
 
-  abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink);
-
   const maxW = w - pad * 2;
   const headFs = abClamp(Math.round(w * 0.075), 16, 78);
+  abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink, maxW, headFs);
   const subFs = abClamp(Math.round(w * 0.036), 12, 30);
   const ctaLabel = brief.cta_text || "Download";
   const ctaH = abCtaHeight(ctx, maxW, ctaLabel, scale);

@@ -93,6 +93,8 @@ ${screenLine}
 
 SUPPORTING VISUALS (specific to this app — include these, not generic filler):
 ${keyVisual}
+These are OBJECTS and effects only. They must not include a second character,
+mascot, robot or face — one hero, nothing competing with it.
 
 CREATIVE ANGLE for this particular asset — commit to it, this is what makes it
 differ from the others in the set:
@@ -116,6 +118,7 @@ RENDER QUALITY:
 MUST NOT APPEAR — these ruin the asset:
 - ANY text, letters, words, numbers, captions, labels, logos, watermarks or app-store badges. The frame must be 100% text-free; all copy is composited afterwards.
 - Anything at all inside the RESERVED zones — they get covered by the layout.
+- A SECOND character, mascot, robot or creature. Exactly ONE character in frame — the hero. An app icon shown as a flat badge is fine; a second animated face is not.
 - Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.
 - Borders, frames, drop-shadow edges, collage panels, or a visible canvas edge. Fill the frame completely, edge to edge.
 - Cluttered or busy composition. Fewer, better elements.`;
