@@ -2904,12 +2904,13 @@ export default function Home() {
                               onClick={e => { e.stopPropagation(); handleAbGenerate(abLastMode, true, [p.key]); }}
                               disabled={abBusyKey !== null}
                               title={`Gen lại riêng ảnh này (${abVnd(AB_COST_PER_IMAGE[abQuality] ?? 0.211)})`}
-                              className={`${abBusyKey === p.key ? "" : "opacity-0 group-hover:opacity-100 "}text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white disabled:cursor-not-allowed`}
+                              className="text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                               style={{backgroundColor: t.tabBg, color: t.textSub}}>
                               {abBusyKey === p.key ? "⏳" : "↻"}
                             </button>
                             <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
-                              className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white"
+                              title="Tải ảnh này"
+                              className="text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white"
                               style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
                           </div>
                         </div>
