@@ -77,6 +77,27 @@ const COUNTRY_CODES: Record<string, string> = {
   ghana: "gh",
 };
 
+/**
+ * Language code for the store listing.
+ *
+ * The Play Store serves a localized listing — including localized screenshots —
+ * per `lang`. That was pinned to "en", so switching to the Vietnam store still
+ * returned the English screenshots, and the phone mockup showed an English
+ * interface beside Vietnamese ad copy.
+ */
+const LANG_CODES: Record<string, string> = {
+  vietnamese: "vi", english: "en", japanese: "ja", korean: "ko", thai: "th",
+  indonesian: "id", "chinese simplified": "zh", arabic: "ar", spanish: "es",
+  portuguese: "pt", russian: "ru", french: "fr", german: "de", hindi: "hi",
+  bengali: "bn", filipino: "fil", malay: "ms",
+};
+function toLangCode(language?: string): string {
+  if (!language) return "en";
+  const l = language.trim().toLowerCase();
+  if (/^[a-z]{2,3}$/.test(l)) return l;
+  return LANG_CODES[l] || "en";
+}
+
 function toCountryCode(country?: string): string {
   if (!country) return "us";
   const c = country.trim().toLowerCase();
@@ -106,11 +127,11 @@ async function fetchImagesToDataUrls(urls: string[], limit: number): Promise<str
 }
 
 // --- iOS App Store via iTunes Lookup API ---
-async function fetchIOS(appUrl: string, cc: string, shotLimit = 4) {
+async function fetchIOS(appUrl: string, cc: string, shotLimit = 4, lang = "en") {
   const idMatch = appUrl.match(/id(\d+)/);
   if (!idMatch) throw new Error("Không tìm thấy App ID trong URL App Store.");
   const id = idMatch[1];
-  const lookupUrl = `https://itunes.apple.com/lookup?id=${id}&country=${cc}`;
+  const lookupUrl = `https://itunes.apple.com/lookup?id=${id}&country=${cc}&lang=${lang}_${cc}`;
   const res = await fetch(lookupUrl);
   if (!res.ok) throw new Error(`iTunes lookup lỗi (HTTP ${res.status}).`);
   const data = await res.json();
@@ -150,13 +171,13 @@ async function fetchIOS(appUrl: string, cc: string, shotLimit = 4) {
  * looks for the handful of things we need, using patterns that survive layout
  * changes, so a future break degrades to fewer screenshots rather than nothing.
  */
-async function fetchAndroidFromHtml(appId: string, cc: string) {
-  const url = `https://play.google.com/store/apps/details?id=${encodeURIComponent(appId)}&hl=en&gl=${cc.toUpperCase()}`;
+async function fetchAndroidFromHtml(appId: string, cc: string, lang = "en") {
+  const url = `https://play.google.com/store/apps/details?id=${encodeURIComponent(appId)}&hl=${lang}&gl=${cc.toUpperCase()}`;
   const res = await fetch(url, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Language": `${lang},en;q=0.8`,
     },
     signal: AbortSignal.timeout(20000),
   });
@@ -191,7 +212,7 @@ async function fetchAndroidFromHtml(appId: string, cc: string) {
 }
 
 // --- Android Play Store: library first, direct HTML as the safety net ---
-async function fetchAndroid(appUrl: string, cc: string, shotLimit = 4) {
+async function fetchAndroid(appUrl: string, cc: string, shotLimit = 4, lang = "en") {
   const idMatch = appUrl.match(/[?&]id=([^&]+)/);
   if (!idMatch) throw new Error("Không tìm thấy package id (?id=...) trong URL Play Store.");
   const appId = decodeURIComponent(idMatch[1]);
@@ -207,7 +228,7 @@ async function fetchAndroid(appUrl: string, cc: string, shotLimit = 4) {
   let libError = "";
 
   try {
-    const app = await (gplay as any).app({ appId, country: cc, lang: "en" });
+    const app = await (gplay as any).app({ appId, country: cc, lang });
     title = app.title || "";
     iconUrl = app.icon || "";
     shotUrls = app.screenshots || [];
@@ -229,7 +250,7 @@ async function fetchAndroid(appUrl: string, cc: string, shotLimit = 4) {
     }
 
     try {
-      const fb = await fetchAndroidFromHtml(appId, cc);
+      const fb = await fetchAndroidFromHtml(appId, cc, lang);
       title = fb.title;
       iconUrl = fb.icon;
       shotUrls = fb.screenshots;
@@ -271,7 +292,7 @@ export async function POST(req: NextRequest) {
   const unauth = await requireSession();
   if (unauth) return unauth;
   try {
-    const { appUrl, country, limit } = await req.json();
+    const { appUrl, country, limit, language } = await req.json();
     if (!appUrl || typeof appUrl !== "string") {
       return NextResponse.json({ success: false, error: "Thiếu appUrl." }, { status: 400 });
     }
@@ -281,12 +302,13 @@ export async function POST(req: NextRequest) {
     const shotLimit = Number.isFinite(Number(limit)) ? Math.max(0, Math.min(4, Number(limit))) : 4;
 
     const cc = toCountryCode(country);
+    const lang = toLangCode(language);
     const isIOS = /apps\.apple\.com|itunes\.apple\.com/i.test(appUrl);
     const isAndroid = /play\.google\.com/i.test(appUrl);
 
     let result;
-    if (isIOS) result = await fetchIOS(appUrl, cc, shotLimit);
-    else if (isAndroid) result = await fetchAndroid(appUrl, cc, shotLimit);
+    if (isIOS) result = await fetchIOS(appUrl, cc, shotLimit, lang);
+    else if (isAndroid) result = await fetchAndroid(appUrl, cc, shotLimit, lang);
     else
       return NextResponse.json(
         { success: false, error: "URL phải là App Store (apps.apple.com) hoặc Play Store (play.google.com)." },
@@ -300,7 +322,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true, countryCode: cc, ...result });
+    return NextResponse.json({ success: true, countryCode: cc, langCode: lang, ...result });
   } catch (err: any) {
     return NextResponse.json(
       { success: false, error: err?.message || "Lỗi không xác định khi fetch app." },

@@ -815,7 +815,7 @@ export default function Home() {
     setAbError("");
     setAbFetched(null);
     try {
-      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), limit: 1 }, 45000, "screenshots");
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang, limit: 1 }, 45000, "screenshots");
       if (!ss.success) throw new Error(ss.error || "Không lấy được thông tin app.");
       setAbFetched({
         name: ss.appName || "(không rõ tên)",
@@ -843,7 +843,7 @@ export default function Home() {
       // from the app name alone, so a store failure is a warning, not a stop.
       let appName = "", shots: string[] = [], genre = "";
       try {
-        const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), limit: 2 }, 45000, "screenshots");
+        const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang, limit: 2 }, 45000, "screenshots");
         if (ss.success) {
           appName = ss.appName || "";
           shots = (ss.screenshots || []).slice(0, 2);
@@ -883,7 +883,7 @@ export default function Home() {
       } else {
       setAbMascotUsed(null);
       setAbStatus("📱 Đang lấy thông tin app...");
-      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang) }, 60000, "screenshots");
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang }, 60000, "screenshots");
       if (!ss.success) throw new Error(ss.error);
       shots = ss.screenshots || [];
       const appName: string = ss.appName || "";
@@ -939,7 +939,7 @@ export default function Home() {
           abFetchJson("/api/banner-generate", {
             brief: theBrief, userPrompt: abPrompt, quality: abQuality,
             width: c.width, height: c.height, key: c.key, angle: c.angle,
-            referenceImages, characterImage: mascot, precise: abPrecise, platform,
+            referenceImages, characterImage: mascot, precise: abPrecise, platform, uiLanguage: abLang,
           }, 300000, `banner-generate:${c.key}`)),
         AB_CONCURRENCY,
         (n) => setAbStatus(`🎨 Đang gen ${total} ảnh (${n}/${total})...`),

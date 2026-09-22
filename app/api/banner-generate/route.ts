@@ -59,6 +59,7 @@ function buildPrompt(
   hasScreenshot: boolean,
   angle: string,
   platform: string,
+  uiLanguage: string,
 ): string {
   const shape = shapeOf(targetW, targetH);
   const moodStyle = MOOD_STYLES[brief?.mood] || MOOD_STYLES.playful;
@@ -82,9 +83,16 @@ function buildPrompt(
     platform === "ios"
       ? "a modern iPhone: rounded corners, a pill-shaped cutout at the top of the screen, polished metal edges"
       : "a modern ANDROID phone: flat or gently curved edges, a small CENTRED hole-punch camera at the top of the screen, slim uniform bezels. NOT an iPhone — no notch, no pill-shaped cutout";
+  // Developers often ship one English screenshot set for every market, so the
+  // reference can be English even from the right store. The layout is what must
+  // be faithful; the labels should read in the language the banner speaks.
+  const uiLangLine =
+    uiLanguage && !/^english$/i.test(uiLanguage)
+      ? ` Any words visible on the phone screen must be written in ${uiLanguage} — keep the same layout, buttons and icons as the reference, but localise the labels. Spell them correctly, with the right diacritics.`
+      : "";
   const screenLine = hasScreenshot
-    ? `PHONE: include a clean 3D mockup of ${device}, showing the app interface from the provided screenshot reference. Keep the real UI recognisable — do not invent a fake interface. Screen sharp and upright, not tilted away.`
-    : `PHONE: include a clean 3D mockup of ${device}, with a simple, plausible app interface on screen.`;
+    ? `PHONE: include a clean 3D mockup of ${device}, showing the app interface from the provided screenshot reference. Keep the real UI layout recognisable — same structure, do not invent a different interface.${uiLangLine} Screen sharp and upright, not tilted away.`
+    : `PHONE: include a clean 3D mockup of ${device}, with a simple, plausible app interface on screen.${uiLangLine}`;
 
   const cropLine =
     cropKeep < 0.95
@@ -124,7 +132,8 @@ RENDER QUALITY:
 - Colours vivid but not oversaturated; no muddy greys.
 
 MUST NOT APPEAR — these ruin the asset:
-- ANY text, letters, words, numbers, captions, labels, logos, watermarks or app-store badges. The frame must be 100% text-free; all copy is composited afterwards.
+- Any headline, slogan, caption, watermark, brand logo or app-store badge anywhere in the artwork. All ad copy is composited afterwards, so leave the artwork free of it.
+  The ONLY exception is the interface INSIDE the phone screen, which is part of the device and may carry its own small UI labels.
 - Anything at all inside the RESERVED zones — they get covered by the layout.
 - A SECOND character, mascot, robot or creature. Exactly ONE character in frame — the hero. An app icon shown as a flat badge is fine; a second animated face is not.
 - Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.
@@ -206,7 +215,7 @@ export async function POST(req: NextRequest) {
   if (unauth) return unauth;
   try {
     const body = await req.json();
-    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle, platform } = body;
+    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle, platform, uiLanguage } = body;
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
@@ -237,7 +246,7 @@ export async function POST(req: NextRequest) {
     if (hasCharacter) refFiles.push(await dataUrlToFile(characterImage, "character.png"));
     if (hasScreenshot) refFiles.push(await dataUrlToFile(shots[0], "screenshot.png"));
 
-    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android");
+    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android", typeof uiLanguage === "string" ? uiLanguage : "");
     const chain = precise ? PRECISE_CHAIN : MODEL_CHAIN;
 
     let b64: string | undefined;
