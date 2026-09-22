@@ -137,12 +137,48 @@ function abLoadImg(src: string): Promise<HTMLImageElement> {
  * a light background — which is now the default, and what the reference the
  * owner supplied uses — so colour follows bg_mode instead.
  */
+/** Relative luminance, 0 (black) to 1 (white). */
+function abLum(hex: string) {
+  const [r, g, b] = abHexToRgb(hex);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+function abDarken(hex: string, amt: number) {
+  const [r, g, b] = abHexToRgb(hex);
+  const f = (c: number) => Math.round(c * (1 - amt));
+  return `#${[f(r), f(g), f(b)].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * A usable accent for light art.
+ *
+ * The brief takes its palette from the app's screenshots, and those are often
+ * mostly white — so accent_color came back near-white. That made the accent
+ * headline line invisible and rendered the CTA pill as a white blob. Anything
+ * too pale is darkened until it carries, falling back to the primary colour and
+ * finally to a fixed violet.
+ */
+function abUsableAccent(brief: Brief): string {
+  const candidates = [brief.accent_color, brief.primary_color, "#7C3AED"];
+  for (const c of candidates) {
+    if (!c) continue;
+    if (abLum(c) <= 0.62) return c;
+    // Pale but not white: darken it rather than discard the brand hue.
+    if (abLum(c) < 0.9) {
+      let out = c;
+      for (let i = 0; i < 6 && abLum(out) > 0.55; i++) out = abDarken(out, 0.22);
+      if (abLum(out) <= 0.62) return out;
+    }
+  }
+  return "#7C3AED";
+}
+
 function abInk(brief: Brief) {
   const light = (brief as { bg_mode?: string }).bg_mode !== "dark";
   const secondary = brief.secondary_color || "#1A1A2E";
+  const accent = abUsableAccent(brief);
   return light
-    ? { heading: "#14142B", body: "rgba(20,20,43,0.72)", logoText: "#14142B", chip: false, scrim: false, accentText: brief.accent_color || "#C2185B" }
-    : { heading: "#FFFFFF", body: "rgba(255,255,255,0.88)", logoText: "#FFFFFF", chip: true, scrim: true, accentText: abLighten(brief.accent_color || "#FF6B35", 0.15), scrimColor: secondary };
+    ? { heading: "#14142B", body: "rgba(20,20,43,0.72)", logoText: "#14142B", chip: false, scrim: false, accentText: accent, accent }
+    : { heading: "#FFFFFF", body: "rgba(255,255,255,0.88)", logoText: "#FFFFFF", chip: true, scrim: true, accentText: abLighten(accent, 0.15), accent, scrimColor: secondary };
 }
 
 /** Icon + app name. Gets a frosted chip only on dark art, where plain type would not read. */
@@ -248,20 +284,61 @@ function abDrawCTA(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: nu
   return bh;
 }
 
-function abDrawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
-  const bh = Math.round(46 * scale), bw = Math.round(150 * scale);
+/**
+ * The Google Play mark: four facets meeting at a fold on the centre line.
+ * A→P is the straight top edge and B→P the bottom, with the yellow wedge at the
+ * tip, which is what makes it read as the real logo rather than a plain
+ * triangle. Previous version drew one flat blue triangle.
+ */
+function abDrawPlayMark(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+  const h = size, w = size * 0.88;
+  const L = cx - w / 2, R = cx + w / 2, T = cy - h / 2, B = cy + h / 2;
+  const K = [L + w * 0.58, cy] as const;                 // the fold
+  const Q = [L + w * 0.72, T + h * 0.21] as const;       // on the top edge
+  const Rd = [L + w * 0.72, B - h * 0.21] as const;      // on the bottom edge
+  const P = [R, cy] as const;                            // the tip
+
+  const tri = (pts: readonly (readonly [number, number])[], fill: string) => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    pts.slice(1).forEach((p) => ctx.lineTo(p[0], p[1]));
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+  };
+
+  tri([[L, T], [L, B], K], "#00A0FF");        // blue spine
+  tri([[L, T], Q, K], "#00D26A");             // green, upper
+  tri([Q, P, Rd, K], "#FFCE00");              // yellow wedge at the tip
+  tri([[L, B], Rd, K], "#FF3A44");            // red, lower
+}
+
+/**
+ * Store badge. Black with white type on dark art, white with dark type on light
+ * art — a black slab was the heaviest thing on a bright banner.
+ */
+function abDrawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number, onLight: boolean) {
+  const bh = Math.round(46 * scale), bw = Math.round(152 * scale);
   ctx.save();
-  ctx.fillStyle = "#000000"; abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale)); ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = Math.max(1, scale);
-  abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale)); ctx.stroke();
-  const tx = x + bh * 0.28, ty = y + bh / 2, s = bh * 0.28;
-  ctx.fillStyle = "#12B5FF";
-  ctx.beginPath(); ctx.moveTo(tx - s * 0.7, ty - s); ctx.lineTo(tx - s * 0.7, ty + s); ctx.lineTo(tx + s * 0.9, ty); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = onLight ? "#FFFFFF" : "#000000";
+  abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale));
+  ctx.fill();
+  ctx.strokeStyle = onLight ? "rgba(20,20,43,0.20)" : "rgba(255,255,255,0.35)";
+  ctx.lineWidth = Math.max(1, scale);
+  abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale));
+  ctx.stroke();
+
+  abDrawPlayMark(ctx, x + bh * 0.52, y + bh / 2, bh * 0.56);
+
   const textX = x + bh * 0.95;
   ctx.textAlign = "left";
-  ctx.fillStyle = "#ffffff"; ctx.textBaseline = "alphabetic";
-  ctx.font = `500 ${Math.round(9 * scale)}px system-ui,Arial,sans-serif`; ctx.fillText("GET IT ON", textX, y + bh * 0.42);
-  ctx.font = `700 ${Math.round(17 * scale)}px system-ui,Arial,sans-serif`; ctx.fillText("Google Play", textX, y + bh * 0.82);
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = onLight ? "rgba(20,20,43,0.75)" : "#ffffff";
+  ctx.font = `500 ${Math.round(9 * scale)}px system-ui,Arial,sans-serif`;
+  ctx.fillText("GET IT ON", textX, y + bh * 0.42);
+  ctx.fillStyle = onLight ? "#14142B" : "#ffffff";
+  ctx.font = `700 ${Math.round(17 * scale)}px system-ui,Arial,sans-serif`;
+  ctx.fillText("Google Play", textX, y + bh * 0.82);
   ctx.restore();
   return bh;
 }
@@ -331,7 +408,7 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
   const ink = abInk(brief);
   const scale = abClamp(Math.min(w, h) / 500, 0.34, 2.2);
   const pad = Math.max(8, Math.round(Math.min(w, h) * 0.055));
-  const accent = brief.accent_color || "#FF6B35";
+  const accent = ink.accent;
   const ratio = w / h;
 
   // Strips are too short for a stack; one line of headline plus a small CTA.
@@ -384,7 +461,7 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
     abDrawHeadlineBlock(ctx, pad, startY, colW, brief, ink, headFs, subFs);
 
     let cy = h - pad;
-    if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale); cy -= pad * 0.5; }
+    if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale, !ink.scrim); cy -= pad * 0.5; }
     cy -= ctaH;
     abDrawCTA(ctx, pad, cy, colW, ctaLabel, accent, scale);
     return canvas.toDataURL("image/png");
@@ -413,7 +490,7 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
   abDrawHeadlineBlock(ctx, pad, textTop, maxW, brief, ink, headFs, subFs, 2);
 
   let cy = h - pad;
-  if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale); cy -= pad * 0.5; }
+  if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale, !ink.scrim); cy -= pad * 0.5; }
   cy -= ctaH;
   abDrawCTA(ctx, pad, cy, maxW, ctaLabel, accent, scale);
 
