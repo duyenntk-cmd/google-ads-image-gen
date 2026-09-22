@@ -23,7 +23,15 @@ type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
  */
 
 /** Parallel image requests in flight, to stay under OpenAI's images rate limit. */
-const AB_CONCURRENCY = 4;
+/**
+ * Requests in flight.
+ *
+ * The images endpoint meters input images per minute separately — an edit call
+ * sends a mascot and a screenshot, so four in flight blew through a limit of 5
+ * immediately. Two leaves room for the server-side retry to recover instead of
+ * every request queueing behind the same wall.
+ */
+const AB_CONCURRENCY = 2;
 /** Rough OpenAI list price per image, for the cost hint in the UI. */
 const AB_COST_PER_IMAGE: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
 /** Rough USD→VND rate, only for the on-screen estimate. Adjust if it drifts. */

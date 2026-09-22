@@ -205,6 +205,27 @@ async function dataUrlToFile(dataUrl: string, name: string) {
   return toFile(Buffer.from(b64, "base64"), name, { type: "image/png" });
 }
 
+/**
+ * Waits out a rate limit and says how long for.
+ *
+ * The images endpoint limits *input images per minute* separately, and an edit
+ * call sends two references — a mascot and a screenshot — so a 20-image run
+ * exhausts a limit of 5 within seconds. OpenAI states the wait in the message
+ * ("Please try again in 12s"), so honour it rather than guessing a backoff.
+ *
+ * Returns null when the error is not a rate limit.
+ */
+function rateLimitWaitMs(err: unknown): number | null {
+  const e = err as { status?: number; message?: string };
+  if (e?.status !== 429) return null;
+  const m = /try again in ([\d.]+)\s*(ms|s)/i.exec(String(e?.message || ""));
+  if (!m) return 15000;
+  const n = parseFloat(m[1]);
+  // A second of headroom: the window is measured on their clock, not ours.
+  return Math.min(60000, (m[2].toLowerCase() === "ms" ? n : n * 1000) + 1000);
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** A model the account cannot reach should fall through, not abort the run. */
 function isModelUnavailable(err: unknown): boolean {
   const e = err as { status?: number; response?: { status?: number }; message?: string };
@@ -309,6 +330,7 @@ export async function POST(req: NextRequest) {
     const chain = precise ? PRECISE_CHAIN : MODEL_CHAIN;
 
     let b64: string | undefined;
+    let waited = 0;
     let usedModel = "";
     let genSize = plan.size;
     const tried: string[] = [];
@@ -324,9 +346,22 @@ export async function POST(req: NextRequest) {
         : plan.size;
 
       try {
-        const result = useEdit
-          ? await editWithOptionalFidelity(openai, model, refFiles, prompt, size, q)
-          : await openai.images.generate({ model, prompt, size, quality: q, n: 1 });
+        let result;
+        // Retry the same model on a rate limit rather than falling through to an
+        // older one: a 429 says "later", not "not available here".
+        for (let attempt = 0; ; attempt++) {
+          try {
+            result = useEdit
+              ? await editWithOptionalFidelity(openai, model, refFiles, prompt, size, q)
+              : await openai.images.generate({ model, prompt, size, quality: q, n: 1 });
+            break;
+          } catch (e) {
+            const wait = rateLimitWaitMs(e);
+            if (wait === null || attempt >= 4) throw e;
+            waited += wait;
+            await sleep(wait);
+          }
+        }
 
         b64 = result.data?.[0]?.b64_json;
         if (b64) {
@@ -352,6 +387,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       model: usedModel,
+      // Surfaced so a slow run reads as throttling rather than as the tool hanging.
+      rateLimitWaitMs: waited || undefined,
       images: [
         {
           key: sizeKey,
