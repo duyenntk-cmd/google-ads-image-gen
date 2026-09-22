@@ -80,6 +80,9 @@ export interface AdCreative {
 export const APP_CREATIVES: AdCreative[] = RATIO_SPECS.flatMap((spec) =>
   Array.from({ length: spec.count }, (_, i) => {
     const angle = ANGLES[i % ANGLES.length];
+    // Slot 0 of each ratio ships clean, per Google's advice to include at least
+    // one asset per ratio without text burned in.
+    const noOverlay = i === 0;
     return {
       key: `${spec.key}-${i + 1}`,
       width: spec.width,
@@ -90,8 +93,11 @@ export const APP_CREATIVES: AdCreative[] = RATIO_SPECS.flatMap((spec) =>
       usage: `${spec.width}×${spec.height}`,
       angle: angle.direction,
       angleLabel: angle.label,
-      noOverlay: i === 0,
-      isCore: i === 0,
+      noOverlay,
+      // The preview set must carry the overlay: 17 of 20 assets have one, and a
+      // clean render tells you nothing about how the headline and CTA sit.
+      // Slot 1 where it exists, otherwise fall back to the only slot there is.
+      isCore: spec.count > 1 ? i === 1 : i === 0,
     };
   }),
 );

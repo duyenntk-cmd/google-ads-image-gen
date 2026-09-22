@@ -634,7 +634,9 @@ export default function Home() {
       const slots =
         mode === "full" ? APP_CREATIVES
         : mode === "core" ? APP_CREATIVES.filter((c) => c.isCore)
-        : [APP_CREATIVES.find((c) => c.ratioKey === "square") ?? APP_CREATIVES[0]];
+        : [APP_CREATIVES.find((c) => c.ratioKey === "square" && c.isCore)
+           ?? APP_CREATIVES.find((c) => c.ratioKey === "square")
+           ?? APP_CREATIVES[0]];
       setAbLastMode(mode);
       const total = slots.length;
       setAbStatus(`🎨 Đang gen ${total} ảnh (0/${total})...`);
@@ -2448,7 +2450,12 @@ export default function Home() {
                         </div>
                         <div className="flex items-center justify-between">
                           <div>
-                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
+                            <div className="text-xs font-semibold flex items-center gap-1" style={{color: t.text}}>
+                              {p.key}
+                              {APP_CREATIVES.find(c => c.key === p.key)?.noOverlay && (
+                                <span className="text-[9px] px-1 py-0.5 rounded" style={{backgroundColor:"#10B98122", color:"#10B981"}}>sạch</span>
+                              )}
+                            </div>
                             <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
                           </div>
                           <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
@@ -2699,7 +2706,12 @@ export default function Home() {
                         </div>
                         <div className="flex items-center justify-between">
                           <div>
-                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
+                            <div className="text-xs font-semibold flex items-center gap-1" style={{color: t.text}}>
+                              {p.key}
+                              {APP_CREATIVES.find(c => c.key === p.key)?.noOverlay && (
+                                <span className="text-[9px] px-1 py-0.5 rounded" style={{backgroundColor:"#10B98122", color:"#10B981"}}>sạch</span>
+                              )}
+                            </div>
                             <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
                           </div>
                           <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
