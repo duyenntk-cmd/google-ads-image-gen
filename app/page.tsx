@@ -356,9 +356,14 @@ function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number
   if (headline) {
     ctx.font = `900 ${headFs}px system-ui,Arial,sans-serif`;
     const lines = abWrap(ctx, headline, maxW).slice(0, maxLines);
-    lines.forEach((ln, i) => {
+    // One colour for the whole headline. Accenting the last line copied a
+    // reference where the highlight fell on a chosen word; here it falls
+    // wherever the text happens to wrap, which splits a phrase at random —
+    // "Học Ngôn Ngữ Thông / Minh" left "Minh" a different colour from its own
+    // sentence. A highlight has to be chosen, not inherited from line breaks.
+    ctx.fillStyle = ink.heading;
+    lines.forEach((ln) => {
       cy += headFs;
-      ctx.fillStyle = lines.length > 1 && i === lines.length - 1 ? ink.accentText : ink.heading;
       ctx.fillText(ln, x, cy);
       cy += headFs * 0.16;
     });
