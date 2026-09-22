@@ -86,10 +86,19 @@ function buildPrompt(
   // Developers often ship one English screenshot set for every market, so the
   // reference can be English even from the right store. The layout is what must
   // be faithful; the labels should read in the language the banner speaks.
-  const uiLangLine =
-    uiLanguage && !/^english$/i.test(uiLanguage)
-      ? ` Any words visible on the phone screen must be written in ${uiLanguage} — keep the same layout, buttons and icons as the reference, but localise the labels. Spell them correctly, with the right diacritics.`
-      : "";
+  const localise = Boolean(uiLanguage) && !/^english$/i.test(uiLanguage);
+  const uiLangLine = "";
+  // Given as its own block, not appended to the PHONE line: buried at the end of
+  // a long sentence the model kept copying the reference's English labels
+  // verbatim. It is repeated in the MUST list below for the same reason.
+  const uiLangBlock = localise
+    ? `\nSCREEN LANGUAGE — THIS MATTERS:
+The reference screenshot may be in English. DO NOT copy its words.
+Every word rendered on the phone screen must be written in ${uiLanguage}:
+section titles, button labels, tab names, status text. Translate them.
+Keep the same layout, icons, colours and arrangement as the reference — only the
+words change. Spell them correctly, with every diacritic in place.\n`
+    : "";
   const screenLine = hasScreenshot
     ? `PHONE: include a clean 3D mockup of ${device}, showing the app interface from the provided screenshot reference. Keep the real UI layout recognisable — same structure, do not invent a different interface.${uiLangLine} Screen sharp and upright, not tilted away.`
     : `PHONE: include a clean 3D mockup of ${device}, with a simple, plausible app interface on screen.${uiLangLine}`;
@@ -106,7 +115,7 @@ Produce ONE finished advertising background, ${targetW}x${targetH}, for the app 
 
 ${heroLine}
 ${screenLine}
-
+${uiLangBlock}
 SUPPORTING VISUALS (specific to this app — include these, not generic filler):
 ${keyVisual}
 These are OBJECTS and effects only. They must not include a second character,
@@ -134,7 +143,7 @@ RENDER QUALITY:
 MUST NOT APPEAR — these ruin the asset:
 - Any headline, slogan, caption, watermark, brand logo or app-store badge anywhere in the artwork. All ad copy is composited afterwards, so leave the artwork free of it.
   The ONLY exception is the interface INSIDE the phone screen, which is part of the device and may carry its own small UI labels.
-- Anything at all inside the RESERVED zones — they get covered by the layout.
+- Anything at all inside the RESERVED zones — they get covered by the layout.${localise ? `\n- English words on the phone screen. Every label there must read in ${uiLanguage}.` : ""}
 - A SECOND character, mascot, robot or creature. Exactly ONE character in frame — the hero. An app icon shown as a flat badge is fine; a second animated face is not.
 - Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.
 - Borders, frames, drop-shadow edges, collage panels, or a visible canvas edge. Fill the frame completely, edge to edge.

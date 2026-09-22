@@ -177,28 +177,48 @@ function abDarken(hex: string, amt: number) {
   return `#${[f(r), f(g), f(b)].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
+function abRgbToHsl(hex: string): [number, number, number] {
+  const [r, g, b] = abHexToRgb(hex).map((v) => v / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  const l = (mx + mn) / 2;
+  if (!d) return [0, 0, l];
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  const h =
+    mx === r ? ((g - b) / d + (g < b ? 6 : 0)) :
+    mx === g ? ((b - r) / d + 2) : ((r - g) / d + 4);
+  return [h * 60, s, l];
+}
+function abHslToHex(h: number, s: number, l: number): string {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] :
+    h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return `#${[r, g, b].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
 /**
  * The CTA fill.
  *
- * Takes the primary brand colour first, then the accent. The accent is whatever
- * incidental highlight the brief spotted in the screenshots — for a purple app
- * it came back blue, and darkening that gave a teal button fighting the purple
- * artwork. The primary is the colour the design is actually built from, so a
- * darkened primary reads as the same brand, one step deeper than the scene.
+ * Keeps the brand hue and rebuilds the colour in HSL rather than multiplying the
+ * channels down. Plain darkening drains saturation as it goes, so a pale mauve
+ * primary came out a muddy grey-purple — technically legible, visibly dull. Here
+ * the hue is preserved, saturation is lifted to a confident minimum, and only
+ * lightness moves, down until white type clears 4.5:1.
  *
- * Tested against white type specifically: a filled button reads as the primary
- * action only when it is a saturated block with white type, so a fill that is
- * merely legible against black is not good enough. Greyscale results are
- * rejected rather than accepted as a grey button.
+ * Primary first, then accent: the accent is whatever incidental highlight the
+ * brief spotted in the screenshots, and for a purple app it came back blue.
  */
 function abUsableAccent(brief: Brief): string {
-  const chromatic = (c: string) => { const [r, g, b] = abHexToRgb(c); return Math.max(r, g, b) - Math.min(r, g, b) >= 25; };
-  const ok = (c: string) => abContrastRatio(c, "#FFFFFF") >= 4.5;
   for (const c of [brief.primary_color, brief.accent_color]) {
-    if (!c || !chromatic(c)) continue;
-    let out = c;
-    for (let i = 0; i < 8 && !ok(out); i++) out = abDarken(out, 0.16);
-    if (ok(out) && chromatic(out)) return out;
+    if (!c) continue;
+    const [h, s] = abRgbToHsl(c);
+    if (s < 0.12) continue; // greyscale carries no brand hue worth keeping
+    const sat = Math.min(0.92, Math.max(0.58, s));
+    for (let l = 0.52; l >= 0.24; l -= 0.02) {
+      const out = abHslToHex(h, sat, l);
+      if (abContrastRatio(out, "#FFFFFF") >= 4.5) return out;
+    }
   }
   return "#6D28D9";
 }

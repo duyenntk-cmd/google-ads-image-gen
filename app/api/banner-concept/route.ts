@@ -9,7 +9,11 @@ const BRIEF_SCHEMA = `Trả về DUY NHẤT một JSON object (không markdown, 
 {
   "app_name": string,
   "tagline": string,         // <=32 ký tự, mô tả ngắn app (đặt cạnh logo), vd "AI learning app"
-  "headline": string,        // <=30 ký tự, benefit punchy (hook)
+  "headline": string,        // TỐI ĐA 30 KÝ TỰ — đếm kỹ, đây là giới hạn CỨNG.
+                             // Càng ngắn càng mạnh. BỎ từ đệm: "một cách", "nhằm",
+                             // "để có thể", "giúp bạn", "vô cùng", "cực kỳ".
+                             // "Học ngôn ngữ thông minh" (23) MẠNH HƠN
+                             // "Học ngôn ngữ một cách thông minh" (31, thừa "một cách").
   "subheadline": string,     // <=45 ký tự
   "cta_text": string,        // <=12 ký tự, động từ hành động, khẩn trương
   "primary_color": string,   // hex, LẤY TỪ screenshots thật, không đoán
@@ -104,6 +108,17 @@ export async function POST(req: NextRequest) {
     brief.app_name ||= appName;
     brief.tagline ||= "";
     brief.headline ||= appName;
+    // A headline over the limit wraps to an extra line and reads flabby. Drop the
+    // usual filler first; only trim at a word boundary if it is still too long.
+    if (typeof brief.headline === "string" && brief.headline.length > 30) {
+      brief.headline = brief.headline
+        .replace(/\s+(một cách|theo cách|nhằm|để có thể|giúp bạn|vô cùng|cực kỳ)\s+/gi, " ")
+        .trim();
+      if (brief.headline.length > 30) {
+        const cut = brief.headline.slice(0, 30);
+        brief.headline = cut.slice(0, Math.max(cut.lastIndexOf(" "), 20)).trim();
+      }
+    }
     brief.subheadline ||= "";
     brief.cta_text ||= outLang === "Vietnamese" ? "Tải ngay" : "Get it now";
     brief.primary_color ||= "#7B2FBE";
