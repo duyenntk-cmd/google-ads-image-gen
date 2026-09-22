@@ -127,6 +127,8 @@ export async function POST(req: NextRequest) {
       }
     }
     brief.subheadline ||= "";
+    // Only a last resort when GPT returns nothing; the language check below
+    // translates it if the campaign is neither Vietnamese nor English.
     brief.cta_text ||= outLang === "Vietnamese" ? "Tải ngay" : "Get it now";
     brief.primary_color ||= "#7B2FBE";
     brief.secondary_color ||= "#1A1A2E";
@@ -139,35 +141,62 @@ export async function POST(req: NextRequest) {
     brief.text_zone ||= "bottom";
     brief.subject_position ||= "center";
 
-    // Last line of defence on the language rule. The creative direction is
-    // written in Vietnamese by design, and told to copy it the model sometimes
-    // copies the language too — which is how a German campaign shipped a
-    // Vietnamese headline. Characters below are Vietnamese-only; accented
-    // French or Spanish does not match, so this cannot fire on those.
-    if (outLang !== "Vietnamese") {
-      const VI_ONLY = /[ăâđêôơưĂÂĐÊÔƠƯầấậẩẫằắặẳẵềếệểễồốộổỗờớợởỡừứựửữạảẹẻịỉọỏụủỵỷỹ]/;
-      const COPY_FIELDS = ["headline", "subheadline", "cta_text", "tagline"] as const;
-      const offenders = COPY_FIELDS.filter((f) => typeof brief[f] === "string" && VI_ONLY.test(brief[f]));
-      if (offenders.length) {
-        try {
-          const fix = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            max_tokens: 200,
-            temperature: 0.4,
-            response_format: { type: "json_object" },
-            messages: [{
-              role: "user",
-              content:
-                `Dịch các câu quảng cáo sau sang ${outLang}, dịch THOÁT ý cho thuận tai người bản xứ, ` +
-                `giữ đúng giới hạn ký tự: headline <=30, subheadline <=45, cta_text <=12, tagline <=32. ` +
-                `Trả về JSON đúng các key đã cho, không thêm key nào khác.\n` +
-                JSON.stringify(Object.fromEntries(offenders.map((f) => [f, brief[f]]))),
-            }],
-          });
-          const t = JSON.parse(fix.choices[0]?.message?.content?.trim() || "{}");
-          for (const f of offenders) if (typeof t[f] === "string" && t[f].trim()) brief[f] = t[f].trim();
-        } catch { /* non-fatal: better a Vietnamese headline than no brief at all */ }
-      }
+    // Last line of defence on the language rule, because the model is told to
+    // reuse the creative direction's wording and the direction is written in
+    // Vietnamese by design — which is how a German campaign shipped a
+    // Vietnamese headline.
+    //
+    // Two cheap checks, both on the four strings that get printed:
+    //   - a language with its own script must actually be in that script, which
+    //     catches an English headline on a Japanese campaign too;
+    //   - for the Latin-script languages, characters that only Vietnamese uses.
+    //     Bare accented vowels are excluded, so accented French, Spanish and
+    //     Portuguese copy does not match.
+    const COPY_FIELDS = ["headline", "subheadline", "cta_text", "tagline"] as const;
+    const SCRIPT_OF: Record<string, RegExp> = {
+      Japanese: /[\u3040-\u30ff\u4e00-\u9fff]/,
+      Korean: /[\uac00-\ud7af]/,
+      "Chinese Simplified": /[\u4e00-\u9fff]/,
+      Arabic: /[\u0600-\u06ff]/,
+      Russian: /[\u0400-\u04ff]/,
+      Thai: /[\u0e00-\u0e7f]/,
+      Hindi: /[\u0900-\u097f]/,
+      Bengali: /[\u0980-\u09ff]/,
+    };
+    const VI_ONLY = /[ăâđêôơưĂÂĐÊÔƠƯầấậẩẫằắặẳẵềếệểễồốộổỗờớợởỡừứựửữạảẹẻịỉọỏụủỵỷỹ]/;
+    const wrongLang = (v: string) => {
+      const script = SCRIPT_OF[outLang];
+      if (script) return !script.test(v);           // must be in its own script
+      return outLang !== "Vietnamese" && VI_ONLY.test(v);
+    };
+
+    const offenders = COPY_FIELDS.filter(
+      (f) =>
+        typeof brief[f] === "string" &&
+        brief[f].trim() &&
+        // A brand name is not copy in the wrong language — it is a brand name.
+        brief[f].trim() !== String(brief.app_name || "").trim() &&
+        wrongLang(brief[f]),
+    );
+    if (offenders.length) {
+      try {
+        const fix = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          max_tokens: 200,
+          temperature: 0.4,
+          response_format: { type: "json_object" },
+          messages: [{
+            role: "user",
+            content:
+              `Dịch các câu quảng cáo sau sang ${outLang}, dịch THOÁT ý cho thuận tai người bản xứ, ` +
+              `giữ đúng giới hạn ký tự: headline <=30, subheadline <=45, cta_text <=12, tagline <=32. ` +
+              `Trả về JSON đúng các key đã cho, không thêm key nào khác.\n` +
+              JSON.stringify(Object.fromEntries(offenders.map((f) => [f, brief[f]]))),
+          }],
+        });
+        const t = JSON.parse(fix.choices[0]?.message?.content?.trim() || "{}");
+        for (const f of offenders) if (typeof t[f] === "string" && t[f].trim()) brief[f] = t[f].trim();
+      } catch { /* non-fatal: better copy in the wrong language than no brief */ }
     }
 
     return NextResponse.json({ success: true, brief });
