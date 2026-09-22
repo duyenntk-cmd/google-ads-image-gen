@@ -171,27 +171,3 @@ export function shapeOf(width: number, height: number): ShapeKey {
   if (r > 0.9) return "square";
   return "tall";
 }
-
-/**
- * Where the artwork lives inside the finished banner.
- *
- * Wide and square banners keep a text column on the left, so the artwork owns
- * only the remainder. Asking the model for the full frame and then showing the
- * right 62% of it cut the phone in half; asking for exactly the region it will
- * occupy loses nothing.
- *
- * Tall banners keep the artwork full-bleed and put the type in a band across the
- * bottom, where the subject is centred and no side is free anyway.
- *
- * One definition, used by the generator to size its request and by the canvas to
- * place the result — they cannot disagree.
- */
-export interface ArtRegion { x: number; y: number; w: number; h: number; column: boolean }
-
-export function artRegion(w: number, h: number): ArtRegion {
-  const ratio = w / h;
-  if (ratio <= 0.9) return { x: 0, y: 0, w, h, column: false }; // tall: band overlay
-  const colFrac = ratio >= 1.3 ? 0.46 : 0.42;
-  const x = Math.round(w * colFrac);
-  return { x, y: 0, w: w - x, h, column: true };
-}

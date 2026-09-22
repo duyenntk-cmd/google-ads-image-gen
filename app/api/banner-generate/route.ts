@@ -35,17 +35,14 @@ const BG_MODES: Record<string, string> = {
  * the canvas pass draws the logo, headline, CTA and Play badge into them, and
  * anything the model puts there gets covered. */
 const SHAPE_LAYOUT: Record<ShapeKey, string> = {
-  // No reserved zone: the type sits in a column beside this image, not on top of
-  // it, so the subject can use the whole frame. Reserving space here and then
-  // fitting the art into a narrower region wasted the reserved part twice over.
-  wide: `FRAME: wide.
-- Subject fills the frame confidently, three-quarter or full view, facing the viewer.
-- Supporting props around the subject, inside the frame.
-- Leave a small even margin at every edge — nothing clipped by the border.`,
-  square: `FRAME: squarish.
-- Subject centred and large, three-quarter or full view, facing the viewer.
-- Supporting props clustered around the upper half.
-- Leave a small even margin at every edge — nothing clipped by the border.`,
+  wide: `FRAME: wide 1.91:1.
+- Subject occupies the RIGHT 40% of the frame, full or three-quarter view, facing slightly left into the frame.
+- Supporting props sit around the subject, never crossing into the left half.
+- RESERVED, keep as clean background with NO objects: the LEFT 45% of the width, and the BOTTOM 28% of the height.`,
+  square: `FRAME: square 1:1.
+- Subject occupies the RIGHT 45% of the frame, full or three-quarter view, facing slightly left into the frame.
+- Supporting props cluster in the upper-middle, around the subject.
+- RESERVED, keep as clean background with NO objects: the LEFT 40% of the width, the TOP-LEFT corner, and the BOTTOM 32% of the height.`,
   tall: `FRAME: tall 4:5.
 - Subject centred horizontally, occupying the MIDDLE 45% of the height, full body or waist-up.
 - Supporting props sit beside and just above the subject.

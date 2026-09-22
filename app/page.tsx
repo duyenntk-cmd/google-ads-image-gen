@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
-import { APP_CREATIVES, RATIO_SPECS, artRegion } from "@/lib/adFormats";
+import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 
 interface Brief {
@@ -511,6 +511,60 @@ function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number
   return cy;
 }
 
+/**
+ * Where the artwork gets busy, scanning from the left, in destination pixels.
+ *
+ * The prompt asks the model to keep a side clear and it mostly complies — but
+ * "mostly" put a character's hair under the subheadline. Rather than trust the
+ * instruction, measure the render: cover-crop it small, take per-column edge
+ * energy, and find where content actually starts. Smooth gradients register near
+ * zero; a subject lights up.
+ *
+ * Returns the frame width when nothing is busy enough to matter.
+ */
+function abSubjectLeftEdge(base: HTMLImageElement, w: number, h: number): number {
+  const N = 96;
+  try {
+    const c = document.createElement("canvas");
+    c.width = N; c.height = N;
+    const x = c.getContext("2d");
+    if (!x) return w;
+    const cs = Math.max(N / base.width, N / base.height);
+    const dw = base.width * cs, dh = base.height * cs;
+    x.drawImage(base, (N - dw) / 2, (N - dh) / 2, dw, dh);
+    const d = x.getImageData(0, 0, N, N).data;
+    const px = (a: number, b: number) => (b * N + a) * 4;
+
+    const energy: number[] = [];
+    for (let a = 0; a < N; a++) {
+      let e = 0;
+      for (let b = 1; b < N - 1; b++) {
+        const i = px(a, b), below = px(a, b + 1), right = px(Math.min(a + 1, N - 1), b);
+        e += Math.abs(d[i] - d[below]) + Math.abs(d[i + 1] - d[below + 1]) + Math.abs(d[i + 2] - d[below + 2]);
+        e += Math.abs(d[i] - d[right]) + Math.abs(d[i + 1] - d[right + 1]) + Math.abs(d[i + 2] - d[right + 2]);
+      }
+      energy.push(e / (N * 6));
+    }
+    const peak = Math.max(...energy);
+    if (peak < 4) return w; // essentially flat: nothing to avoid
+
+    // Where the subject's MASS begins, not its first pixel. An outstretched hand
+    // reaches the far edge; treating that as the boundary collapsed the column
+    // and shrank the type to nothing. So require the busyness to hold across a
+    // wide run — a narrow protrusion is something type can sit beside.
+    const TH = peak * 0.3;
+    const RUN = Math.round(N * 0.1);
+    for (let a = 0; a < N - RUN; a++) {
+      let busy = 0;
+      for (let k = 0; k < RUN; k++) if (energy[a + k] > TH) busy++;
+      if (busy >= RUN * 0.8) return Math.round((a / N) * w);
+    }
+    return w;
+  } catch {
+    return w; // a tainted canvas must not break rendering
+  }
+}
+
 /** Cover-crop to the exact asset size with no overlay at all. */
 function abRenderPlain(base: HTMLImageElement, w: number, h: number): string {
   const canvas = document.createElement("canvas");
@@ -536,28 +590,8 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
 
-  // Place the art in the region reserved for it, and fill the rest with colour
-  // sampled from the art's own edge so the seam reads as one background.
-  //
-  // The region is reserved outright rather than detected. Every attempt to infer
-  // a safe area from image statistics held for one render and broke on the next:
-  // a hand reaching left collapsed the column, a phone at 33% was missed. The
-  // model is asked for exactly this region, so nothing is cropped away either.
-  const region = artRegion(w, h);
-  const rs = Math.max(region.w / base.width, region.h / base.height);
-  const sw = base.width * rs, sh = base.height * rs;
-  ctx.drawImage(base, region.x + (region.w - sw) / 2, region.y + (region.h - sh) / 2, sw, sh);
-
-  if (region.column && region.x > 0) {
-    const strip = ctx.getImageData(Math.min(w - 1, region.x + 1), 0, 1, h).data;
-    const rgb = (o: number) => `rgb(${strip[o]},${strip[o + 1]},${strip[o + 2]})`;
-    const fill = ctx.createLinearGradient(0, 0, 0, h);
-    fill.addColorStop(0, rgb(0));
-    fill.addColorStop(0.5, rgb(Math.floor(h / 2) * 4));
-    fill.addColorStop(1, rgb((h - 1) * 4));
-    ctx.fillStyle = fill;
-    ctx.fillRect(0, 0, region.x, h);
-  }
+  const cs = Math.max(w / base.width, h / base.height);
+  ctx.drawImage(base, (w - base.width * cs) / 2, (h - base.height * cs) / 2, base.width * cs, base.height * cs);
 
   const ink = abInk(brief);
   const scale = abClamp(Math.min(w, h) / 500, 0.34, 2.2);
@@ -582,11 +616,26 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
   const leftColumn = ratio > 0.9; // wide and square; tall keeps the bottom band
 
   if (leftColumn) {
-    // The column is empty by construction, so there is nothing to measure and
-    // no trade-off to make. No wash either: the strip is already flat colour.
-    const colW = region.x - pad * 2;
-    if (ink.scrim) {
-      // Dark art only: soften where the flat strip meets the picture.
+    const wanted = Math.round(w * (ratio >= 1.3 ? 0.44 : 0.40)) - pad;
+    const busyX = abSubjectLeftEdge(base, w, h);
+    const available = busyX - pad - Math.round(pad * 0.7);
+    // Two outcomes only. Either the subject leaves nearly the whole column free,
+    // in which case take what is there; or it does not, in which case keep the
+    // full column and strengthen the wash behind the type. Splitting the
+    // difference produced a third outcome — a narrow column with type shrunk to
+    // fit it — which was less readable than either.
+    const clean = available >= wanted * 0.8;
+    const colW = clean ? Math.min(wanted, available) : wanted;
+    const crowded = !clean;
+    // A whisper of a scrim only — enough to hold type over a soft gradient
+    // without turning a deliberately bright background grey.
+    if (!ink.scrim) {
+      const g = ctx.createLinearGradient(0, 0, colW + pad * 2, 0);
+      g.addColorStop(0, crowded ? "rgba(255,255,255,0.90)" : "rgba(255,255,255,0.55)");
+      g.addColorStop(crowded ? 0.7 : 1, crowded ? "rgba(255,255,255,0.72)" : "rgba(255,255,255,0)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, colW + pad * 2, h);
+    } else {
       const g = ctx.createLinearGradient(0, 0, colW + pad * 2, 0);
       g.addColorStop(0, abHexA(ink.scrimColor || "#1A1A2E", 0.88));
       g.addColorStop(1, abHexA(ink.scrimColor || "#1A1A2E", 0));
