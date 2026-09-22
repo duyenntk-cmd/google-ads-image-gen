@@ -809,6 +809,12 @@ export default function Home() {
   /** Which mode produced what is on screen, so the result step offers the right next action. */
   const [abLastMode, setAbLastMode] = useState<"one"|"core"|"full">("one");
   /**
+   * Free-text revision entered on the results step. Carried into every later
+   * render, including the full set, so approving a tweaked preview delivers
+   * twenty assets that share the tweak.
+   */
+  const [abRevision, setAbRevision] = useState("");
+  /**
    * Store data, brief and mascot from the last run. Regenerating reuses them so
    * a retry bills for one image instead of repeating the store call, the brief
    * and the mascot render.
@@ -823,6 +829,7 @@ export default function Home() {
     // Drop the cached run too, so the next generate re-reads the store.
     abRun.current = null;
     setAbMascotUsed(null);
+    setAbRevision("");
   };
 
   /**
@@ -960,6 +967,7 @@ export default function Home() {
             brief: theBrief, userPrompt: abPrompt, quality: abQuality,
             width: c.width, height: c.height, key: c.key, angle: c.angle,
             referenceImages, characterImage: mascot, precise: abPrecise, platform, uiLanguage: abLang,
+              revision: abRevision.trim(),
           }, 300000, `banner-generate:${c.key}`)),
         AB_CONCURRENCY,
         (n) => setAbStatus(`🎨 Đang gen ${total} ảnh (${n}/${total})...`),
@@ -2711,6 +2719,35 @@ export default function Home() {
                     <button onClick={abReset} className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>↩ Về đầu</button>
                     <button onClick={abDownloadZip} className="bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl">⬇ Tải tất cả (.zip)</button>
                   </div>
+                </div>
+
+                {/* Revision box. Retries reuse the cached brief and mascot, so a
+                    tweak costs one image — worth stating, since the difference
+                    against a fresh run is tenfold. */}
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold" style={{color: t.text}}>✏️ Muốn sửa gì ở ảnh này?</span>
+                    {abRevision.trim() && (
+                      <button onClick={() => setAbRevision("")} className="text-[11px] px-2 py-0.5 rounded" style={{backgroundColor: t.border, color: t.textMuted}}>Xoá</button>
+                    )}
+                  </div>
+                  <textarea value={abRevision} onChange={(e) => setAbRevision(e.target.value)} rows={2}
+                    placeholder="VD: bỏ chồng sách đi · nền hồng hơn · nhân vật nhìn thẳng vào máy ảnh · điện thoại nghiêng nhẹ sang trái"
+                    className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-y"
+                    style={{ ...inputStyle, minHeight: 56 }} />
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={() => handleAbGenerate(abLastMode, true)} disabled={!abRevision.trim()}
+                      className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{ background: abRevision.trim() ? "linear-gradient(135deg,#7C3AED,#EC4899)" : "#9CA3AF" }}>
+                      ✏️ Sửa và gen lại ({abVnd((abLastMode === "full" ? APP_CREATIVES.length : abLastMode === "core" ? 3 : 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
+                    </button>
+                    <span className="text-[11px]" style={{color: t.textMuted}}>
+                      Dùng lại brief + mascot cũ nên chỉ tính tiền phần ảnh. Yêu cầu này giữ nguyên khi bấm &ldquo;Duyệt → gen đủ&rdquo;.
+                    </span>
+                  </div>
+                  <p className="text-[11px]" style={{color: t.textMuted}}>
+                    Ô này chỉ đổi <b>hình ảnh</b>. Muốn đổi <b>headline / CTA</b> thì bấm &ldquo;Về đầu&rdquo; rồi sửa trong Creative Direction.
+                  </p>
                 </div>
 
                 {abError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{abError}</p>}

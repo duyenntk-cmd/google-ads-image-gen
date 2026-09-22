@@ -60,6 +60,7 @@ function buildPrompt(
   angle: string,
   platform: string,
   uiLanguage: string,
+  revision: string,
 ): string {
   const shape = shapeOf(targetW, targetH);
   const moodStyle = MOOD_STYLES[brief?.mood] || MOOD_STYLES.playful;
@@ -110,9 +111,22 @@ words change. Spell them correctly, with every diacritic in place.\n`
         } survives — everything outside is discarded. Keep the subject and every important element fully inside that safe area.`
       : "";
 
+  // Placed first and framed as a correction. The operator has already seen a
+  // render and is asking for a specific change, so this outranks the standing
+  // brief wherever the two disagree.
+  const revisionBlock = revision?.trim()
+    ? `REVISION — the client has seen a previous version and asked for this change.
+It takes priority over anything below that contradicts it. Apply it exactly:
+${revision.trim()}
+Leave everything else as described.
+
+`
+    : "";
+
   return `You are an award-winning art director for mobile app install advertising.
 Produce ONE finished advertising background, ${targetW}x${targetH}, for the app "${brief?.app_name || ""}".
 
+${revisionBlock}
 ${heroLine}
 ${screenLine}
 ${uiLangBlock}
@@ -224,7 +238,7 @@ export async function POST(req: NextRequest) {
   if (unauth) return unauth;
   try {
     const body = await req.json();
-    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle, platform, uiLanguage } = body;
+    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle, platform, uiLanguage, revision } = body;
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
@@ -255,7 +269,7 @@ export async function POST(req: NextRequest) {
     if (hasCharacter) refFiles.push(await dataUrlToFile(characterImage, "character.png"));
     if (hasScreenshot) refFiles.push(await dataUrlToFile(shots[0], "screenshot.png"));
 
-    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android", typeof uiLanguage === "string" ? uiLanguage : "");
+    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android", typeof uiLanguage === "string" ? uiLanguage : "", typeof revision === "string" ? revision : "");
     const chain = precise ? PRECISE_CHAIN : MODEL_CHAIN;
 
     let b64: string | undefined;
