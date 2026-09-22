@@ -2226,11 +2226,11 @@ export default function Home() {
                     </div>
                   )}
 
-                  <textarea value={abPrompt} onChange={e => setAbPrompt(e.target.value)} rows={5}
+                  <textarea value={abPrompt} onChange={e => setAbPrompt(e.target.value)} rows={14}
                     disabled={abPromptLoading}
-                    placeholder="VD: Phong cách cinematic bold, gradient tím đậm, mascot vui vẻ cầm điện thoại, truyền cảm hứng cho người dùng 18-35 tuổi..."
+                    placeholder={"Bấm ✨ Auto Prompt để GPT viết brief chi tiết, hoặc tự viết theo mẫu:\n\nBỐ CỤC\n- Nhân vật: ...\n- Phone mockup: ...\n- Đạo cụ: ...\n\nTEXT TRÊN BANNER\n- Headline: \"...\"\n- Phụ đề: \"...\"\n\nCTA\n- Nút: \"...\""}
                     className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-y disabled:opacity-60"
-                    style={{...inputStyle, minHeight: 100, lineHeight: "1.6"}}/>
+                    style={{...inputStyle, minHeight: 240, lineHeight: "1.65", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5}}/>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

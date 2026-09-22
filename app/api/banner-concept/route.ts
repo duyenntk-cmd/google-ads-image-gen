@@ -44,7 +44,19 @@ export async function POST(req: NextRequest) {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const outLang = language || "Vietnamese";
 
-    const system = `Bạn là senior art director cho quảng cáo app mobile trên Google Ads. Phân tích mô tả app + screenshots + creative direction để tạo design brief.\nHeadline/subheadline/cta viết bằng ${outLang}, ngắn và chuyển đổi cao.\nMàu sắc PHẢI trích từ screenshots thật, không đoán.\nhero_subject và key_visual phải bám SÁT chức năng thật của app — đọc kỹ mô tả để biết app làm gì, đừng suy diễn từ tên app.\n\n${BRIEF_SCHEMA}`;
+    const system =
+      `Bạn là senior art director cho quảng cáo app mobile trên Google Ads. ` +
+      `Phân tích mô tả app + screenshots + creative direction để tạo design brief.\n\n` +
+      `QUAN TRỌNG NHẤT — TÔN TRỌNG CREATIVE DIRECTION:\n` +
+      `Creative direction bên dưới do người dùng viết hoặc đã duyệt. Nếu trong đó đã ghi rõ\n` +
+      `Headline / Phụ đề / Tagline / CTA thì PHẢI DÙNG ĐÚNG NGUYÊN VĂN những câu đó,\n` +
+      `chỉ cắt bớt nếu vượt giới hạn ký tự. TUYỆT ĐỐI KHÔNG tự nghĩ câu khác thay thế.\n` +
+      `Tương tự với bố cục, màu sắc, đạo cụ: nếu đã được nêu thì bám theo, đừng sáng tạo lại.\n` +
+      `Chỉ tự đề xuất khi creative direction không nói gì về mục đó.\n\n` +
+      `Headline/subheadline/cta viết bằng ${outLang}, ngắn và chuyển đổi cao.\n` +
+      `Màu sắc PHẢI trích từ screenshots thật, không đoán.\n` +
+      `hero_subject và key_visual phải bám SÁT chức năng thật của app — đọc kỹ mô tả để biết app làm gì, ` +
+      `đừng suy diễn từ tên app.\n\n${BRIEF_SCHEMA}`;
 
     const shots: string[] = Array.isArray(screenshots) ? screenshots.slice(0, 3) : [];
     const userContent: any[] = [
@@ -56,7 +68,9 @@ export async function POST(req: NextRequest) {
           (description ? `Mô tả từ store (nguồn đáng tin nhất về chức năng app):\n"""${String(description).slice(0, 900)}"""\n` : "") +
           `Thị trường: ${country || "Global"}\n` +
           `Ngôn ngữ ad copy: ${outLang}\n` +
-          `Creative direction: ${prompt || "(chưa có, tự đề xuất)"}\n\n` +
+          (prompt
+            ? `--- CREATIVE DIRECTION (người dùng đã duyệt — bám sát, đặc biệt là phần chữ) ---\n${prompt}\n--- hết ---\n\n`
+            : `Creative direction: (chưa có, tự đề xuất)\n\n`) +
           `Dựa vào mô tả và screenshots dưới đây, tạo brief.`,
       },
       ...shots.map((url) => ({ type: "image_url", image_url: { url, detail: "low" } })),
