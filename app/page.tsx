@@ -274,7 +274,12 @@ function abFitLines(ctx: CanvasRenderingContext2D, text: string, maxW: number, m
   let fs = startFs;
   for (; fs > 9; fs -= 1) {
     ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
-    if (abWrap(ctx, text, maxW).length <= maxLines) break;
+    const lines = abWrap(ctx, text, maxW);
+    // Counting lines is not enough. A phrase that just fits the column wraps to
+    // one line and is still drawn to the last pixel of it, which is how a
+    // subheadline reached across the artwork. Require every line to measure
+    // inside the column, with a margin so type never touches the picture.
+    if (lines.length <= maxLines && lines.every((l) => ctx.measureText(l).width <= maxW)) break;
   }
   ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
   return { fs, lines: abBalancedWrap(ctx, text, maxW, maxLines) };
@@ -558,7 +563,9 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
   const leftColumn = ratio > 0.9; // wide and square; tall keeps the bottom band
 
   if (leftColumn) {
-    const colW = Math.round(w * (ratio >= 1.3 ? 0.44 : 0.40)) - pad;
+    // Ends short of the artwork rather than flush against it: type that stops
+    // exactly where the picture starts still reads as touching it.
+    const colW = Math.round(w * (ratio >= 1.3 ? 0.42 : 0.37)) - pad;
     // A whisper of a scrim only — enough to hold type over a soft gradient
     // without turning a deliberately bright background grey.
     if (!ink.scrim) {
