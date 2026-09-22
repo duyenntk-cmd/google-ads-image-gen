@@ -58,6 +58,7 @@ function buildPrompt(
   hasCharacter: boolean,
   hasScreenshot: boolean,
   angle: string,
+  platform: string,
 ): string {
   const shape = shapeOf(targetW, targetH);
   const moodStyle = MOOD_STYLES[brief?.mood] || MOOD_STYLES.playful;
@@ -74,9 +75,16 @@ function buildPrompt(
     ? `HERO: reuse the EXACT character from the provided reference image — same face, same hairstyle, same outfit, same colours, same art style. This character runs across a whole ad set, so identity must stay perfectly consistent; only pose, expression and framing may change. Here: ${heroSubject}.`
     : `HERO: ${heroSubject}. Render as a polished 3D cartoon character (Pixar-like), appealing and expressive.`;
 
+  // Show the hardware the app actually ships on. Left unsaid, the model defaults
+  // to an iPhone — wrong for a Play-Store-only app, and a detail the audience
+  // notices.
+  const device =
+    platform === "ios"
+      ? "a modern iPhone: rounded corners, a pill-shaped cutout at the top of the screen, polished metal edges"
+      : "a modern ANDROID phone: flat or gently curved edges, a small CENTRED hole-punch camera at the top of the screen, slim uniform bezels. NOT an iPhone — no notch, no pill-shaped cutout";
   const screenLine = hasScreenshot
-    ? `PHONE: include a clean 3D phone mockup showing the app interface from the provided screenshot reference. Keep the real UI recognisable — do not invent a fake interface. Screen must be sharp and upright, not tilted away.`
-    : `PHONE: include a clean 3D phone mockup with a simple, plausible app interface on screen.`;
+    ? `PHONE: include a clean 3D mockup of ${device}, showing the app interface from the provided screenshot reference. Keep the real UI recognisable — do not invent a fake interface. Screen sharp and upright, not tilted away.`
+    : `PHONE: include a clean 3D mockup of ${device}, with a simple, plausible app interface on screen.`;
 
   const cropLine =
     cropKeep < 0.95
@@ -198,7 +206,7 @@ export async function POST(req: NextRequest) {
   if (unauth) return unauth;
   try {
     const body = await req.json();
-    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle } = body;
+    const { brief, userPrompt, quality, referenceImages, characterImage, precise, angle, platform } = body;
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
@@ -229,7 +237,7 @@ export async function POST(req: NextRequest) {
     if (hasCharacter) refFiles.push(await dataUrlToFile(characterImage, "character.png"));
     if (hasScreenshot) refFiles.push(await dataUrlToFile(shots[0], "screenshot.png"));
 
-    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "");
+    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android");
     const chain = precise ? PRECISE_CHAIN : MODEL_CHAIN;
 
     let b64: string | undefined;

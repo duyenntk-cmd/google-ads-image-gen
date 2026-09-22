@@ -28,6 +28,23 @@ const AB_CONCURRENCY = 4;
 const AB_COST_PER_IMAGE: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
 /** Rough USD→VND rate, only for the on-screen estimate. Adjust if it drifts. */
 const AB_VND_PER_USD = 26000;
+
+/**
+ * Store country to pull screenshots from.
+ *
+ * The phone mockup shows a real store screenshot, so a Global market (which
+ * resolves to the US store) put an English interface beside Vietnamese ad copy.
+ * When no specific market is chosen, follow the ad-copy language instead — the
+ * screenshot should speak the language the banner does.
+ */
+const AB_LANG_STORE: Record<string, string> = {
+  Vietnamese: "Vietnam", Japanese: "Japan", Korean: "South Korea", Thai: "Thailand",
+  Indonesian: "Indonesia", Filipino: "Philippines", Malay: "Malaysia", Hindi: "India",
+  Bengali: "Bangladesh", Arabic: "Saudi Arabia", Russian: "Russia", German: "Germany",
+  French: "France", Spanish: "Spain", Portuguese: "Brazil", "Chinese Simplified": "Taiwan",
+};
+const abStoreCountry = (market: string, lang: string) =>
+  market && market !== "Global" ? market : AB_LANG_STORE[lang] || market || "Global";
 const abVnd = (usd: number) => {
   const v = Math.round(usd * AB_VND_PER_USD);
   return v >= 1000 ? `${Math.round(v / 1000).toLocaleString("vi-VN")}k₫` : `${v.toLocaleString("vi-VN")}₫`;
@@ -161,21 +178,23 @@ function abDarken(hex: string, amt: number) {
 }
 
 /**
- * An accent strong enough to carry the CTA.
+ * The CTA fill.
  *
- * A filled button reads as the primary action when it is a saturated block with
- * white type — that is the convention, and a pale fill reads as secondary even
- * when technically legible. So the test is white-on-fill specifically, not the
- * better of white or black: the earlier guard accepted #29B6F6 on a max() of
- * both, and the button drew white on light blue at 2.2:1.
+ * Takes the primary brand colour first, then the accent. The accent is whatever
+ * incidental highlight the brief spotted in the screenshots — for a purple app
+ * it came back blue, and darkening that gave a teal button fighting the purple
+ * artwork. The primary is the colour the design is actually built from, so a
+ * darkened primary reads as the same brand, one step deeper than the scene.
  *
- * Greyscale results are rejected rather than accepted as a dark grey button,
- * which is what darkening a near-white accent would otherwise produce.
+ * Tested against white type specifically: a filled button reads as the primary
+ * action only when it is a saturated block with white type, so a fill that is
+ * merely legible against black is not good enough. Greyscale results are
+ * rejected rather than accepted as a grey button.
  */
 function abUsableAccent(brief: Brief): string {
   const chromatic = (c: string) => { const [r, g, b] = abHexToRgb(c); return Math.max(r, g, b) - Math.min(r, g, b) >= 25; };
   const ok = (c: string) => abContrastRatio(c, "#FFFFFF") >= 4.5;
-  for (const c of [brief.accent_color, brief.primary_color]) {
+  for (const c of [brief.primary_color, brief.accent_color]) {
     if (!c || !chromatic(c)) continue;
     let out = c;
     for (let i = 0; i < 8 && !ok(out); i++) out = abDarken(out, 0.16);
@@ -774,7 +793,7 @@ export default function Home() {
    * a retry bills for one image instead of repeating the store call, the brief
    * and the mascot render.
    */
-  const abRun = useRef<{shots:string[];icon:string|null;brief:Brief;mascot:string|null}|null>(null);
+  const abRun = useRef<{shots:string[];icon:string|null;brief:Brief;mascot:string|null;platform:string}|null>(null);
   const [abPrecise, setAbPrecise] = useState(false);
   const abCharRef = useRef<HTMLInputElement>(null);
 
@@ -796,7 +815,7 @@ export default function Home() {
     setAbError("");
     setAbFetched(null);
     try {
-      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abCountry, limit: 1 }, 45000, "screenshots");
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), limit: 1 }, 45000, "screenshots");
       if (!ss.success) throw new Error(ss.error || "Không lấy được thông tin app.");
       setAbFetched({
         name: ss.appName || "(không rõ tên)",
@@ -824,7 +843,7 @@ export default function Home() {
       // from the app name alone, so a store failure is a warning, not a stop.
       let appName = "", shots: string[] = [], genre = "";
       try {
-        const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abCountry, limit: 2 }, 45000, "screenshots");
+        const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), limit: 2 }, 45000, "screenshots");
         if (ss.success) {
           appName = ss.appName || "";
           shots = (ss.screenshots || []).slice(0, 2);
@@ -855,16 +874,16 @@ export default function Home() {
     if (!abUrl.trim()) return;
     setAbStep("generating"); setAbError("");
     try {
-      let shots: string[], iconB64: string | null, theBrief: Brief, mascot: string | null;
+      let shots: string[], iconB64: string | null, theBrief: Brief, mascot: string | null, platform: string;
 
       if (reuse && abRun.current) {
         // Retry path: the store call, brief and mascot are already paid for.
-        ({ shots, icon: iconB64, brief: theBrief, mascot } = abRun.current);
+        ({ shots, icon: iconB64, brief: theBrief, mascot, platform } = abRun.current);
         setAbStatus("♻️ Dùng lại brief + mascot, chỉ gen lại ảnh...");
       } else {
       setAbMascotUsed(null);
       setAbStatus("📱 Đang lấy thông tin app...");
-      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abCountry }, 60000, "screenshots");
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang) }, 60000, "screenshots");
       if (!ss.success) throw new Error(ss.error);
       shots = ss.screenshots || [];
       const appName: string = ss.appName || "";
@@ -877,6 +896,7 @@ export default function Home() {
         screenshots: shots.slice(0, 3), appUrl: abUrl,
         description: ss.description || "", genre: ss.genre || "",
       }, 60000, "banner-concept");
+      platform = ss.platform || "android";
       if (!bc.success) throw new Error(bc.error);
       theBrief = bc.brief;
       setAbBrief(theBrief);
@@ -892,7 +912,7 @@ export default function Home() {
         } catch { /* non-fatal: carry on without a character reference */ }
       }
       setAbMascotUsed(mascot);
-      abRun.current = { shots, icon: iconB64, brief: theBrief, mascot };
+      abRun.current = { shots, icon: iconB64, brief: theBrief, mascot, platform };
       }
 
       const referenceImages = abUseScreenshot ? shots.slice(0, 1) : [];
@@ -919,7 +939,7 @@ export default function Home() {
           abFetchJson("/api/banner-generate", {
             brief: theBrief, userPrompt: abPrompt, quality: abQuality,
             width: c.width, height: c.height, key: c.key, angle: c.angle,
-            referenceImages, characterImage: mascot, precise: abPrecise,
+            referenceImages, characterImage: mascot, precise: abPrecise, platform,
           }, 300000, `banner-generate:${c.key}`)),
         AB_CONCURRENCY,
         (n) => setAbStatus(`🎨 Đang gen ${total} ảnh (${n}/${total})...`),
