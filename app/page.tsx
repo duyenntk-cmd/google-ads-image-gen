@@ -548,16 +548,13 @@ function abSubjectLeftEdge(base: HTMLImageElement, w: number, h: number): number
     const peak = Math.max(...energy);
     if (peak < 4) return w; // essentially flat: nothing to avoid
 
-    // Where the subject's MASS begins, not its first pixel. An outstretched hand
-    // reaches the far edge; treating that as the boundary collapsed the column
-    // and shrank the type to nothing. So require the busyness to hold across a
-    // wide run — a narrow protrusion is something type can sit beside.
-    const TH = peak * 0.3;
-    const RUN = Math.round(N * 0.1);
-    for (let a = 0; a < N - RUN; a++) {
-      let busy = 0;
-      for (let k = 0; k < RUN; k++) if (energy[a + k] > TH) busy++;
-      if (busy >= RUN * 0.8) return Math.round((a / N) * w);
+    // First column that is busy and stays busy — a lone spike is noise, not a subject.
+    const TH = peak * 0.22;
+    for (let a = 0; a < N; a++) {
+      if (energy[a] <= TH) continue;
+      let sustained = true;
+      for (let k = 1; k <= 3 && a + k < N; k++) if (energy[a + k] <= TH * 0.6) sustained = false;
+      if (sustained) return Math.round((a / N) * w);
     }
     return w;
   } catch {
@@ -617,16 +614,14 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
 
   if (leftColumn) {
     const wanted = Math.round(w * (ratio >= 1.3 ? 0.44 : 0.40)) - pad;
+    // Pull the column in when the subject sits further left than the prompt asked.
     const busyX = abSubjectLeftEdge(base, w, h);
     const available = busyX - pad - Math.round(pad * 0.7);
-    // Two outcomes only. Either the subject leaves nearly the whole column free,
-    // in which case take what is there; or it does not, in which case keep the
-    // full column and strengthen the wash behind the type. Splitting the
-    // difference produced a third outcome — a narrow column with type shrunk to
-    // fit it — which was less readable than either.
-    const clean = available >= wanted * 0.8;
-    const colW = clean ? Math.min(wanted, available) : wanted;
-    const crowded = !clean;
+    const floor = Math.round(w * 0.22);
+    const colW = Math.max(floor, Math.min(wanted, available));
+    // Below the floor the subject has taken the whole frame; a wash keeps the
+    // type readable where it has to sit over artwork.
+    const crowded = available < floor;
     // A whisper of a scrim only — enough to hold type over a soft gradient
     // without turning a deliberately bright background grey.
     if (!ink.scrim) {
