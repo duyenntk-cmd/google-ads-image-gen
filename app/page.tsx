@@ -130,24 +130,43 @@ function abLoadImg(src: string): Promise<HTMLImageElement> {
   });
 }
 
-/** Frosted chip + rounded icon + app name, so the logo reads on any background. */
-function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: HTMLImageElement | null, name: string, tagline: string, scale: number) {
+/**
+ * Ink colours for the overlay.
+ *
+ * Every piece of type used to be white on a dark scrim. That breaks entirely on
+ * a light background — which is now the default, and what the reference the
+ * owner supplied uses — so colour follows bg_mode instead.
+ */
+function abInk(brief: Brief) {
+  const light = (brief as { bg_mode?: string }).bg_mode !== "dark";
+  const secondary = brief.secondary_color || "#1A1A2E";
+  return light
+    ? { heading: "#14142B", body: "rgba(20,20,43,0.72)", logoText: "#14142B", chip: false, scrim: false, accentText: brief.accent_color || "#C2185B" }
+    : { heading: "#FFFFFF", body: "rgba(255,255,255,0.88)", logoText: "#FFFFFF", chip: true, scrim: true, accentText: abLighten(brief.accent_color || "#FF6B35", 0.15), scrimColor: secondary };
+}
+
+/** Icon + app name. Gets a frosted chip only on dark art, where plain type would not read. */
+function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: HTMLImageElement | null, name: string, tagline: string, scale: number, ink: ReturnType<typeof abInk>) {
   const iconS = Math.round(44 * scale), gap = Math.round(10 * scale);
   const nameFs = Math.round(24 * scale), tagFs = Math.round(12 * scale);
+  ctx.textAlign = "left";
   ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`;
   const nameW = ctx.measureText(name).width;
   ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`;
   const textW = Math.max(nameW, tagline ? ctx.measureText(tagline).width : 0);
-  const padX = Math.round(12 * scale), padY = Math.round(10 * scale);
+  const padX = ink.chip ? Math.round(12 * scale) : 0;
+  const padY = ink.chip ? Math.round(10 * scale) : 0;
   const chipW = padX * 2 + (icon ? iconS + gap : 0) + textW;
   const chipH = padY * 2 + Math.max(iconS, nameFs + (tagline ? tagFs + 4 * scale : 0));
 
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 18 * scale; ctx.shadowOffsetY = 4 * scale;
-  ctx.fillStyle = "rgba(12,12,22,0.42)";
-  abRoundRect(ctx, x, y, chipW, chipH, chipH * 0.28);
-  ctx.fill();
-  ctx.restore();
+  if (ink.chip) {
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 18 * scale; ctx.shadowOffsetY = 4 * scale;
+    ctx.fillStyle = "rgba(12,12,22,0.42)";
+    abRoundRect(ctx, x, y, chipW, chipH, chipH * 0.28);
+    ctx.fill();
+    ctx.restore();
+  }
 
   let cx = x + padX;
   const midY = y + chipH / 2;
@@ -159,28 +178,47 @@ function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: H
   }
   if (tagline) {
     ctx.textBaseline = "alphabetic";
-    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
+    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.logoText;
     ctx.fillText(name, cx, midY + nameFs * 0.05);
-    ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "rgba(255,255,255,0.82)";
-    ctx.fillText(abEllipsize(ctx, tagline, chipW - (cx - x) - padX), cx, midY + nameFs * 0.05 + tagFs + 4 * scale);
+    ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.body;
+    ctx.fillText(abEllipsize(ctx, tagline, Math.max(40, chipW - (cx - x) - padX)), cx, midY + nameFs * 0.05 + tagFs + 4 * scale);
   } else {
     ctx.textBaseline = "middle";
-    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
+    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.logoText;
     ctx.fillText(name, cx, midY);
   }
+  return chipH;
 }
 
 /** Accent pill: left circle with a download arrow, label, right chevron. */
+/**
+ * CTA font size that fits `maxW`. Sizing purely from `scale` overflowed the left
+ * column and ellipsized the label to "Học th…", so shrink until the whole pill
+ * fits. Layout and drawing both call this, so the reserved height always matches
+ * what gets drawn.
+ */
+function abCtaFontSize(ctx: CanvasRenderingContext2D, maxW: number, label: string, scale: number) {
+  const pill = (f: number) => {
+    ctx.font = `bold ${f}px system-ui,Arial,sans-serif`;
+    return f * 1.5 + f * 0.6 + ctx.measureText(label).width + f * 0.6 + f * 0.9 + f * 1.2;
+  };
+  let fs = abClamp(Math.round(22 * scale), 12, 46);
+  while (fs > 12 && pill(fs) > maxW) fs -= 1;
+  return fs;
+}
+const abCtaHeight = (ctx: CanvasRenderingContext2D, maxW: number, label: string, scale: number) =>
+  Math.round(abCtaFontSize(ctx, maxW, label, scale) * 2.2);
+
 function abDrawCTA(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, label: string, accent: string, scale: number) {
-  const fs = abClamp(Math.round(22 * scale), 12, 46);
-  ctx.font = `bold ${fs}px system-ui,Arial,sans-serif`;
-  const labelW = ctx.measureText(label).width;
+  ctx.textAlign = "left";
+  const fs = abCtaFontSize(ctx, maxW, label, scale);
+  const labelW = (ctx.font = `bold ${fs}px system-ui,Arial,sans-serif`, ctx.measureText(label).width);
   const circle = fs * 1.5, chev = fs * 0.9, gap = fs * 0.6;
   const bh = Math.round(fs * 2.2);
   const bw = Math.min(circle + gap + labelW + gap + chev + fs * 1.2, maxW);
 
   ctx.save();
-  ctx.shadowColor = abHexA(accent, 0.5); ctx.shadowBlur = 22 * scale; ctx.shadowOffsetY = 6 * scale;
+  ctx.shadowColor = abHexA(accent, 0.45); ctx.shadowBlur = 22 * scale; ctx.shadowOffsetY = 6 * scale;
   const grad = ctx.createLinearGradient(x, y, x + bw, y);
   grad.addColorStop(0, accent); grad.addColorStop(1, abLighten(accent, 0.18));
   ctx.fillStyle = grad;
@@ -207,6 +245,7 @@ function abDrawCTA(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: nu
   ctx.beginPath();
   ctx.moveTo(chx - chev * 0.3, ccy - chev * 0.5); ctx.lineTo(chx + chev * 0.3, ccy); ctx.lineTo(chx - chev * 0.3, ccy + chev * 0.5);
   ctx.stroke();
+  return bh;
 }
 
 function abDrawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
@@ -219,59 +258,46 @@ function abDrawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, sc
   ctx.fillStyle = "#12B5FF";
   ctx.beginPath(); ctx.moveTo(tx - s * 0.7, ty - s); ctx.lineTo(tx - s * 0.7, ty + s); ctx.lineTo(tx + s * 0.9, ty); ctx.closePath(); ctx.fill();
   const textX = x + bh * 0.95;
+  ctx.textAlign = "left";
   ctx.fillStyle = "#ffffff"; ctx.textBaseline = "alphabetic";
   ctx.font = `500 ${Math.round(9 * scale)}px system-ui,Arial,sans-serif`; ctx.fillText("GET IT ON", textX, y + bh * 0.42);
   ctx.font = `700 ${Math.round(17 * scale)}px system-ui,Arial,sans-serif`; ctx.fillText("Google Play", textX, y + bh * 0.82);
   ctx.restore();
+  return bh;
 }
 
-/** Scrim + headline + subheadline, drawn bottom-up above the CTA zone. */
-function abDrawText(ctx: CanvasRenderingContext2D, w: number, h: number, brief: Brief, scale: number) {
-  const secondary = brief.secondary_color || "#1A1A2E";
-  const accent = brief.accent_color || "#FF6B35";
-  const headline = brief.headline || brief.app_name || "";
-  const sub = brief.subheadline || "";
-  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.06));
+/**
+ * Headline and subheadline stacked downward from `y`, wrapped to `maxW`.
+ * The last headline line takes the accent colour, as in the reference.
+ * Returns the y just below the block.
+ */
+function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, brief: Brief, ink: ReturnType<typeof abInk>, headFs: number, subFs: number, maxLines = 3): number {
   ctx.textAlign = "left";
-
-  // Strips are too short for a scrim and a stack of lines; one line fills them.
-  if (h <= 120) {
-    const g = ctx.createLinearGradient(0, 0, w, 0);
-    g.addColorStop(0, abHexA(secondary, 0.94)); g.addColorStop(1, abHexA(secondary, 0.5));
-    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-    const fs = Math.round(h * 0.34);
-    ctx.textBaseline = "middle";
-    ctx.font = `800 ${fs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
-    ctx.fillText(abEllipsize(ctx, headline, w - pad * 2), pad, h / 2);
-    return;
-  }
-
-  const scrimH = Math.round(h * (h / w >= 1.4 ? 0.52 : 0.6));
-  const g = ctx.createLinearGradient(0, h - scrimH, 0, h);
-  g.addColorStop(0, abHexA(secondary, 0)); g.addColorStop(0.45, abHexA(secondary, 0.6)); g.addColorStop(1, abHexA(secondary, 0.96));
-  ctx.fillStyle = g; ctx.fillRect(0, h - scrimH, w, scrimH);
-
-  const maxW = w - pad * 2;
-  let y = h - pad - (Math.round(64 * scale) + Math.round(52 * scale) + pad); // leave room for CTA + badge
-
-  if (sub && h >= 250) {
-    const fs = abClamp(Math.round(w * 0.04), 12, 32);
-    ctx.font = `500 ${fs}px system-ui,Arial,sans-serif`; ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    const lines = abWrap(ctx, sub, maxW).slice(0, 2);
-    for (let i = lines.length - 1; i >= 0; i--) { ctx.fillText(lines[i], pad, y); y -= fs * 1.3; }
-    y -= fs * 0.3;
-  }
+  ctx.textBaseline = "alphabetic";
+  let cy = y;
+  const headline = brief.headline || brief.app_name || "";
   if (headline) {
-    const fs = abClamp(Math.round(w * 0.082), 16, 80);
-    ctx.font = `900 ${fs}px system-ui,Arial,sans-serif`; ctx.textBaseline = "alphabetic";
-    const lines = abWrap(ctx, headline, maxW).slice(0, 2);
-    for (let i = lines.length - 1; i >= 0; i--) {
-      ctx.fillStyle = lines.length > 1 && i === lines.length - 1 ? abLighten(accent, 0.15) : "#ffffff";
-      ctx.fillText(lines[i], pad, y);
-      y -= fs * 1.12;
-    }
+    ctx.font = `900 ${headFs}px system-ui,Arial,sans-serif`;
+    const lines = abWrap(ctx, headline, maxW).slice(0, maxLines);
+    lines.forEach((ln, i) => {
+      cy += headFs;
+      ctx.fillStyle = lines.length > 1 && i === lines.length - 1 ? ink.accentText : ink.heading;
+      ctx.fillText(ln, x, cy);
+      cy += headFs * 0.16;
+    });
   }
+  const sub = brief.subheadline || "";
+  if (sub) {
+    cy += subFs * 0.7;
+    ctx.font = `500 ${subFs}px system-ui,Arial,sans-serif`;
+    ctx.fillStyle = ink.body;
+    abWrap(ctx, sub, maxW).slice(0, 2).forEach((ln) => {
+      cy += subFs;
+      ctx.fillText(ln, x, cy);
+      cy += subFs * 0.25;
+    });
+  }
+  return cy;
 }
 
 /** Cover-crop to the exact asset size with no overlay at all. */
@@ -284,32 +310,112 @@ function abRenderPlain(base: HTMLImageElement, w: number, h: number): string {
   return canvas.toDataURL("image/png");
 }
 
+/**
+ * Composites the layout onto a rendered background.
+ *
+ * Type sits in a LEFT COLUMN for wide and square frames. The model reliably
+ * clears the left side — the composition prompt asks for it and the renders
+ * honour it — while it routinely runs the subject to the bottom edge despite
+ * being asked not to. Anchoring to the bottom therefore dropped the headline
+ * and CTA onto the subject's legs. Tall frames keep a bottom band, since there
+ * the subject is centred horizontally and no side is free.
+ */
 function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Brief, icon: HTMLImageElement | null): string {
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d")!;
 
-  // Cover-crop only. The source was generated at (or near) this ratio, so this
-  // trims the safe margin the prompt reserved — no stretching, no blur bars.
   const cs = Math.max(w / base.width, h / base.height);
-  const dw = base.width * cs, dh = base.height * cs;
-  ctx.drawImage(base, (w - dw) / 2, (h - dh) / 2, dw, dh);
+  ctx.drawImage(base, (w - base.width * cs) / 2, (h - base.height * cs) / 2, base.width * cs, base.height * cs);
 
+  const ink = abInk(brief);
   const scale = abClamp(Math.min(w, h) / 500, 0.34, 2.2);
-  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.06));
-  abDrawText(ctx, w, h, brief, scale);
+  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.055));
+  const accent = brief.accent_color || "#FF6B35";
+  const ratio = w / h;
 
+  // Strips are too short for a stack; one line of headline plus a small CTA.
   if (h <= 120) {
-    if (brief.cta_text) {
-      const est = 160 * scale;
-      abDrawCTA(ctx, w - pad - est, (h - 46 * scale) / 2, est, brief.cta_text, brief.accent_color || "#FF6B35", scale * 0.7);
-    }
+    const g = ctx.createLinearGradient(0, 0, w, 0);
+    const base2 = ink.scrimColor || "#1A1A2E";
+    g.addColorStop(0, abHexA(base2, 0.94)); g.addColorStop(1, abHexA(base2, 0.5));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const fs = Math.round(h * 0.34);
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.font = `800 ${fs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
+    ctx.fillText(abEllipsize(ctx, brief.headline || brief.app_name || "", w * 0.6), pad, h / 2);
+    if (brief.cta_text) abDrawCTA(ctx, w - pad - 160 * scale, (h - 46 * scale) / 2, 160 * scale, brief.cta_text, accent, scale * 0.7);
     return canvas.toDataURL("image/png");
   }
 
-  abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale);
-  abDrawCTA(ctx, pad, h - pad - Math.round(46 * scale) - Math.round(52 * scale) - pad * 0.4, w - pad * 2, brief.cta_text || "Download", brief.accent_color || "#FF6B35", scale);
-  if (h >= 320 && w >= 300) abDrawPlayBadge(ctx, pad, h - pad - Math.round(46 * scale), scale);
+  const leftColumn = ratio > 0.9; // wide and square; tall keeps the bottom band
+
+  if (leftColumn) {
+    const colW = Math.round(w * (ratio >= 1.3 ? 0.44 : 0.40)) - pad;
+    // A whisper of a scrim only — enough to hold type over a soft gradient
+    // without turning a deliberately bright background grey.
+    if (!ink.scrim) {
+      const g = ctx.createLinearGradient(0, 0, colW + pad * 2, 0);
+      g.addColorStop(0, "rgba(255,255,255,0.55)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, colW + pad * 2, h);
+    } else {
+      const g = ctx.createLinearGradient(0, 0, colW + pad * 2, 0);
+      g.addColorStop(0, abHexA(ink.scrimColor || "#1A1A2E", 0.88));
+      g.addColorStop(1, abHexA(ink.scrimColor || "#1A1A2E", 0));
+      ctx.fillStyle = g; ctx.fillRect(0, 0, colW + pad * 2, h);
+    }
+
+    const logoH = abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink);
+
+    const headFs = abClamp(Math.round(colW * 0.145), 15, 74);
+    const subFs = abClamp(Math.round(colW * 0.062), 11, 30);
+    const ctaLabel = brief.cta_text || "Download";
+    const ctaH = abCtaHeight(ctx, colW, ctaLabel, scale);
+    const badgeH = Math.round(46 * scale);
+    const showBadge = h >= 400 && colW >= 200;
+
+    // Centre the text block in the space between the logo and the CTA.
+    const blockTop = pad + logoH + pad * 0.8;
+    const blockBottom = h - pad - ctaH - (showBadge ? badgeH + pad * 0.5 : 0) - pad * 0.8;
+    const est = headFs * 2.4 + subFs * 2.6;
+    const startY = Math.max(blockTop, blockTop + (blockBottom - blockTop - est) / 2);
+
+    abDrawHeadlineBlock(ctx, pad, startY, colW, brief, ink, headFs, subFs);
+
+    let cy = h - pad;
+    if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale); cy -= pad * 0.5; }
+    cy -= ctaH;
+    abDrawCTA(ctx, pad, cy, colW, ctaLabel, accent, scale);
+    return canvas.toDataURL("image/png");
+  }
+
+  // Tall: bottom band, subject centred above it.
+  const bandH = Math.round(h * 0.36);
+  const g = ctx.createLinearGradient(0, h - bandH, 0, h);
+  const bandBase = ink.scrim ? (ink.scrimColor || "#1A1A2E") : "#FFFFFF";
+  g.addColorStop(0, abHexA(bandBase, 0));
+  g.addColorStop(0.4, abHexA(bandBase, 0.78));
+  g.addColorStop(1, abHexA(bandBase, 0.97));
+  ctx.fillStyle = g; ctx.fillRect(0, h - bandH, w, bandH);
+
+  abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink);
+
+  const maxW = w - pad * 2;
+  const headFs = abClamp(Math.round(w * 0.075), 16, 78);
+  const subFs = abClamp(Math.round(w * 0.036), 12, 30);
+  const ctaLabel = brief.cta_text || "Download";
+  const ctaH = abCtaHeight(ctx, maxW, ctaLabel, scale);
+  const badgeH = Math.round(46 * scale);
+  const showBadge = w >= 300;
+
+  const textTop = h - bandH + pad * 0.6;
+  abDrawHeadlineBlock(ctx, pad, textTop, maxW, brief, ink, headFs, subFs, 2);
+
+  let cy = h - pad;
+  if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale); cy -= pad * 0.5; }
+  cy -= ctaH;
+  abDrawCTA(ctx, pad, cy, maxW, ctaLabel, accent, scale);
 
   return canvas.toDataURL("image/png");
 }
