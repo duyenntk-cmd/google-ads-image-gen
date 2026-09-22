@@ -835,6 +835,8 @@ export default function Home() {
   const [abRemovals, setAbRemovals] = useState<string[]>([]);
   /** Slots that came back empty, so they can be retried without paying for the set. */
   const [abFailed, setAbFailed] = useState<string[]>([]);
+  /** Per-card revision text, keyed by slot. Scoped to that one image. */
+  const [abCardRev, setAbCardRev] = useState<Record<string,string>>({});
   /** Which single slot is being regenerated, for the per-card spinner. */
   const [abBusyKey, setAbBusyKey] = useState<string|null>(null);
   /** Mirror of abPreviews: a partial regenerate merges into this synchronously. */
@@ -856,6 +858,7 @@ export default function Home() {
     setAbMascotUsed(null);
     setAbFailed([]);
     abPrevRef.current = [];
+    setAbCardRev({});
     setAbRevision(""); setAbRemovals([]);
   };
 
@@ -928,10 +931,17 @@ export default function Home() {
    * @param onlyKeys regenerate just these slots and merge them into what is on
    *   screen. Retrying three failures cost a full set before this — 28,000₫ to
    *   replace 4,200₫ of images.
+   * @param revisionOverride a revision that applies to THIS call only. The
+   *   rewritten brief stays local, so fixing one frame does not silently
+   *   redefine the other nineteen.
    */
-  const handleAbGenerate = async (mode: "one"|"core"|"full" = abMode, reuse = false, onlyKeys?: string[]) => {
+  const handleAbGenerate = async (
+    mode: "one"|"core"|"full" = abMode, reuse = false, onlyKeys?: string[], revisionOverride?: string,
+  ) => {
     if (!abUrl.trim()) return;
     const partial = Boolean(onlyKeys?.length);
+    const scoped = revisionOverride !== undefined;
+    const revText = (scoped ? revisionOverride! : abRevision).trim();
     // A partial retry stays on the results screen: switching to the progress
     // view would hide the very images being compared against.
     if (partial) setAbBusyKey(onlyKeys!.length === 1 ? onlyKeys![0] : AB_BUSY_BATCH);
@@ -983,17 +993,21 @@ export default function Home() {
       // Fold the revision into the brief before rendering. Bolting "remove X"
       // onto a prompt that still describes X leaves X in the picture, so the
       // description itself has to change. Pennies on gpt-4o-mini.
-      let removals: string[] = abRemovals;
-      if (abRevision.trim()) {
+      let removals: string[] = scoped ? [] : abRemovals;
+      if (revText) {
         setAbStatus("✏️ Đang áp yêu cầu sửa vào mô tả...");
         try {
-          const rv = await abFetchJson("/api/banner-revise", { brief: theBrief, revision: abRevision.trim() }, 45000, "banner-revise");
+          const rv = await abFetchJson("/api/banner-revise", { brief: theBrief, revision: revText }, 45000, "banner-revise");
           if (rv.success && rv.brief) {
             theBrief = rv.brief;
-            setAbBrief(theBrief);
             removals = Array.isArray(rv.removals) ? rv.removals : [];
-            setAbRemovals(removals);
-            if (abRun.current) abRun.current.brief = theBrief;
+            // A one-card request edits that card only: keep the rewritten brief
+            // in this closure instead of writing it back over the shared one.
+            if (!scoped) {
+              setAbBrief(theBrief);
+              setAbRemovals(removals);
+              if (abRun.current) abRun.current.brief = theBrief;
+            }
           }
         } catch { /* non-fatal: fall back to the prompt-level instruction alone */ }
       }
@@ -1025,7 +1039,7 @@ export default function Home() {
             brief: theBrief, userPrompt: abPrompt, quality: abQuality,
             width: c.width, height: c.height, key: c.key, angle: c.angle,
             referenceImages, characterImage: mascot, precise: abPrecise, platform, uiLanguage: abLang,
-              revision: abRevision.trim(), removals,
+              revision: revText, removals,
           }, 300000, `banner-generate:${c.key}`)),
         AB_CONCURRENCY,
         (n) => setAbStatus(`🎨 Đang gen ${total} ảnh (${n}/${total})...`),
@@ -2913,6 +2927,27 @@ export default function Home() {
                               className="text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white"
                               style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
                           </div>
+                        </div>
+
+                        {/* Per-image revision. The box above the grid rewrites the
+                            brief for the whole set; this one is scoped to this
+                            frame, so fixing one overlap does not restyle the
+                            other nineteen. */}
+                        <div onClick={e => e.stopPropagation()} className="mt-2 space-y-1.5">
+                          <textarea
+                            value={abCardRev[p.key] || ""}
+                            onChange={e => setAbCardRev(prev => ({ ...prev, [p.key]: e.target.value }))}
+                            rows={2}
+                            placeholder="Sửa riêng ảnh này: VD chữ đang đè lên mặt, dịch nhân vật sang phải"
+                            className="w-full text-[11px] rounded-lg px-2 py-1.5 border focus:outline-none focus:border-violet-500 resize-y"
+                            style={{ ...inputStyle, minHeight: 44 }} />
+                          <button
+                            onClick={() => handleAbGenerate(abLastMode, true, [p.key], abCardRev[p.key] || "")}
+                            disabled={!(abCardRev[p.key] || "").trim() || abBusyKey !== null}
+                            className="w-full text-[11px] font-semibold px-2 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                            style={{ background: (abCardRev[p.key] || "").trim() ? "linear-gradient(135deg,#7C3AED,#EC4899)" : "#9CA3AF" }}>
+                            {abBusyKey === p.key ? "⏳ Đang gen lại..." : `✏️ Sửa riêng ảnh này (${abVnd(AB_COST_PER_IMAGE[abQuality] ?? 0.211)})`}
+                          </button>
                         </div>
                       </div>
                     );
