@@ -274,7 +274,11 @@ function abFitLines(ctx: CanvasRenderingContext2D, text: string, maxW: number, m
   let fs = startFs;
   for (; fs > 9; fs -= 1) {
     ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
-    if (abWrap(ctx, text, maxW).length <= maxLines) break;
+    const lines = abWrap(ctx, text, maxW);
+    // Line count alone is not enough: a single word wider than the column wraps
+    // to one line and still runs past it, which is how a subheadline ended up
+    // across a character's hair.
+    if (lines.length <= maxLines && lines.every((l) => ctx.measureText(l).width <= maxW)) break;
   }
   ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
   return { fs, lines: abBalancedWrap(ctx, text, maxW, maxLines) };
@@ -507,6 +511,57 @@ function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number
   return cy;
 }
 
+/**
+ * Where the artwork gets busy, scanning from the left, in destination pixels.
+ *
+ * The prompt asks the model to keep a side clear and it mostly complies — but
+ * "mostly" put a character's hair under the subheadline. Rather than trust the
+ * instruction, measure the render: cover-crop it small, take per-column edge
+ * energy, and find where content actually starts. Smooth gradients register near
+ * zero; a subject lights up.
+ *
+ * Returns the frame width when nothing is busy enough to matter.
+ */
+function abSubjectLeftEdge(base: HTMLImageElement, w: number, h: number): number {
+  const N = 96;
+  try {
+    const c = document.createElement("canvas");
+    c.width = N; c.height = N;
+    const x = c.getContext("2d");
+    if (!x) return w;
+    const cs = Math.max(N / base.width, N / base.height);
+    const dw = base.width * cs, dh = base.height * cs;
+    x.drawImage(base, (N - dw) / 2, (N - dh) / 2, dw, dh);
+    const d = x.getImageData(0, 0, N, N).data;
+    const px = (a: number, b: number) => (b * N + a) * 4;
+
+    const energy: number[] = [];
+    for (let a = 0; a < N; a++) {
+      let e = 0;
+      for (let b = 1; b < N - 1; b++) {
+        const i = px(a, b), below = px(a, b + 1), right = px(Math.min(a + 1, N - 1), b);
+        e += Math.abs(d[i] - d[below]) + Math.abs(d[i + 1] - d[below + 1]) + Math.abs(d[i + 2] - d[below + 2]);
+        e += Math.abs(d[i] - d[right]) + Math.abs(d[i + 1] - d[right + 1]) + Math.abs(d[i + 2] - d[right + 2]);
+      }
+      energy.push(e / (N * 6));
+    }
+    const peak = Math.max(...energy);
+    if (peak < 4) return w; // essentially flat: nothing to avoid
+
+    // First column that is busy and stays busy — a lone spike is noise, not a subject.
+    const TH = peak * 0.22;
+    for (let a = 0; a < N; a++) {
+      if (energy[a] <= TH) continue;
+      let sustained = true;
+      for (let k = 1; k <= 3 && a + k < N; k++) if (energy[a + k] <= TH * 0.6) sustained = false;
+      if (sustained) return Math.round((a / N) * w);
+    }
+    return w;
+  } catch {
+    return w; // a tainted canvas must not break rendering
+  }
+}
+
 /** Cover-crop to the exact asset size with no overlay at all. */
 function abRenderPlain(base: HTMLImageElement, w: number, h: number): string {
   const canvas = document.createElement("canvas");
@@ -558,12 +613,21 @@ function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Bri
   const leftColumn = ratio > 0.9; // wide and square; tall keeps the bottom band
 
   if (leftColumn) {
-    const colW = Math.round(w * (ratio >= 1.3 ? 0.44 : 0.40)) - pad;
+    const wanted = Math.round(w * (ratio >= 1.3 ? 0.44 : 0.40)) - pad;
+    // Pull the column in when the subject sits further left than the prompt asked.
+    const busyX = abSubjectLeftEdge(base, w, h);
+    const available = busyX - pad - Math.round(pad * 0.7);
+    const floor = Math.round(w * 0.22);
+    const colW = Math.max(floor, Math.min(wanted, available));
+    // Below the floor the subject has taken the whole frame; a wash keeps the
+    // type readable where it has to sit over artwork.
+    const crowded = available < floor;
     // A whisper of a scrim only — enough to hold type over a soft gradient
     // without turning a deliberately bright background grey.
     if (!ink.scrim) {
       const g = ctx.createLinearGradient(0, 0, colW + pad * 2, 0);
-      g.addColorStop(0, "rgba(255,255,255,0.55)");
+      g.addColorStop(0, crowded ? "rgba(255,255,255,0.90)" : "rgba(255,255,255,0.55)");
+      g.addColorStop(crowded ? 0.7 : 1, crowded ? "rgba(255,255,255,0.72)" : "rgba(255,255,255,0)");
       g.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = g; ctx.fillRect(0, 0, colW + pad * 2, h);
     } else {
