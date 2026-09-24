@@ -794,7 +794,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch">("home");
 
   // ── AI Banner ──
   type AbStep = "input" | "generating" | "preview";
@@ -1227,6 +1227,87 @@ export default function Home() {
   };
 
 
+  // Google Ads Launch state
+  const [adsConnected, setAdsConnected] = useState<boolean|null>(null);
+  const [adsAccounts, setAdsAccounts] = useState<{id:string;name:string;currency:string;status:string}[]>([]);
+  const [adsSelectedAccount, setAdsSelectedAccount] = useState("");
+  const [adsCampaignName, setAdsCampaignName] = useState("");
+  const [adsAppId, setAdsAppId] = useState("");
+  const [adsAppStore, setAdsAppStore] = useState<"GOOGLE_APP_STORE"|"APPLE_APP_STORE">("GOOGLE_APP_STORE");
+  const [adsBudget, setAdsBudget] = useState("200000");
+  const [adsHeadlines, setAdsHeadlines] = useState(["","",""]);
+  const [adsDescriptions, setAdsDescriptions] = useState(["",""]);
+  const [adsSelectedBanners, setAdsSelectedBanners] = useState<string[]>([]);
+  const [adsLaunching, setAdsLaunching] = useState(false);
+  const [adsResult, setAdsResult] = useState<{success:boolean;message?:string;error?:string}|null>(null);
+  const [adsCampaigns, setAdsCampaigns] = useState<{id:string;name:string;status:string;budgetPerDay:number}[]>([]);
+  const [adsAccountsError, setAdsAccountsError] = useState<string|null>(null);
+  const [adsNeedsBasicAccess, setAdsNeedsBasicAccess] = useState(false);
+  const [adsAccountsLoading, setAdsAccountsLoading] = useState(false);
+
+  /**
+   * Assets offered for upload. AI Banner is where the App campaign creatives
+   * come from now, so its set leads; Gen Banner's output still counts.
+   */
+  const adsBannerPool = abPreviews.length ? abPreviews : previews;
+
+  const checkAdsConnection = async () => {
+    try {
+      const res = await fetch("/api/google-ads/auth?action=status");
+      if (!res.ok) { setAdsConnected(false); return; }
+      const data = await res.json();
+      setAdsConnected(data.connected);
+      if (data.connected) loadAdsAccounts();
+    } catch { setAdsConnected(false); }
+  };
+
+  const loadAdsAccounts = async () => {
+    setAdsAccountsLoading(true);
+    setAdsAccountsError(null);
+    setAdsNeedsBasicAccess(false);
+    try {
+      const res = await fetch("/api/google-ads/accounts");
+      const text = await res.text();
+      let data: {success:boolean;accounts?:{id:string;name:string;currency:string;status:string}[];error?:string;needs_basic_access?:boolean};
+      try { data = JSON.parse(text); } catch { throw new Error(`Server returned HTML (middleware issue). Status: ${res.status}`); }
+      if (data.success) setAdsAccounts(data.accounts || []);
+      else if (data.needs_basic_access) setAdsNeedsBasicAccess(true);
+      else setAdsAccountsError(data.error || "Unknown error");
+    } catch(e) { setAdsAccountsError(String(e)); }
+    setAdsAccountsLoading(false);
+  };
+
+  const loadAdsCampaigns = async (customerId: string) => {
+    const res = await fetch(`/api/google-ads/campaigns?customerId=${customerId}`);
+    const data = await res.json();
+    if (data.success) setAdsCampaigns(data.campaigns || []);
+  };
+
+  const handleAdsLaunch = async () => {
+    if (!adsSelectedAccount || !adsCampaignName || !adsAppId) return;
+    setAdsLaunching(true); setAdsResult(null);
+    try {
+      const res = await fetch("/api/google-ads/campaigns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: adsSelectedAccount,
+          campaignName: adsCampaignName,
+          appId: adsAppId,
+          appStore: adsAppStore,
+          budgetPerDayVnd: parseInt(adsBudget) || 200000,
+          headlines: adsHeadlines.filter(Boolean),
+          descriptions: adsDescriptions.filter(Boolean),
+          imageDataUrls: adsSelectedBanners,
+        }),
+      });
+      const data = await res.json();
+      setAdsResult(data);
+      if (data.success) loadAdsCampaigns(adsSelectedAccount);
+    } catch (e) { setAdsResult({ success: false, error: String(e) }); }
+    setAdsLaunching(false);
+  };
+
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
   const [kwAppUrl, setKwAppUrl] = useState("");
@@ -1419,6 +1500,17 @@ export default function Home() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem("banner_history") || "[]")); } catch {}
+  }, []);
+
+  // Google sends the operator back here after the consent screen.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("google_ads_connected") === "1") {
+      setActivePage("launch");
+      checkAdsConnection();
+      window.history.replaceState({}, "", "/");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveHistory = (item: HistoryItem) => {
     setHistory(prev => {
@@ -1754,8 +1846,9 @@ export default function Home() {
             ["adcopy",   "✍️", "Ad Copy"],
             ["keywords", "🔑", "Keywords"],
             ["localize", "🌏", "Localize"],
+            ["launch",   "🚀", "Launch Camp"],
           ] as const).map(([page, icon, label]) => (
-            <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } }}
+            <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } if (page==="launch") { checkAdsConnection(); } }}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
               style={activePage===page
                 ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
@@ -1829,7 +1922,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -3120,6 +3213,221 @@ export default function Home() {
                 {ex.includes("apple") ? "🍎 App Store — Canva" : "🤖 Play Store — Canva"}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* LAUNCH CAMPAIGN PAGE */}
+        {activePage === "launch" && (
+          <div className="space-y-5">
+            {/* Connect Google Ads */}
+            <div className="p-5 border rounded-2xl" style={cardStyle}>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="font-semibold text-sm" style={{color: t.text}}>Kết nối Google Ads</div>
+                  <div className="text-xs mt-0.5" style={{color: t.textMuted}}>Authorize để tạo campaign trực tiếp</div>
+                </div>
+                {adsConnected === null ? (
+                  <div className="text-xs" style={{color: t.textMuted}}>Đang kiểm tra...</div>
+                ) : adsConnected ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-1 rounded-full bg-green-500/15 text-green-500 font-medium">✓ Đã kết nối</span>
+                    <button onClick={async()=>{ await fetch("/api/google-ads/auth?action=disconnect"); setAdsConnected(false); setAdsAccounts([]); }}
+                      className="text-xs px-2 py-1 rounded-lg border" style={{color:t.textMuted,borderColor:t.border}}>Ngắt kết nối</button>
+                  </div>
+                ) : (
+                  <a href="/api/google-ads/auth?action=connect"
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 transition-colors">
+                    🔗 Connect Google Ads
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {adsConnected && (
+              <>
+                {/* Select Account */}
+                <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                  <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>Chọn tài khoản Google Ads</label>
+                  {adsNeedsBasicAccess ? (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <span className="text-2xl">⏳</span>
+                        <div>
+                          <div className="text-sm font-semibold text-amber-400 mb-1">Đang chờ phê duyệt Basic Access</div>
+                          <div className="text-xs text-amber-300/80 leading-relaxed">
+                            Developer Token hiện ở chế độ <b>Explorer (Test)</b> — không thể truy cập tài khoản Google Ads thật.<br/>
+                            Bạn đã nộp đơn xin <b>Basic Access</b>. Google thường phê duyệt trong <b>3–5 ngày làm việc</b>.
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-amber-300/70 bg-amber-500/10 rounded-lg px-3 py-2 space-y-1">
+                        <div>✅ Đơn đã được gửi đến Google Ads API Center</div>
+                        <div>📧 Bạn sẽ nhận email khi được phê duyệt</div>
+                        <div>🔄 Sau khi được duyệt, nhấn <b>Thử lại</b> để tải tài khoản</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-black font-semibold">🔄 Thử lại</button>
+                        <a href="https://ads.google.com/nav/selectaccount?dst=/aw/apicenter" target="_blank" rel="noreferrer"
+                          className="text-xs px-3 py-1.5 rounded-lg border border-amber-500/50 text-amber-400">Kiểm tra trạng thái →</a>
+                      </div>
+                    </div>
+                  ) : adsAccountsError ? (
+                    <div className="space-y-2">
+                      <div className="text-xs text-red-400 bg-red-400/10 rounded-lg px-3 py-2 break-all">{adsAccountsError}</div>
+                      <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">Thử lại</button>
+                    </div>
+                  ) : adsAccountsLoading ? (
+                    <div className="text-xs" style={{color:t.textMuted}}>⏳ Đang tải tài khoản...</div>
+                  ) : adsAccounts.length === 0 ? (
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs" style={{color:t.textMuted}}>Không có tài khoản nào</div>
+                      <button onClick={loadAdsAccounts} className="text-xs px-2 py-1 rounded-lg border" style={{borderColor:t.border,color:t.textMuted}}>Tải lại</button>
+                    </div>
+                  ) : (
+                    <select value={adsSelectedAccount} onChange={e=>{ setAdsSelectedAccount(e.target.value); if(e.target.value) loadAdsCampaigns(e.target.value); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none" style={inputStyle}>
+                      <option value="">-- Chọn account --</option>
+                      {adsAccounts.map(a=>(
+                        <option key={a.id} value={a.id}>{a.name} ({a.id}) — {a.currency}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {adsSelectedAccount && (
+                  <>
+                    {/* Campaign Settings */}
+                    <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                      <div className="font-semibold text-sm" style={{color:t.text}}>Cấu hình Campaign</div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Tên campaign</label>
+                          <input value={adsCampaignName} onChange={e=>setAdsCampaignName(e.target.value)}
+                            placeholder="VD: Pix Editor - VN Q1" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Budget/ngày (VNĐ)</label>
+                          <input value={adsBudget} onChange={e=>setAdsBudget(e.target.value)} type="number"
+                            placeholder="200000" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>App ID</label>
+                          <input value={adsAppId} onChange={e=>setAdsAppId(e.target.value)}
+                            placeholder="com.apero.pixeditor" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Store</label>
+                          <select value={adsAppStore} onChange={e=>setAdsAppStore(e.target.value as "GOOGLE_APP_STORE"|"APPLE_APP_STORE")}
+                            className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}>
+                            <option value="GOOGLE_APP_STORE">🤖 Google Play</option>
+                            <option value="APPLE_APP_STORE">🍎 App Store</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Headlines & Descriptions */}
+                    <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                      <div className="font-semibold text-sm" style={{color:t.text}}>Ad Copy</div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold" style={labelStyle}>Headlines (tối đa 5, mỗi cái ≤30 ký tự)</label>
+                        {adsHeadlines.map((h,i)=>(
+                          <div key={i} className="flex gap-2 items-center">
+                            <input value={h} onChange={e=>{ const arr=[...adsHeadlines]; arr[i]=e.target.value.slice(0,30); setAdsHeadlines(arr); }}
+                              placeholder={`Headline ${i+1}`} className="flex-1 rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                            <span className="text-xs w-8 text-right" style={{color:t.textMuted}}>{h.length}/30</span>
+                          </div>
+                        ))}
+                        {adsHeadlines.length < 5 && (
+                          <button onClick={()=>setAdsHeadlines([...adsHeadlines,""])} className="text-xs" style={{color:"#7C3AED"}}>+ Thêm headline</button>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold" style={labelStyle}>Descriptions (tối đa 5, mỗi cái ≤90 ký tự)</label>
+                        {adsDescriptions.map((d,i)=>(
+                          <div key={i} className="flex gap-2 items-center">
+                            <input value={d} onChange={e=>{ const arr=[...adsDescriptions]; arr[i]=e.target.value.slice(0,90); setAdsDescriptions(arr); }}
+                              placeholder={`Description ${i+1}`} className="flex-1 rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                            <span className="text-xs w-8 text-right" style={{color:t.textMuted}}>{d.length}/90</span>
+                          </div>
+                        ))}
+                        {adsDescriptions.length < 5 && (
+                          <button onClick={()=>setAdsDescriptions([...adsDescriptions,""])} className="text-xs" style={{color:"#7C3AED"}}>+ Thêm description</button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Select Banners from history */}
+                    {adsBannerPool.length > 0 && (
+                      <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                        <div className="flex items-center justify-between">
+                          <div className="font-semibold text-sm" style={{color:t.text}}>Chọn banner để upload ({adsSelectedBanners.length} đã chọn)</div>
+                          <button onClick={()=>setAdsSelectedBanners(adsBannerPool.filter(p=>p.isTop5).map(p=>p.dataUrl))} className="text-xs" style={{color:"#7C3AED"}}>Chọn Top 5</button>
+                        </div>
+                        <div className="grid grid-cols-5 gap-2">
+                          {adsBannerPool.slice(0,20).map((p,i)=>{
+                            const sel = adsSelectedBanners.includes(p.dataUrl);
+                            return (
+                              <div key={i} onClick={()=>setAdsSelectedBanners(sel ? adsSelectedBanners.filter(x=>x!==p.dataUrl) : [...adsSelectedBanners,p.dataUrl])}
+                                className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${sel?"border-violet-500":"border-transparent"}`}>
+                                <img src={p.dataUrl} alt={p.key} className="w-full h-16 object-contain" style={{background:"#111"}}/>
+                                {sel && <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-violet-500 flex items-center justify-center text-white text-[9px]">✓</div>}
+                                <div className="text-[9px] text-center truncate px-1 py-0.5" style={{color:t.textMuted}}>{p.key}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="text-xs" style={{color:t.textMuted}}>💡 Gen banner ở trang Gen Banner trước rồi quay lại đây chọn</p>
+                      </div>
+                    )}
+
+                    {/* Launch Button */}
+                    {adsResult && (
+                      <div className={`px-4 py-3 rounded-xl text-sm ${adsResult.success?"bg-green-500/10 text-green-500":"bg-red-500/10 text-red-400"}`}>
+                        {adsResult.success ? `✅ ${adsResult.message}` : `❌ ${adsResult.error}`}
+                      </div>
+                    )}
+
+                    <button onClick={handleAdsLaunch} disabled={adsLaunching || !adsCampaignName || !adsAppId}
+                      className="w-full py-3.5 rounded-xl font-semibold text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-40 transition-all">
+                      {adsLaunching ? "⏳ Đang tạo campaign..." : "🚀 Tạo Campaign Google Ads"}
+                    </button>
+
+                    {/* Existing Campaigns */}
+                    {adsCampaigns.length > 0 && (
+                      <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                        <div className="font-semibold text-sm" style={{color:t.text}}>App Campaigns hiện có</div>
+                        <div className="space-y-2">
+                          {adsCampaigns.map(c=>(
+                            <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-xl border" style={{borderColor:t.border}}>
+                              <div>
+                                <div className="text-sm font-medium" style={{color:t.text}}>{c.name}</div>
+                                <div className="text-xs" style={{color:t.textMuted}}>Budget: {c.budgetPerDay.toLocaleString()}đ/ngày</div>
+                              </div>
+                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${c.status==="ENABLED"?"bg-green-500/15 text-green-500":c.status==="PAUSED"?"bg-yellow-500/15 text-yellow-500":"bg-gray-500/15 text-gray-400"}`}>
+                                {c.status}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+
+            {!adsConnected && adsConnected !== null && (
+              <div className="p-6 border rounded-2xl text-center space-y-3" style={cardStyle}>
+                <div className="text-3xl">🔗</div>
+                <div className="font-semibold" style={{color:t.text}}>Chưa kết nối Google Ads</div>
+                <div className="text-sm" style={{color:t.textMuted}}>Bấm "Connect Google Ads" ở trên để authorize</div>
+              </div>
+            )}
           </div>
         )}
 
