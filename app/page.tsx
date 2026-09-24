@@ -4,16 +4,645 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
+import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 
 interface Brief {
-  app_name: string; headline: string; subheadline: string; cta_text: string;
+  app_name: string; tagline?: string; headline: string; subheadline: string; cta_text: string;
   primary_color: string; secondary_color: string; accent_color: string;
   background_style: string; mood: string; best_frame_index: number;
   niche: string; app_store_url: string; play_store_url: string;
 }
 interface Preview { key: string; width: number; height: number; label: string; isTop5: boolean; dataUrl: string; }
 type Step = "upload" | "analyzing" | "brief" | "generating" | "preview";
+
+/* ───────────────────────── AI Banner ─────────────────────────
+ * The model renders a text-free background; everything legible — logo, headline,
+ * CTA, Play badge — is drawn here on canvas. That keeps type crisp and identical
+ * across all 20 sizes, which an image model cannot guarantee.
+ */
+
+/** Parallel image requests in flight, to stay under OpenAI's images rate limit. */
+/**
+ * Requests in flight.
+ *
+ * The images endpoint meters input images per minute separately — an edit call
+ * sends a mascot and a screenshot, so four in flight blew through a limit of 5
+ * immediately. Two leaves room for the server-side retry to recover instead of
+ * every request queueing behind the same wall.
+ */
+const AB_CONCURRENCY = 2;
+/** Rough OpenAI list price per image, for the cost hint in the UI. */
+const AB_COST_PER_IMAGE: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
+/** Rough USD→VND rate, only for the on-screen estimate. Adjust if it drifts. */
+const AB_VND_PER_USD = 26000;
+/** abBusyKey sentinel for a multi-slot retry, which is not tied to one card. */
+const AB_BUSY_BATCH = "__batch";
+
+/**
+ * Store country to pull screenshots from.
+ *
+ * The phone mockup shows a real store screenshot, so a Global market (which
+ * resolves to the US store) put an English interface beside Vietnamese ad copy.
+ * When no specific market is chosen, follow the ad-copy language instead — the
+ * screenshot should speak the language the banner does.
+ */
+const AB_LANG_STORE: Record<string, string> = {
+  Vietnamese: "Vietnam", Japanese: "Japan", Korean: "South Korea", Thai: "Thailand",
+  Indonesian: "Indonesia", Filipino: "Philippines", Malay: "Malaysia", Hindi: "India",
+  Bengali: "Bangladesh", Arabic: "Saudi Arabia", Russian: "Russia", German: "Germany",
+  French: "France", Spanish: "Spain", Portuguese: "Brazil", "Chinese Simplified": "Taiwan",
+};
+const abStoreCountry = (market: string, lang: string) =>
+  market && market !== "Global" ? market : AB_LANG_STORE[lang] || market || "Global";
+const abVnd = (usd: number) => {
+  const v = Math.round(usd * AB_VND_PER_USD);
+  return v >= 1000 ? `${Math.round(v / 1000).toLocaleString("vi-VN")}k₫` : `${v.toLocaleString("vi-VN")}₫`;
+};
+
+/** POST JSON with a timeout, turning a gateway HTML page into a readable error. */
+async function abFetchJson(url: string, body: unknown, timeoutMs: number, label: string): Promise<Record<string, any>> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ac.signal });
+  } catch (e) {
+    if ((e as Error)?.name === "AbortError") throw new Error(`${label}: quá ${Math.round(timeoutMs / 1000)}s không phản hồi (server timeout).`);
+    throw new Error(`${label}: không gọi được API (${(e as Error)?.message || e}).`);
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label}: server trả về HTTP ${res.status} không phải JSON. ${text.slice(0, 120).replace(/\s+/g, " ")}`);
+  }
+}
+
+/** Last-resort app name when the store lookup is unavailable. */
+function abAppNameFromUrl(url: string): string {
+  const ios = url.match(/apps\.apple\.com\/[^/]+\/app\/([^/]+)\/id\d+/i);
+  if (ios) return decodeURIComponent(ios[1]).replace(/-/g, " ").trim();
+  const pkg = url.match(/[?&]id=([^&]+)/);
+  if (pkg) {
+    const parts = decodeURIComponent(pkg[1]).split(".").filter((p) => !/^(com|net|org|io|app|co|vn|xyz)$/i.test(p));
+    if (parts.length) return parts.join(" ");
+  }
+  return "";
+}
+
+/** Run `tasks` with at most `limit` in flight, reporting each completion. */
+async function abPool<T>(tasks: (() => Promise<T>)[], limit: number, onDone?: (n: number) => void): Promise<PromiseSettledResult<T>[]> {
+  const results = new Array<PromiseSettledResult<T>>(tasks.length);
+  let next = 0, done = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= tasks.length) return;
+      try { results[i] = { status: "fulfilled", value: await tasks[i]() }; }
+      catch (reason) { results[i] = { status: "rejected", reason }; }
+      onDone?.(++done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+}
+
+function abClamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
+function abHexToRgb(hex: string): [number, number, number] {
+  let h = (hex || "").replace("#", "").trim();
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (h.length !== 6) return [26, 26, 46];
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function abHexA(hex: string, a: number) { const [r, g, b] = abHexToRgb(hex); return `rgba(${r},${g},${b},${a})`; }
+/** Whichever of black or white actually contrasts better — a 0.6 luminance cut
+ * put white type on mid tones where black would have read far better. */
+function abContrast(hex: string) {
+  return abContrastRatio(hex, "#141414") >= abContrastRatio(hex, "#FFFFFF") ? "#141414" : "#ffffff";
+}
+function abLighten(hex: string, amt: number) { const [r, g, b] = abHexToRgb(hex); const f = (c: number) => Math.round(c + (255 - c) * amt); return `rgb(${f(r)},${f(g)},${f(b)})`; }
+function abRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+function abWrap(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = (text || "").split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const t = cur ? cur + " " + w : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+function abEllipsize(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return t + "…";
+}
+function abLoadImg(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Không load được ảnh."));
+    img.src = src;
+  });
+}
+
+/**
+ * Ink colours for the overlay.
+ *
+ * Every piece of type used to be white on a dark scrim. That breaks entirely on
+ * a light background — which is now the default, and what the reference the
+ * owner supplied uses — so colour follows bg_mode instead.
+ */
+/** WCAG relative luminance. */
+function abRelLum(hex: string) {
+  const [r, g, b] = abHexToRgb(hex).map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+/** WCAG contrast ratio, 1 (identical) to 21 (black on white). */
+function abContrastRatio(a: string, b: string) {
+  const la = abRelLum(a), lb = abRelLum(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+function abDarken(hex: string, amt: number) {
+  const [r, g, b] = abHexToRgb(hex);
+  const f = (c: number) => Math.round(c * (1 - amt));
+  return `#${[f(r), f(g), f(b)].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function abRgbToHsl(hex: string): [number, number, number] {
+  const [r, g, b] = abHexToRgb(hex).map((v) => v / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  const l = (mx + mn) / 2;
+  if (!d) return [0, 0, l];
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  const h =
+    mx === r ? ((g - b) / d + (g < b ? 6 : 0)) :
+    mx === g ? ((b - r) / d + 2) : ((r - g) / d + 4);
+  return [h * 60, s, l];
+}
+function abHslToHex(h: number, s: number, l: number): string {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] :
+    h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return `#${[r, g, b].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * The CTA fill.
+ *
+ * Keeps the brand hue and rebuilds the colour in HSL rather than multiplying the
+ * channels down. Plain darkening drains saturation as it goes, so a pale mauve
+ * primary came out a muddy grey-purple — technically legible, visibly dull. Here
+ * the hue is preserved, saturation is lifted to a confident minimum, and only
+ * lightness moves, down until white type clears 4.5:1.
+ *
+ * Primary first, then accent: the accent is whatever incidental highlight the
+ * brief spotted in the screenshots, and for a purple app it came back blue.
+ */
+function abUsableAccent(brief: Brief): string {
+  for (const c of [brief.primary_color, brief.accent_color]) {
+    if (!c) continue;
+    const [h, s] = abRgbToHsl(c);
+    if (s < 0.12) continue; // greyscale carries no brand hue worth keeping
+    const sat = Math.min(0.92, Math.max(0.58, s));
+    for (let l = 0.52; l >= 0.24; l -= 0.02) {
+      const out = abHslToHex(h, sat, l);
+      if (abContrastRatio(out, "#FFFFFF") >= 4.5) return out;
+    }
+  }
+  return "#6D28D9";
+}
+
+/**
+ * Brand name for the logo lockup.
+ *
+ * Store titles carry their positioning — "AI Language Tutor - Speka" — and set
+ * whole gave the lockup more width and weight than the headline, inverting the
+ * hierarchy. Splitting on the usual separators and keeping the shortest part
+ * recovers the brand from either ordering.
+ */
+function abBrandName(full: string): string {
+  const parts = (full || "").split(/\s*[-–—:|]\s*/).map((p) => p.trim()).filter((p) => p.length >= 2);
+  if (parts.length < 2) return (full || "").trim();
+  return parts.reduce((a, b) => {
+    const aw = a.split(/\s+/).length, bw = b.split(/\s+/).length;
+    if (bw !== aw) return bw < aw ? b : a;
+    return b.length < a.length ? b : a;
+  });
+}
+
+/**
+ * Wrap into balanced lines.
+ *
+ * Plain greedy wrapping fills each line to the edge and strands the remainder,
+ * giving "Học Ngôn Ngữ Thông / Minh". Pulling a word down just moves the stub,
+ * producing "Học Ngôn / Ngữ / Thông Minh". Instead, once the minimum line count
+ * is known, narrow the measure as far as it can go without adding a line — the
+ * lines even out on their own.
+ */
+function abBalancedWrap(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines = 3): string[] {
+  const natural = abWrap(ctx, text, maxW);
+  const target = Math.min(natural.length, maxLines);
+  if (target <= 1) return natural.slice(0, maxLines);
+  let best = natural;
+  for (let f = 0.98; f >= 0.55; f -= 0.02) {
+    const tryLines = abWrap(ctx, text, maxW * f);
+    if (tryLines.length > target) break;
+    best = tryLines;
+  }
+  return best.slice(0, maxLines);
+}
+
+/**
+ * Largest font at which `text` still fits `maxLines`, with the wrap balanced.
+ *
+ * Capping the line count alone silently dropped the remainder: a subheadline
+ * limited to two lines but wrapping to three lost its last words entirely.
+ * Shrinking instead keeps every word.
+ */
+function abFitLines(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines: number, startFs: number, weight: number) {
+  let fs = startFs;
+  for (; fs > 9; fs -= 1) {
+    ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
+    const lines = abWrap(ctx, text, maxW);
+    // Counting lines is not enough. A phrase that just fits the column wraps to
+    // one line and is still drawn to the last pixel of it, which is how a
+    // subheadline reached across the artwork. Require every line to measure
+    // inside the column, with a margin so type never touches the picture.
+    if (lines.length <= maxLines && lines.every((l) => ctx.measureText(l).width <= maxW)) break;
+  }
+  ctx.font = `${weight} ${fs}px system-ui,Arial,sans-serif`;
+  return { fs, lines: abBalancedWrap(ctx, text, maxW, maxLines) };
+}
+
+function abInk(brief: Brief) {
+  const light = (brief as { bg_mode?: string }).bg_mode !== "dark";
+  const secondary = brief.secondary_color || "#1A1A2E";
+  const accent = abUsableAccent(brief);
+  return light
+    ? { heading: "#14142B", body: "rgba(20,20,43,0.72)", logoText: "#14142B", chip: false, scrim: false, accentText: accent, accent }
+    : { heading: "#FFFFFF", body: "rgba(255,255,255,0.88)", logoText: "#FFFFFF", chip: true, scrim: true, accentText: abLighten(accent, 0.15), accent, scrimColor: secondary };
+}
+
+/** Icon + app name. Gets a frosted chip only on dark art, where plain type would not read. */
+function abDrawLogo(ctx: CanvasRenderingContext2D, x: number, y: number, icon: HTMLImageElement | null, rawName: string, tagline: string, scale: number, ink: ReturnType<typeof abInk>, maxW = Infinity, headFs = Infinity) {
+  // The lockup identifies; the headline sells. Keep the brand mark clearly
+  // below the headline in weight, and never wider than the column.
+  const name = abBrandName(rawName);
+  const iconS = Math.round(40 * scale), gap = Math.round(9 * scale);
+  let nameFs = Math.round(Math.min(22 * scale, headFs * 0.52));
+  let tagFs = Math.max(9, Math.round(nameFs * 0.46));
+  if (Number.isFinite(maxW)) {
+    const fits = (f: number) => {
+      ctx.font = `800 ${f}px system-ui,Arial,sans-serif`;
+      return (icon ? iconS + gap : 0) + ctx.measureText(name).width <= maxW;
+    };
+    while (nameFs > 11 && !fits(nameFs)) nameFs -= 1;
+    tagFs = Math.max(9, Math.round(nameFs * 0.46));
+  }
+  ctx.textAlign = "left";
+  ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`;
+  const nameW = ctx.measureText(name).width;
+  ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`;
+  const textW = Math.max(nameW, tagline ? ctx.measureText(tagline).width : 0);
+  const padX = ink.chip ? Math.round(12 * scale) : 0;
+  const padY = ink.chip ? Math.round(10 * scale) : 0;
+  const chipW = padX * 2 + (icon ? iconS + gap : 0) + textW;
+  const chipH = padY * 2 + Math.max(iconS, nameFs + (tagline ? tagFs + 4 * scale : 0));
+
+  if (ink.chip) {
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 18 * scale; ctx.shadowOffsetY = 4 * scale;
+    ctx.fillStyle = "rgba(12,12,22,0.42)";
+    abRoundRect(ctx, x, y, chipW, chipH, chipH * 0.28);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  let cx = x + padX;
+  const midY = y + chipH / 2;
+  if (icon) {
+    const iy = midY - iconS / 2;
+    ctx.save(); abRoundRect(ctx, cx, iy, iconS, iconS, iconS * 0.24); ctx.clip();
+    ctx.drawImage(icon, cx, iy, iconS, iconS); ctx.restore();
+    cx += iconS + gap;
+  }
+  if (tagline) {
+    ctx.textBaseline = "alphabetic";
+    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.logoText;
+    ctx.fillText(name, cx, midY + nameFs * 0.05);
+    ctx.font = `500 ${tagFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.body;
+    ctx.fillText(abEllipsize(ctx, tagline, Math.max(40, Math.min(maxW, chipW) - (cx - x) - padX)), cx, midY + nameFs * 0.05 + tagFs + 4 * scale);
+  } else {
+    ctx.textBaseline = "middle";
+    ctx.font = `800 ${nameFs}px system-ui,Arial,sans-serif`; ctx.fillStyle = ink.logoText;
+    ctx.fillText(name, cx, midY);
+  }
+  return chipH;
+}
+
+/** Accent pill: left circle with a download arrow, label, right chevron. */
+/**
+ * CTA font size that fits `maxW`. Sizing purely from `scale` overflowed the left
+ * column and ellipsized the label to "Học th…", so shrink until the whole pill
+ * fits. Layout and drawing both call this, so the reserved height always matches
+ * what gets drawn.
+ */
+function abCtaFontSize(ctx: CanvasRenderingContext2D, maxW: number, label: string, scale: number) {
+  const pill = (f: number) => {
+    ctx.font = `bold ${f}px system-ui,Arial,sans-serif`;
+    return f * 1.5 + f * 0.6 + ctx.measureText(label).width + f * 0.6 + f * 0.9 + f * 1.2;
+  };
+  let fs = abClamp(Math.round(22 * scale), 12, 46);
+  while (fs > 12 && pill(fs) > maxW) fs -= 1;
+  return fs;
+}
+const abCtaHeight = (ctx: CanvasRenderingContext2D, maxW: number, label: string, scale: number) =>
+  Math.round(abCtaFontSize(ctx, maxW, label, scale) * 2.2);
+
+function abDrawCTA(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, label: string, accent: string, scale: number) {
+  ctx.textAlign = "left";
+  const fs = abCtaFontSize(ctx, maxW, label, scale);
+  const labelW = (ctx.font = `bold ${fs}px system-ui,Arial,sans-serif`, ctx.measureText(label).width);
+  const circle = fs * 1.5, chev = fs * 0.9, gap = fs * 0.6;
+  const bh = Math.round(fs * 2.2);
+  const bw = Math.min(circle + gap + labelW + gap + chev + fs * 1.2, maxW);
+
+  ctx.save();
+  ctx.shadowColor = abHexA(accent, 0.45); ctx.shadowBlur = 22 * scale; ctx.shadowOffsetY = 6 * scale;
+  const grad = ctx.createLinearGradient(x, y, x + bw, y);
+  grad.addColorStop(0, accent); grad.addColorStop(1, abLighten(accent, 0.18));
+  ctx.fillStyle = grad;
+  abRoundRect(ctx, x, y, bw, bh, bh / 2);
+  ctx.fill();
+  ctx.restore();
+
+  const cc = abContrast(accent), ccx = x + bh / 2, ccy = y + bh / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.beginPath(); ctx.arc(ccx, ccy, circle / 2, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = cc; ctx.lineWidth = Math.max(2, fs * 0.11); ctx.lineCap = "round";
+  const a = circle * 0.24;
+  ctx.beginPath();
+  ctx.moveTo(ccx, ccy - a); ctx.lineTo(ccx, ccy + a * 0.7);
+  ctx.moveTo(ccx - a * 0.6, ccy + a * 0.1); ctx.lineTo(ccx, ccy + a * 0.7); ctx.lineTo(ccx + a * 0.6, ccy + a * 0.1);
+  ctx.moveTo(ccx - a * 0.9, ccy + a * 0.9); ctx.lineTo(ccx + a * 0.9, ccy + a * 0.9);
+  ctx.stroke();
+
+  ctx.fillStyle = cc; ctx.textBaseline = "middle";
+  ctx.font = `bold ${fs}px system-ui,Arial,sans-serif`;
+  ctx.fillText(abEllipsize(ctx, label, bw - bh - chev - fs * 1.6), x + bh + gap, ccy + 1);
+
+  const chx = x + bw - fs * 1.1;
+  ctx.beginPath();
+  ctx.moveTo(chx - chev * 0.3, ccy - chev * 0.5); ctx.lineTo(chx + chev * 0.3, ccy); ctx.lineTo(chx - chev * 0.3, ccy + chev * 0.5);
+  ctx.stroke();
+  return bh;
+}
+
+/**
+ * The Google Play mark: four facets meeting at a fold on the centre line.
+ * A→P is the straight top edge and B→P the bottom, with the yellow wedge at the
+ * tip, which is what makes it read as the real logo rather than a plain
+ * triangle. Previous version drew one flat blue triangle.
+ */
+function abDrawPlayMark(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+  const h = size, w = size * 0.88;
+  const L = cx - w / 2, R = cx + w / 2, T = cy - h / 2, B = cy + h / 2;
+  const K = [L + w * 0.58, cy] as const;                 // the fold
+  const Q = [L + w * 0.72, T + h * 0.21] as const;       // on the top edge
+  const Rd = [L + w * 0.72, B - h * 0.21] as const;      // on the bottom edge
+  const P = [R, cy] as const;                            // the tip
+
+  const tri = (pts: readonly (readonly [number, number])[], fill: string) => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    pts.slice(1).forEach((p) => ctx.lineTo(p[0], p[1]));
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+  };
+
+  tri([[L, T], [L, B], K], "#00A0FF");        // blue spine
+  tri([[L, T], Q, K], "#00D26A");             // green, upper
+  tri([Q, P, Rd, K], "#FFCE00");              // yellow wedge at the tip
+  tri([[L, B], Rd, K], "#FF3A44");            // red, lower
+}
+
+/**
+ * Store badge. Black with white type on dark art, white with dark type on light
+ * art — a black slab was the heaviest thing on a bright banner.
+ */
+function abDrawPlayBadge(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number, onLight: boolean) {
+  const bh = Math.round(46 * scale), bw = Math.round(152 * scale);
+  ctx.save();
+  ctx.fillStyle = onLight ? "#FFFFFF" : "#000000";
+  abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale));
+  ctx.fill();
+  ctx.strokeStyle = onLight ? "rgba(20,20,43,0.20)" : "rgba(255,255,255,0.35)";
+  ctx.lineWidth = Math.max(1, scale);
+  abRoundRect(ctx, x, y, bw, bh, Math.round(8 * scale));
+  ctx.stroke();
+
+  abDrawPlayMark(ctx, x + bh * 0.52, y + bh / 2, bh * 0.56);
+
+  const textX = x + bh * 0.95;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = onLight ? "rgba(20,20,43,0.75)" : "#ffffff";
+  ctx.font = `500 ${Math.round(9 * scale)}px system-ui,Arial,sans-serif`;
+  ctx.fillText("GET IT ON", textX, y + bh * 0.42);
+  ctx.fillStyle = onLight ? "#14142B" : "#ffffff";
+  ctx.font = `700 ${Math.round(17 * scale)}px system-ui,Arial,sans-serif`;
+  ctx.fillText("Google Play", textX, y + bh * 0.82);
+  ctx.restore();
+  return bh;
+}
+
+/**
+ * Headline and subheadline stacked downward from `y`, wrapped to `maxW`.
+ * The last headline line takes the accent colour, as in the reference.
+ * Returns the y just below the block.
+ */
+function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number, maxW: number, brief: Brief, ink: ReturnType<typeof abInk>, headFs0: number, subFs0: number, maxLines = 3): number {
+  let headFs = headFs0, subFs = subFs0;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  let cy = y;
+  const headline = brief.headline || brief.app_name || "";
+  if (headline) {
+    const fit = abFitLines(ctx, headline, maxW, maxLines, headFs, 900);
+    headFs = fit.fs;
+    const lines = fit.lines;
+    ctx.font = `900 ${headFs}px system-ui,Arial,sans-serif`;
+    // One colour for the whole headline. Accenting the last line copied a
+    // reference where the highlight fell on a chosen word; here it falls
+    // wherever the text happens to wrap, which splits a phrase at random —
+    // "Học Ngôn Ngữ Thông / Minh" left "Minh" a different colour from its own
+    // sentence. A highlight has to be chosen, not inherited from line breaks.
+    ctx.fillStyle = ink.heading;
+    lines.forEach((ln) => {
+      cy += headFs;
+      ctx.fillText(ln, x, cy);
+      cy += headFs * 0.16;
+    });
+  }
+  const sub = brief.subheadline || "";
+  if (sub) {
+    cy += subFs * 0.7;
+    const sf = abFitLines(ctx, sub, maxW, 2, subFs, 500);
+    subFs = sf.fs;
+    ctx.font = `500 ${subFs}px system-ui,Arial,sans-serif`;
+    ctx.fillStyle = ink.body;
+    sf.lines.forEach((ln) => {
+      cy += subFs;
+      ctx.fillText(ln, x, cy);
+      cy += subFs * 0.25;
+    });
+  }
+  return cy;
+}
+
+/** Cover-crop to the exact asset size with no overlay at all. */
+function abRenderPlain(base: HTMLImageElement, w: number, h: number): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  const cs = Math.max(w / base.width, h / base.height);
+  ctx.drawImage(base, (w - base.width * cs) / 2, (h - base.height * cs) / 2, base.width * cs, base.height * cs);
+  return canvas.toDataURL("image/png");
+}
+
+/**
+ * Composites the layout onto a rendered background.
+ *
+ * Type sits in a LEFT COLUMN for wide and square frames. The model reliably
+ * clears the left side — the composition prompt asks for it and the renders
+ * honour it — while it routinely runs the subject to the bottom edge despite
+ * being asked not to. Anchoring to the bottom therefore dropped the headline
+ * and CTA onto the subject's legs. Tall frames keep a bottom band, since there
+ * the subject is centred horizontally and no side is free.
+ */
+function abRenderBanner(base: HTMLImageElement, w: number, h: number, brief: Brief, icon: HTMLImageElement | null): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+
+  const cs = Math.max(w / base.width, h / base.height);
+  ctx.drawImage(base, (w - base.width * cs) / 2, (h - base.height * cs) / 2, base.width * cs, base.height * cs);
+
+  const ink = abInk(brief);
+  const scale = abClamp(Math.min(w, h) / 500, 0.34, 2.2);
+  const pad = Math.max(8, Math.round(Math.min(w, h) * 0.055));
+  const accent = ink.accent;
+  const ratio = w / h;
+
+  // Strips are too short for a stack; one line of headline plus a small CTA.
+  if (h <= 120) {
+    const g = ctx.createLinearGradient(0, 0, w, 0);
+    const base2 = ink.scrimColor || "#1A1A2E";
+    g.addColorStop(0, abHexA(base2, 0.94)); g.addColorStop(1, abHexA(base2, 0.5));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const fs = Math.round(h * 0.34);
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.font = `800 ${fs}px system-ui,Arial,sans-serif`; ctx.fillStyle = "#ffffff";
+    ctx.fillText(abEllipsize(ctx, brief.headline || brief.app_name || "", w * 0.6), pad, h / 2);
+    if (brief.cta_text) abDrawCTA(ctx, w - pad - 160 * scale, (h - 46 * scale) / 2, 160 * scale, brief.cta_text, accent, scale * 0.7);
+    return canvas.toDataURL("image/png");
+  }
+
+  const leftColumn = ratio > 0.9; // wide and square; tall keeps the bottom band
+
+  if (leftColumn) {
+    // Ends short of the artwork rather than flush against it: type that stops
+    // exactly where the picture starts still reads as touching it.
+    const colW = Math.round(w * (ratio >= 1.3 ? 0.42 : 0.37)) - pad;
+    // A whisper of a scrim only — enough to hold type over a soft gradient
+    // without turning a deliberately bright background grey.
+    if (!ink.scrim) {
+      const g = ctx.createLinearGradient(0, 0, colW + pad * 2, 0);
+      g.addColorStop(0, "rgba(255,255,255,0.55)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, colW + pad * 2, h);
+    } else {
+      const g = ctx.createLinearGradient(0, 0, colW + pad * 2, 0);
+      g.addColorStop(0, abHexA(ink.scrimColor || "#1A1A2E", 0.88));
+      g.addColorStop(1, abHexA(ink.scrimColor || "#1A1A2E", 0));
+      ctx.fillStyle = g; ctx.fillRect(0, 0, colW + pad * 2, h);
+    }
+
+    const headFs = abClamp(Math.round(colW * 0.145), 15, 74);
+    const logoH = abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink, colW, headFs);
+    const subFs = abClamp(Math.round(colW * 0.062), 11, 30);
+    const ctaLabel = brief.cta_text || "Download";
+    const ctaH = abCtaHeight(ctx, colW, ctaLabel, scale);
+    const badgeH = Math.round(46 * scale);
+    const showBadge = h >= 400 && colW >= 200;
+
+    // Centre the text block in the space between the logo and the CTA.
+    const blockTop = pad + logoH + pad * 0.8;
+    const blockBottom = h - pad - ctaH - (showBadge ? badgeH + pad * 0.5 : 0) - pad * 0.8;
+    const est = headFs * 2.4 + subFs * 2.6;
+    // Sit nearer the logo. Centring left a slack band above the CTA and
+    // another under the lockup, so neither read as deliberate.
+    const startY = Math.max(blockTop, blockTop + (blockBottom - blockTop - est) * 0.22);
+
+    abDrawHeadlineBlock(ctx, pad, startY, colW, brief, ink, headFs, subFs);
+
+    let cy = h - pad;
+    if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale, !ink.scrim); cy -= pad * 0.5; }
+    cy -= ctaH;
+    abDrawCTA(ctx, pad, cy, colW, ctaLabel, accent, scale);
+    return canvas.toDataURL("image/png");
+  }
+
+  // Tall: bottom band, subject centred above it.
+  const bandH = Math.round(h * 0.36);
+  const g = ctx.createLinearGradient(0, h - bandH, 0, h);
+  const bandBase = ink.scrim ? (ink.scrimColor || "#1A1A2E") : "#FFFFFF";
+  g.addColorStop(0, abHexA(bandBase, 0));
+  g.addColorStop(0.4, abHexA(bandBase, 0.78));
+  g.addColorStop(1, abHexA(bandBase, 0.97));
+  ctx.fillStyle = g; ctx.fillRect(0, h - bandH, w, bandH);
+
+  const maxW = w - pad * 2;
+  const headFs = abClamp(Math.round(w * 0.075), 16, 78);
+  abDrawLogo(ctx, pad, pad, icon, brief.app_name, brief.tagline || "", scale, ink, maxW, headFs);
+  const subFs = abClamp(Math.round(w * 0.036), 12, 30);
+  const ctaLabel = brief.cta_text || "Download";
+  const ctaH = abCtaHeight(ctx, maxW, ctaLabel, scale);
+  const badgeH = Math.round(46 * scale);
+  const showBadge = w >= 300;
+
+  const textTop = h - bandH + pad * 0.6;
+  abDrawHeadlineBlock(ctx, pad, textTop, maxW, brief, ink, headFs, subFs, 2);
+
+  let cy = h - pad;
+  if (showBadge) { cy -= badgeH; abDrawPlayBadge(ctx, pad, cy, scale, !ink.scrim); cy -= pad * 0.5; }
+  cy -= ctaH;
+  abDrawCTA(ctx, pad, cy, maxW, ctaLabel, accent, scale);
+
+  return canvas.toDataURL("image/png");
+}
 
 const NICHE_DEFAULTS: Record<string, Partial<Brief>> = {
   photo:  { primary_color: "#7B2FBE", secondary_color: "#E91E8C", accent_color: "#FF6B35", headline: "Edit Photos Like a Pro",      subheadline: "100+ Filters & AI Tools",   cta_text: "Edit for Free"    },
@@ -165,7 +794,340 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"autogen"|"localize">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch">("home");
+
+  // ── AI Banner ──
+  type AbStep = "input" | "generating" | "preview";
+  const [abStep, setAbStep] = useState<AbStep>("input");
+  const [abUrl, setAbUrl] = useState("");
+  const [abFetching, setAbFetching] = useState(false);
+  const [abFetched, setAbFetched] = useState<{name:string;icon:string|null;shots:number;genre:string;cc:string}|null>(null);
+  /** Which step Auto Prompt is on — it makes two calls and can take a minute. */
+  const [abPromptStep, setAbPromptStep] = useState("");
+  const [abPrompt, setAbPrompt] = useState("");
+  const [abCountry, setAbCountry] = useState("Global");
+  const [abLang, setAbLang] = useState("Vietnamese");
+  const [abQuality, setAbQuality] = useState<"low"|"medium"|"high">("medium");
+  const [abError, setAbError] = useState("");
+  const [abStatus, setAbStatus] = useState("");
+  const [abBrief, setAbBrief] = useState<Brief|null>(null);
+  const [abIcon, setAbIcon] = useState<string|null>(null);
+  const [abBaseImages, setAbBaseImages] = useState<{key:string;label:string;dataUrl:string}[]>([]);
+  const [abPreviews, setAbPreviews] = useState<Preview[]>([]);
+  const [abZipBase64, setAbZipBase64] = useState("");
+  const [abTab, setAbTab] = useState<"top5"|"all">("all");
+  const [abPromptLoading, setAbPromptLoading] = useState(false);
+  /** Ad-copy language the current creative direction was written for. */
+  const [abPromptLang, setAbPromptLang] = useState("");
+  const [abCharacter, setAbCharacter] = useState<string|null>(null);
+  const [abMascotUsed, setAbMascotUsed] = useState<string|null>(null);
+  const [abUseScreenshot, setAbUseScreenshot] = useState(true);
+  const [abAutoMascot, setAbAutoMascot] = useState(true);
+  /** one = a single asset to approve · core = 1 per ratio · full = all 20. */
+  const [abMode, setAbMode] = useState<"one"|"core"|"full">("one");
+  /** Which mode produced what is on screen, so the result step offers the right next action. */
+  const [abLastMode, setAbLastMode] = useState<"one"|"core"|"full">("one");
+  /**
+   * Free-text revision entered on the results step. Carried into every later
+   * render, including the full set, so approving a tweaked preview delivers
+   * twenty assets that share the tweak.
+   */
+  const [abRevision, setAbRevision] = useState("");
+  /** Things the revision asked to remove, forbidden explicitly in the prompt. */
+  const [abRemovals, setAbRemovals] = useState<string[]>([]);
+  /** Slots that came back empty, so they can be retried without paying for the set. */
+  const [abFailed, setAbFailed] = useState<string[]>([]);
+  /** Per-card revision text, keyed by slot. Scoped to that one image. */
+  const [abCardRev, setAbCardRev] = useState<Record<string,string>>({});
+  /** Which single slot is being regenerated, for the per-card spinner. */
+  const [abBusyKey, setAbBusyKey] = useState<string|null>(null);
+  /** Mirror of abPreviews: a partial regenerate merges into this synchronously. */
+  const abPrevRef = useRef<Preview[]>([]);
+  /**
+   * Store data, brief and mascot from the last run. Regenerating reuses them so
+   * a retry bills for one image instead of repeating the store call, the brief
+   * and the mascot render.
+   */
+  const abRun = useRef<{shots:string[];icon:string|null;brief:Brief;mascot:string|null;platform:string}|null>(null);
+  const [abPrecise, setAbPrecise] = useState(false);
+  const abCharRef = useRef<HTMLInputElement>(null);
+
+  const abReset = () => {
+    setAbStep("input"); setAbPreviews([]); setAbBrief(null);
+    setAbBaseImages([]); setAbError(""); setAbStatus("");
+    // Drop the cached run too, so the next generate re-reads the store.
+    abRun.current = null;
+    setAbMascotUsed(null);
+    setAbFailed([]);
+    abPrevRef.current = [];
+    setAbCardRev({});
+    setAbRevision(""); setAbRemovals([]);
+  };
+
+  /**
+   * Confirms the URL resolves to a real app before anything is spent on it.
+   * Asks for a single screenshot — this is an identity check, not the real fetch.
+   */
+  const handleAbFetch = async () => {
+    if (!abUrl.trim() || abFetching) return;
+    setAbFetching(true);
+    setAbError("");
+    setAbFetched(null);
+    try {
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang, limit: 1 }, 45000, "screenshots");
+      if (!ss.success) throw new Error(ss.error || "Không lấy được thông tin app.");
+      setAbFetched({
+        name: ss.appName || "(không rõ tên)",
+        icon: ss.iconBase64 || null,
+        shots: ss.totalScreenshots ?? (ss.screenshots?.length || 0),
+        genre: ss.genre || "",
+        cc: ss.countryCode || "",
+      });
+      if (ss.iconBase64) setAbIcon(ss.iconBase64);
+    } catch (e) {
+      setAbError("❌ Kiểm tra app lỗi: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setAbFetching(false);
+    }
+  };
+
+  const handleAbAutoPrompt = async () => {
+    if (!abUrl.trim() || abPromptLoading) return;
+    setAbPromptLoading(true);
+    setAbError("");
+    setAbPromptStep("Đang lấy dữ liệu từ store...");
+    let storeWarn = "";
+    try {
+      // The store lookup is best-effort: Auto Prompt can still write a direction
+      // from the app name alone, so a store failure is a warning, not a stop.
+      let appName = "", shots: string[] = [], genre = "";
+      try {
+        const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang, limit: 2 }, 45000, "screenshots");
+        if (ss.success) {
+          appName = ss.appName || "";
+          shots = (ss.screenshots || []).slice(0, 2);
+          genre = ss.genre || "";
+          if (ss.iconBase64) setAbIcon(ss.iconBase64);
+        } else storeWarn = ss.error || "Không lấy được dữ liệu store.";
+      } catch (e) { storeWarn = e instanceof Error ? e.message : String(e); }
+
+      if (!appName) appName = abAppNameFromUrl(abUrl);
+      if (!appName) throw new Error("Không xác định được tên app từ URL. " + storeWarn);
+
+      setAbPromptStep(`GPT đang phân tích "${appName}" và viết creative direction...`);
+      const pd = await abFetchJson("/api/auto-prompt", { appName, niche: genre, screenshots: shots, country: abCountry, language: abLang }, 45000, "auto-prompt");
+      if (!pd.success) throw new Error(pd.error || "auto-prompt thất bại.");
+      if (!pd.prompt?.trim()) throw new Error("GPT trả về prompt rỗng — thử lại hoặc viết tay.");
+
+      setAbPrompt(pd.prompt.trim());
+      setAbPromptLang(abLang);
+      if (storeWarn) setAbError(`⚠️ Auto Prompt chạy KHÔNG có screenshot (kém sát hơn): ${storeWarn}`);
+    } catch (e) {
+      setAbError("❌ Auto Prompt lỗi: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setAbPromptLoading(false);
+      setAbPromptStep("");
+    }
+  };
+
+  /**
+   * @param onlyKeys regenerate just these slots and merge them into what is on
+   *   screen. Retrying three failures cost a full set before this — 28,000₫ to
+   *   replace 4,200₫ of images.
+   * @param revisionOverride a revision that applies to THIS call only. The
+   *   rewritten brief stays local, so fixing one frame does not silently
+   *   redefine the other nineteen.
+   */
+  const handleAbGenerate = async (
+    mode: "one"|"core"|"full" = abMode, reuse = false, onlyKeys?: string[], revisionOverride?: string,
+  ) => {
+    if (!abUrl.trim()) return;
+    const partial = Boolean(onlyKeys?.length);
+    const scoped = revisionOverride !== undefined;
+    const revText = (scoped ? revisionOverride! : abRevision).trim();
+    // A partial retry stays on the results screen: switching to the progress
+    // view would hide the very images being compared against.
+    if (partial) setAbBusyKey(onlyKeys!.length === 1 ? onlyKeys![0] : AB_BUSY_BATCH);
+    else setAbStep("generating");
+    setAbError("");
+    try {
+      let shots: string[], iconB64: string | null, mascot: string | null, platform: string;
+      let theBrief: Brief;
+
+      if (reuse && abRun.current) {
+        // Retry path: the store call, brief and mascot are already paid for.
+        ({ shots, icon: iconB64, brief: theBrief, mascot, platform } = abRun.current);
+        setAbStatus("♻️ Dùng lại brief + mascot, chỉ gen lại ảnh...");
+      } else {
+      setAbMascotUsed(null);
+      setAbStatus("📱 Đang lấy thông tin app...");
+      const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang }, 60000, "screenshots");
+      if (!ss.success) throw new Error(ss.error);
+      shots = ss.screenshots || [];
+      const appName: string = ss.appName || "";
+      iconB64 = ss.iconBase64 || null;
+      setAbIcon(iconB64);
+
+      setAbStatus("🤖 GPT-4o đang phân tích app và tạo design brief...");
+      const bc = await abFetchJson("/api/banner-concept", {
+        appName, prompt: abPrompt, country: abCountry, language: abLang,
+        screenshots: shots.slice(0, 3), appUrl: abUrl,
+        description: ss.description || "", genre: ss.genre || "",
+      }, 60000, "banner-concept");
+      platform = ss.platform || "android";
+      if (!bc.success) throw new Error(bc.error);
+      theBrief = bc.brief;
+      setAbBrief(theBrief);
+
+      // One mascot, reused as the reference for every size — this is what keeps
+      // the character identical across the whole set.
+      mascot = abCharacter;
+      if (!mascot && abAutoMascot) {
+        setAbStatus("🎭 Đang tìm mascot trong screenshots (hoặc tạo mới)...");
+        try {
+          const md = await abFetchJson("/api/mascot", { appName, niche: theBrief.niche, screenshots: shots, brief: theBrief, quality: abQuality }, 120000, "mascot");
+          if (md.success) mascot = md.source === "screenshot" ? shots[md.index] || null : md.dataUrl || null;
+        } catch { /* non-fatal: carry on without a character reference */ }
+      }
+      setAbMascotUsed(mascot);
+      abRun.current = { shots, icon: iconB64, brief: theBrief, mascot, platform };
+      }
+
+      // Fold the revision into the brief before rendering. Bolting "remove X"
+      // onto a prompt that still describes X leaves X in the picture, so the
+      // description itself has to change. Pennies on gpt-4o-mini.
+      let removals: string[] = scoped ? [] : abRemovals;
+      if (revText) {
+        setAbStatus("✏️ Đang áp yêu cầu sửa vào mô tả...");
+        try {
+          const rv = await abFetchJson("/api/banner-revise", { brief: theBrief, revision: revText }, 45000, "banner-revise");
+          if (rv.success && rv.brief) {
+            theBrief = rv.brief;
+            removals = Array.isArray(rv.removals) ? rv.removals : [];
+            // A one-card request edits that card only: keep the rewritten brief
+            // in this closure instead of writing it back over the shared one.
+            if (!scoped) {
+              setAbBrief(theBrief);
+              setAbRemovals(removals);
+              if (abRun.current) abRun.current.brief = theBrief;
+            }
+          }
+        } catch { /* non-fatal: fall back to the prompt-level instruction alone */ }
+      }
+
+      const referenceImages = abUseScreenshot ? shots.slice(0, 1) : [];
+
+      const errors: string[] = [];
+      const failedKeys: string[] = [];
+      const bases: {key:string;label:string;dataUrl:string}[] = [];
+      const baseFor: Record<string, HTMLImageElement> = {};
+
+      // Core mode renders one asset per ratio — a cheap way to check the whole
+      // pipeline before committing to all 20.
+      // "one" previews a single square asset: the shape that reads composition
+      // most clearly, and the cheapest thing to iterate on.
+      const slots = partial
+        ? APP_CREATIVES.filter((c) => onlyKeys!.includes(c.key))
+        : mode === "full" ? APP_CREATIVES
+        : mode === "core" ? APP_CREATIVES.filter((c) => c.isCore)
+        : [APP_CREATIVES.find((c) => c.ratioKey === "square" && c.isCore)
+           ?? APP_CREATIVES.find((c) => c.ratioKey === "square")
+           ?? APP_CREATIVES[0]];
+      if (!partial) setAbLastMode(mode);
+      const total = slots.length;
+      setAbStatus(`🎨 Đang gen ${total} ảnh (0/${total})...`);
+      const results = await abPool(
+        slots.map((c) => () =>
+          abFetchJson("/api/banner-generate", {
+            brief: theBrief, userPrompt: abPrompt, quality: abQuality,
+            width: c.width, height: c.height, key: c.key, angle: c.angle,
+            referenceImages, characterImage: mascot, precise: abPrecise, platform, uiLanguage: abLang,
+              revision: revText, removals,
+          }, 300000, `banner-generate:${c.key}`)),
+        AB_CONCURRENCY,
+        (n) => setAbStatus(`🎨 Đang gen ${total} ảnh (${n}/${total})...`),
+      );
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i], c = slots[i];
+        if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
+          baseFor[c.key] = await abLoadImg(r.value.images[0].dataUrl);
+          if (c.isCore) bases.push({ key: c.key, label: c.label, dataUrl: r.value.images[0].dataUrl });
+        } else {
+          errors.push(`${c.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
+          failedKeys.push(c.key);
+        }
+      }
+      // A partial run only knows about the slots it retried; failures it did not
+      // touch are still failures.
+      setAbFailed((prev) =>
+        partial ? [...prev.filter((k) => !onlyKeys!.includes(k)), ...failedKeys] : failedKeys);
+
+      if (!Object.keys(baseFor).length) throw new Error("Không gen được ảnh nào.\n" + errors.join("\n"));
+      if (!partial || bases.length) setAbBaseImages(bases);
+
+      setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${total} ảnh...`);
+      const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
+      const { default: JSZipMod } = await import("jszip");
+      const zip = new JSZipMod();
+      // Foldered by ratio because that is how the assets get uploaded.
+      const folders: Record<string, import("jszip")> = {
+        landscape: zip.folder("1.91-1_landscape")!,
+        square: zip.folder("1-1_square")!,
+        portrait: zip.folder("4-5_portrait")!,
+      };
+      const out: Preview[] = [];
+
+      for (const c of slots) {
+        const base = baseFor[c.key];
+        if (!base) continue;
+        // Google advises at least one clean asset per ratio, so the first slot of
+        // each ratio ships without the canvas overlay.
+        const dataUrl = c.noOverlay
+          ? abRenderPlain(base, c.width, c.height)
+          : abRenderBanner(base, c.width, c.height, theBrief, iconImg);
+        out.push({ key: c.key, width: c.width, height: c.height, label: c.label, isTop5: c.isCore, dataUrl });
+      }
+
+      // Keep what is already on screen and swap in the slots just rendered, in
+      // the canonical order so the grid does not reshuffle around the new ones.
+      const byKey = new Map((partial ? abPrevRef.current : []).map((p) => [p.key, p]));
+      out.forEach((p) => byKey.set(p.key, p));
+      const merged = APP_CREATIVES.map((c) => byKey.get(c.key)).filter(Boolean) as Preview[];
+      abPrevRef.current = merged;
+      setAbPreviews(merged);
+
+      for (const p of merged) {
+        const c = APP_CREATIVES.find((x) => x.key === p.key)!;
+        const bytes = Uint8Array.from(atob(p.dataUrl.split(",")[1]), (ch) => ch.charCodeAt(0));
+        folders[c.ratioKey].file(`${c.key}${c.noOverlay ? "_clean" : ""}.png`, bytes);
+      }
+
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const reader = new FileReader();
+      reader.onload = () => setAbZipBase64((reader.result as string).split(",")[1]);
+      reader.readAsDataURL(blob);
+
+      setAbError(errors.length ? "⚠️ Một số size lỗi:\n" + errors.join("\n") : "");
+      setAbStatus(`Xong: ${merged.length} banner.`);
+      setAbStep("preview");
+    } catch (e) {
+      setAbError("❌ " + (e instanceof Error ? e.message : String(e)));
+      // Dropping back to the form would throw away a finished set of 20 just
+      // because one retry failed.
+      if (!partial) setAbStep("input");
+    } finally {
+      setAbBusyKey(null);
+    }
+  };
+
+  const abDownloadZip = () => {
+    if (!abZipBase64) return;
+    const a = document.createElement("a");
+    a.href = `data:application/zip;base64,${abZipBase64}`;
+    a.download = `google-ads-${abBrief?.app_name || "banners"}.zip`;
+    a.click();
+  };
+  const abShown = abTab === "top5" ? abPreviews.filter((p) => p.isTop5) : abPreviews;
 
   // YouTube upload state
   const [ytAuthenticated, setYtAuthenticated] = useState(false);
@@ -264,76 +1226,87 @@ export default function Home() {
     setYtAuthenticated(false); setYtAccessToken(""); setYtVideos([]);
   };
 
-  // Auto Gen from URL state
-  type AutoGenStep = "input" | "analyzing" | "brief" | "generating" | "preview";
-  const [agStep, setAgStep] = useState<AutoGenStep>("input");
-  const [agUrl, setAgUrl] = useState("");
-  const [agKeywords, setAgKeywords] = useState("");
-  const [agCountry, setAgCountry] = useState("Global");
-  const [agLang, setAgLang] = useState("English");
-  const [agNiche, setAgNiche] = useState<"photo"|"tool"|"office">("tool");
-  const [agCountrySearch, setAgCountrySearch] = useState("");
-  const [agCountryOpen, setAgCountryOpen] = useState(false);
-  const agCountryRef = useRef<HTMLDivElement>(null);
-  const [agLangSearch, setAgLangSearch] = useState("");
-  const [agLangOpen, setAgLangOpen] = useState(false);
-  const agLangRef = useRef<HTMLDivElement>(null);
-  const [agError, setAgError] = useState("");
-  const [agBrief, setAgBrief] = useState<Brief|null>(null);
-  const [agScreenshot, setAgScreenshot] = useState<string|null>(null);
-  const [agIcon, setAgIcon] = useState<string|null>(null);
-  interface AgAppMeta { name: string; category: string; rating: number; ratingCount: number; platform: string; screenshotCount: number; }
-  const [agAppMeta, setAgAppMeta] = useState<AgAppMeta|null>(null);
-  const [agPreviews, setAgPreviews] = useState<Preview[]>([]);
-  const [agZipBase64, setAgZipBase64] = useState("");
-  const [agActiveTab, setAgActiveTab] = useState<"top5"|"all">("top5");
 
-  const handleAgAnalyze = async () => {
-    if (!agUrl.trim()) return;
-    setAgStep("analyzing"); setAgError("");
+  // Google Ads Launch state
+  const [adsConnected, setAdsConnected] = useState<boolean|null>(null);
+  const [adsAccounts, setAdsAccounts] = useState<{id:string;name:string;currency:string;status:string}[]>([]);
+  const [adsSelectedAccount, setAdsSelectedAccount] = useState("");
+  const [adsCampaignName, setAdsCampaignName] = useState("");
+  const [adsAppId, setAdsAppId] = useState("");
+  const [adsAppStore, setAdsAppStore] = useState<"GOOGLE_APP_STORE"|"APPLE_APP_STORE">("GOOGLE_APP_STORE");
+  const [adsBudget, setAdsBudget] = useState("200000");
+  const [adsHeadlines, setAdsHeadlines] = useState(["","",""]);
+  const [adsDescriptions, setAdsDescriptions] = useState(["",""]);
+  const [adsSelectedBanners, setAdsSelectedBanners] = useState<string[]>([]);
+  const [adsLaunching, setAdsLaunching] = useState(false);
+  const [adsResult, setAdsResult] = useState<{success:boolean;message?:string;error?:string}|null>(null);
+  const [adsCampaigns, setAdsCampaigns] = useState<{id:string;name:string;status:string;budgetPerDay:number}[]>([]);
+  const [adsAccountsError, setAdsAccountsError] = useState<string|null>(null);
+  const [adsNeedsBasicAccess, setAdsNeedsBasicAccess] = useState(false);
+  const [adsAccountsLoading, setAdsAccountsLoading] = useState(false);
+
+  /**
+   * Assets offered for upload. AI Banner is where the App campaign creatives
+   * come from now, so its set leads; Gen Banner's output still counts.
+   */
+  const adsBannerPool = abPreviews.length ? abPreviews : previews;
+
+  const checkAdsConnection = async () => {
     try {
-      const res = await fetch("/api/autogen", {
+      const res = await fetch("/api/google-ads/auth?action=status");
+      if (!res.ok) { setAdsConnected(false); return; }
+      const data = await res.json();
+      setAdsConnected(data.connected);
+      if (data.connected) loadAdsAccounts();
+    } catch { setAdsConnected(false); }
+  };
+
+  const loadAdsAccounts = async () => {
+    setAdsAccountsLoading(true);
+    setAdsAccountsError(null);
+    setAdsNeedsBasicAccess(false);
+    try {
+      const res = await fetch("/api/google-ads/accounts");
+      const text = await res.text();
+      let data: {success:boolean;accounts?:{id:string;name:string;currency:string;status:string}[];error?:string;needs_basic_access?:boolean};
+      try { data = JSON.parse(text); } catch { throw new Error(`Server returned HTML (middleware issue). Status: ${res.status}`); }
+      if (data.success) setAdsAccounts(data.accounts || []);
+      else if (data.needs_basic_access) setAdsNeedsBasicAccess(true);
+      else setAdsAccountsError(data.error || "Unknown error");
+    } catch(e) { setAdsAccountsError(String(e)); }
+    setAdsAccountsLoading(false);
+  };
+
+  const loadAdsCampaigns = async (customerId: string) => {
+    const res = await fetch(`/api/google-ads/campaigns?customerId=${customerId}`);
+    const data = await res.json();
+    if (data.success) setAdsCampaigns(data.campaigns || []);
+  };
+
+  const handleAdsLaunch = async () => {
+    if (!adsSelectedAccount || !adsCampaignName || !adsAppId) return;
+    setAdsLaunching(true); setAdsResult(null);
+    try {
+      const res = await fetch("/api/google-ads/campaigns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appUrl: agUrl, keywords: agKeywords, country: agCountry, language: agLang, niche: agNiche }),
+        body: JSON.stringify({
+          customerId: adsSelectedAccount,
+          campaignName: adsCampaignName,
+          appId: adsAppId,
+          appStore: adsAppStore,
+          budgetPerDayVnd: parseInt(adsBudget) || 200000,
+          headlines: adsHeadlines.filter(Boolean),
+          descriptions: adsDescriptions.filter(Boolean),
+          imageDataUrls: adsSelectedBanners,
+        }),
       });
       const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      setAgBrief(data.brief);
-      setAgScreenshot(data.screenshotBase64 || null);
-      setAgIcon(data.iconBase64 || null);
-      setAgAppMeta(data.appMeta);
-      setAgStep("brief");
-    } catch (e) { setAgError(String(e)); setAgStep("input"); }
+      setAdsResult(data);
+      if (data.success) loadAdsCampaigns(adsSelectedAccount);
+    } catch (e) { setAdsResult({ success: false, error: String(e) }); }
+    setAdsLaunching(false);
   };
-
-  const handleAgGenerate = async () => {
-    if (!agBrief) return;
-    setAgStep("generating"); setAgError("");
-    try {
-      const generated = await generateAllBanners(agBrief, agScreenshot || null);
-      setAgPreviews(generated);
-      const JSZip = (await import("jszip")).default;
-      const zip = new JSZip();
-      const top5 = zip.folder("top5")!;
-      const all = zip.folder("all_sizes")!;
-      for (const b of generated) {
-        const base64 = b.dataUrl.split(",")[1];
-        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-        if (b.isTop5) top5.file(`${b.key}.png`, bytes);
-        all.file(`${b.key}.png`, bytes);
-      }
-      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
-      const reader = new FileReader();
-      reader.onload = () => setAgZipBase64((reader.result as string).split(",")[1]);
-      reader.readAsDataURL(blob);
-      setAgStep("preview");
-    } catch (e) { setAgError(String(e)); setAgStep("brief"); }
-  };
-
-  const handleAgDownloadAll = () => { const a = document.createElement("a"); a.href = `data:application/zip;base64,${agZipBase64}`; a.download = `google-ads-${agBrief?.app_name||"banners"}.zip`; a.click(); };
-  const agDisplayed = agActiveTab === "top5" ? agPreviews.filter(p => p.isTop5) : agPreviews;
-  const resetAg = () => { setAgStep("input"); setAgPreviews([]); setAgBrief(null); setAgScreenshot(null); setAgError(""); };
 
   // Keyword Research state
   const [kwAppName, setKwAppName] = useState("");
@@ -527,6 +1500,17 @@ export default function Home() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem("banner_history") || "[]")); } catch {}
+  }, []);
+
+  // Google sends the operator back here after the consent screen.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("google_ads_connected") === "1") {
+      setActivePage("launch");
+      checkAdsConnection();
+      window.history.replaceState({}, "", "/");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveHistory = (item: HistoryItem) => {
     setHistory(prev => {
@@ -858,12 +1842,13 @@ export default function Home() {
           {([
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
-            ["autogen",  "⚡", "Auto Gen"],
+            ["aibanner", "✨", "AI Banner"],
             ["adcopy",   "✍️", "Ad Copy"],
             ["keywords", "🔑", "Keywords"],
             ["localize", "🌏", "Localize"],
+            ["launch",   "🚀", "Launch Camp"],
           ] as const).map(([page, icon, label]) => (
-            <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } }}
+            <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } if (page==="launch") { checkAdsConnection(); } }}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
               style={activePage===page
                 ? {backgroundColor:"#7C3AED18", color:"#A78BFA", borderLeft:"2px solid #7C3AED", paddingLeft:10}
@@ -937,7 +1922,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="autogen" ? "⚡ Auto Gen từ URL" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -1604,247 +2589,399 @@ export default function Home() {
         )}
 
         {/* AUTO GEN PAGE */}
-        {activePage === "autogen" && (
+        {activePage === "aibanner" && (
           <div className="space-y-6 max-w-2xl">
-
-            {/* Step indicator */}
             <div className="flex items-center gap-2 text-xs" style={{color: t.textMuted}}>
-              {(["input","analyzing","brief","generating","preview"] as AutoGenStep[]).map((s, i) => (
-                <div key={s} className="flex items-center gap-2">
-                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${agStep===s?"bg-violet-600 text-white":["preview","generating","brief"].includes(agStep)&&i<["input","analyzing","brief","generating","preview"].indexOf(agStep)?"bg-violet-600/40 text-violet-400":"text-current"}`}
-                    style={agStep!==s?{backgroundColor:t.tabBg}:{}}>{i+1}</span>
-                  <span style={agStep===s?{color:"#A78BFA"}:{}}>{s==="input"?"Nhập URL":s==="analyzing"?"Phân tích":s==="brief"?"Review brief":s==="generating"?"Tạo ảnh":"Kết quả"}</span>
-                  {i<4&&<span>→</span>}
-                </div>
-              ))}
+              {([["input","1","Nhập thông tin"],["generating","2","AI tạo ảnh"],["preview","3","Kết quả"]] as [AbStep,string,string][]).map(([s,n,label],i) => {
+                const order: AbStep[] = ["input","generating","preview"];
+                const done = order.indexOf(abStep) > order.indexOf(s), active = abStep === s;
+                return (
+                  <div key={s} className="flex items-center gap-2">
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${active?"bg-violet-600 text-white":done?"bg-violet-600/40 text-violet-400":""}`}
+                      style={!active&&!done?{backgroundColor:t.tabBg,color:t.textMuted}:{}}>{n}</span>
+                    <span style={active?{color:"#A78BFA"}:{}}>{label}</span>
+                    {i<2&&<span>→</span>}
+                  </div>
+                );
+              })}
             </div>
 
-            {/* STEP 1: Input */}
-            {agStep === "input" && (
+            {abStep === "input" && (
               <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
                     🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
                   </label>
-                  <input value={agUrl} onChange={e => setAgUrl(e.target.value)}
-                    placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                    style={inputStyle}/>
-                  <p className="text-xs mt-1.5" style={{color: t.textMuted}}>AI sẽ tự lấy tên app, mô tả, screenshot và icon từ URL này</p>
+                  <div className="flex gap-2">
+                    <input value={abUrl}
+                      onChange={e => { setAbUrl(e.target.value); setAbFetched(null); }}
+                      onKeyDown={e => { if (e.key === "Enter") handleAbFetch(); }}
+                      placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
+                      className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                    <button onClick={handleAbFetch} disabled={!abUrl.trim() || abFetching}
+                      className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2">
+                      {abFetching
+                        ? <><span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Đang lấy...</>
+                        : <>🔍 Kiểm tra</>}
+                    </button>
+                  </div>
+
+                  {abFetched && (
+                    <div className="mt-2.5 flex items-center gap-3 p-2.5 rounded-xl border" style={{borderColor:"#10B98144", backgroundColor:"#10B9810F"}}>
+                      {abFetched.icon
+                        ? <img src={abFetched.icon} alt="" className="w-11 h-11 rounded-xl flex-shrink-0"/>
+                        : <div className="w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center text-lg" style={{backgroundColor:t.tabBg}}>📱</div>}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate" style={{color:t.text}}>{abFetched.name}</div>
+                        <div className="text-xs" style={{color:t.textMuted}}>
+                          {abFetched.shots} screenshot
+                          {abFetched.genre && <> · {abFetched.genre}</>}
+                          {abFetched.cc && <> · store {abFetched.cc.toUpperCase()}</>}
+                        </div>
+                      </div>
+                      <span className="text-emerald-500 text-lg flex-shrink-0">✓</span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
-                    🎯 Keywords / điểm bán hàng
-                  </label>
-                  <input value={agKeywords} onChange={e => setAgKeywords(e.target.value)}
-                    placeholder="VD: AI photo editor, remove background, free filters..."
-                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                    style={inputStyle}/>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>💡 Creative direction</label>
+                    {/* Keep a filled background while loading: a transparent one
+                        left white text on a white card, so the spinner vanished
+                        and the button looked like it had done nothing. */}
+                    <button onClick={handleAbAutoPrompt} disabled={!abUrl.trim() || abPromptLoading}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-white disabled:cursor-not-allowed"
+                      style={{background: abPromptLoading ? "#A78BFA" : "linear-gradient(135deg,#7C3AED,#EC4899)", opacity: !abUrl.trim() && !abPromptLoading ? 0.4 : 1, border: "none"}}>
+                      {abPromptLoading
+                        ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>Đang tạo...</>
+                        : <>✨ Auto Prompt</>}
+                    </button>
+                  </div>
+
+                  {abPromptLoading && (
+                    <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-lg text-xs" style={{backgroundColor:"#7C3AED14", color:"#A78BFA"}}>
+                      <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin flex-shrink-0" style={{borderColor:"#A78BFA", borderTopColor:"transparent"}}/>
+                      <span>{abPromptStep || "Đang xử lý..."}</span>
+                      <span className="ml-auto flex-shrink-0" style={{color:t.textMuted}}>có thể mất 10-40s</span>
+                    </div>
+                  )}
+
+                  <textarea value={abPrompt} onChange={e => setAbPrompt(e.target.value)} rows={14}
+                    disabled={abPromptLoading}
+                    placeholder={"Bấm ✨ Auto Prompt để GPT viết brief chi tiết, hoặc tự viết theo mẫu:\n\nBỐ CỤC\n- Nhân vật: ...\n- Phone mockup: ...\n- Đạo cụ: ...\n\nTEXT TRÊN BANNER\n- Headline: \"...\"\n- Phụ đề: \"...\"\n\nCTA\n- Nút: \"...\""}
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500 resize-y disabled:opacity-60"
+                    style={{...inputStyle, minHeight: 240, lineHeight: "1.65", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5}}/>
+                  {abPrompt.trim() && abPromptLang && abPromptLang !== abLang && (
+                    /* The direction quotes the headline and CTA in the language
+                       it was written for. Generating now would carry that copy
+                       into a campaign for a different market. */
+                    <p className="text-[11px] mt-1.5 px-2.5 py-1.5 rounded-lg" style={{backgroundColor:"#F59E0B14", color:"#F59E0B"}}>
+                      ⚠️ Creative direction này viết cho ad copy <b>{abPromptLang}</b>, nhưng bạn đang chọn <b>{abLang}</b>.
+                      Bấm ✨ Auto Prompt lại để viết theo <b>{abLang}</b>, nếu không chữ trên banner có thể ra sai ngôn ngữ.
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
-                    <div ref={agCountryRef} className="relative">
-                      <button type="button" onClick={() => { setAgCountryOpen(o => !o); setAgCountrySearch(""); }}
-                        className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
-                        style={{...inputStyle, borderColor: agCountryOpen ? "#7C3AED" : t.inputBorder}}>
-                        <span className="truncate">{COUNTRIES.find(c => c.code === agCountry)?.label || agCountry}</span>
-                        <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{agCountryOpen ? "▲" : "▼"}</span>
-                      </button>
-                      {agCountryOpen && (
-                        <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                          <div className="p-2 border-b" style={{borderColor: t.border}}>
-                            <input autoFocus value={agCountrySearch} onChange={e => setAgCountrySearch(e.target.value)}
-                              placeholder="🔍 Tìm quốc gia..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                          </div>
-                          <div className="max-h-48 overflow-y-auto">
-                            {COUNTRIES.filter(c => c.label.toLowerCase().includes(agCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(agCountrySearch.toLowerCase())).map(c => (
-                              <button key={c.code} type="button"
-                                onClick={() => { setAgCountry(c.code); setAgCountryOpen(false); setAgCountrySearch(""); const dl = COUNTRY_DEFAULT_LANG[c.code]; if (dl) setAgLang(dl); }}
-                                className="w-full text-left px-4 py-2 text-sm"
-                                style={{backgroundColor: agCountry === c.code ? "#7C3AED22" : "transparent", color: agCountry === c.code ? "#A78BFA" : t.text}}>
-                                {c.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <select value={abCountry} onChange={e => { setAbCountry(e.target.value); const dl = COUNTRY_DEFAULT_LANG[e.target.value]; if (dl) setAbLang(dl); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                      {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </select>
                   </div>
                   <div>
-                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</label>
-                    <div ref={agLangRef} className="relative">
-                      <button type="button" onClick={() => { setAgLangOpen(o => !o); setAgLangSearch(""); }}
-                        className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
-                        style={{...inputStyle, borderColor: agLangOpen ? "#7C3AED" : t.inputBorder}}>
-                        <span className="truncate">{LANGUAGES.find(l => l.code === agLang)?.label || agLang}</span>
-                        <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{agLangOpen ? "▲" : "▼"}</span>
-                      </button>
-                      {agLangOpen && (
-                        <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                          <div className="p-2 border-b" style={{borderColor: t.border}}>
-                            <input autoFocus value={agLangSearch} onChange={e => setAgLangSearch(e.target.value)}
-                              placeholder="🔍 Tìm ngôn ngữ..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                          </div>
-                          <div className="max-h-48 overflow-y-auto">
-                            {LANGUAGES.filter(l => l.label.toLowerCase().includes(agLangSearch.toLowerCase()) || l.code.toLowerCase().includes(agLangSearch.toLowerCase())).map(l => (
-                              <button key={l.code} type="button"
-                                onClick={() => { setAgLang(l.code); setAgLangOpen(false); setAgLangSearch(""); }}
-                                className="w-full text-left px-4 py-2 text-sm"
-                                style={{backgroundColor: agLang === l.code ? "#7C3AED22" : "transparent", color: agLang === l.code ? "#A78BFA" : t.text}}>
-                                {l.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
+                    <select value={abLang} onChange={e => setAbLang(e.target.value)}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                      {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Mascot — the consistency anchor across all sizes */}
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
+                    <input type="checkbox" checked={abAutoMascot} onChange={e => setAbAutoMascot(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    🤖 Tự động tìm / tạo mascot
+                  </label>
+                  <p className="text-xs pl-6" style={{color: t.textMuted}}>Tìm nhân vật trong screenshots của app; không có thì tự tạo, rồi tái dùng cho mọi size.</p>
+                  <div className="flex items-center gap-3 pl-6">
+                    {(abCharacter || abMascotUsed)
+                      ? <img src={(abCharacter || abMascotUsed) as string} alt="mascot" className="h-14 w-14 rounded-lg object-cover flex-shrink-0"/>
+                      : <div className="h-14 w-14 flex items-center justify-center rounded-lg border border-dashed text-2xl flex-shrink-0" style={{borderColor: t.border}}>🤖</div>}
+                    <div className="flex-1 space-y-1">
+                      <p className="text-xs" style={{color: t.textMuted}}>
+                        {abCharacter ? "Đang dùng mascot bạn upload." : abMascotUsed ? "Mascot dùng lần gen gần nhất." : "Tùy chọn: upload ảnh để ghi đè auto."}
+                      </p>
+                      <div className="flex gap-2">
+                        <button onClick={() => abCharRef.current?.click()} className="text-xs px-3 py-1 rounded-md" style={{backgroundColor: t.border, color: t.text}}>Chọn ảnh</button>
+                        {abCharacter && <button onClick={() => setAbCharacter(null)} className="text-xs px-3 py-1 rounded-md" style={{backgroundColor: t.border, color: t.text}}>Bỏ override</button>}
+                      </div>
+                      <input ref={abCharRef} type="file" accept="image/*" hidden onChange={e => { const f=e.target.files?.[0]; if(f){const r=new FileReader(); r.onload=()=>setAbCharacter(r.result as string); r.readAsDataURL(f);} }}/>
                     </div>
                   </div>
                 </div>
 
-                {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
+                <label className="flex items-center gap-2 text-sm cursor-pointer" style={{color: t.text}}>
+                  <input type="checkbox" checked={abUseScreenshot} onChange={e => setAbUseScreenshot(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                  📱 Dùng screenshot thật của app làm reference
+                </label>
 
-                <button onClick={handleAgAnalyze} disabled={!agUrl.trim()}
-                  className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
-                  ⚡ Phân tích app & tạo brief →
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <div className="text-sm font-semibold" style={{color: t.text}}>🎯 Phạm vi gen</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {([
+                      ["one",  "1 ảnh duyệt", "Xem thử rồi quyết"],
+                      ["core", "3 ảnh",        "1 cho mỗi tỉ lệ"],
+                      ["full", `${APP_CREATIVES.length} creative`, "Đủ bộ để upload"],
+                    ] as const).map(([m, title, sub]) => (
+                      <button key={m} onClick={() => setAbMode(m)}
+                        className="rounded-lg px-2 py-2 text-left border transition-all"
+                        style={abMode === m
+                          ? {borderColor:"#7C3AED", backgroundColor:"#7C3AED14"}
+                          : {borderColor:t.border, backgroundColor:"transparent"}}>
+                        <div className="text-xs font-semibold" style={{color: abMode === m ? "#A78BFA" : t.text}}>{title}</div>
+                        <div className="text-[10px] mt-0.5" style={{color:t.textMuted}}>{sub}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs" style={{color: t.textMuted}}>
+                    {abMode === "one"
+                      ? "Gen 1 ảnh vuông để duyệt. Ưng thì bấm gen đủ bộ ngay ở bước kết quả — brief và mascot dùng lại, không mất tiền lần nữa."
+                      : abMode === "core"
+                        ? "1 ảnh cho mỗi tỉ lệ, đủ để kiểm tra bố cục cả 3 khung."
+                        : `Đủ ${RATIO_SPECS.map(r => `${r.count}×${r.ratio}`).join(" + ")} — mỗi ảnh một góc sáng tạo khác nhau, cùng mascot nên vẫn chung nhân vật.`}
+                  </p>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer" style={{color: t.text}}>
+                    <input type="checkbox" checked={abPrecise} onChange={e => setAbPrecise(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    💎 Ưu tiên model Sunburst (nét hơn, chậm hơn)
+                  </label>
+                  {(() => {
+                    const unit = AB_COST_PER_IMAGE[abQuality] ?? 0.211;
+                    const nImg = abMode === "full" ? APP_CREATIVES.length : abMode === "core" ? 3 : 1;
+                    // The mascot is rendered once per run and reused on a retry.
+                    const total = (nImg + (abRun.current ? 0 : 1)) * unit;
+                    return (
+                      <div className="mt-1.5 rounded-lg border px-3 py-2 text-xs" style={{borderColor: t.border, backgroundColor: t.card}}>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span style={{color: t.textMuted}}>Đơn giá mỗi ảnh</span>
+                          <span className="font-semibold" style={{color: t.text}}>${unit.toFixed(3)} <span style={{color: t.textMuted}}>· {abVnd(unit)}</span></span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                          <span style={{color: t.textMuted}}>Số ảnh gen</span>
+                          <span style={{color: t.text}}>{nImg} banner + 1 mascot = {nImg + 1}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 mt-1 pt-1 border-t" style={{borderColor: t.border}}>
+                          <span className="font-semibold" style={{color: t.text}}>Tổng mỗi lượt gen</span>
+                          <span className="font-bold" style={{color: "#A78BFA"}}>${total.toFixed(2)} <span style={{color: t.textMuted, fontWeight: 400}}>· ~{abVnd(total)}</span></span>
+                        </div>
+                        <div className="mt-1 text-[11px]" style={{color: t.textMuted}}>
+                          Thời gian ~{abMode === "full" ? `${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 35 / 60)}-${Math.ceil((APP_CREATIVES.length / AB_CONCURRENCY) * 70 / 60)} phút` : abMode === "core" ? "1 phút" : "30-60 giây"}
+                          {" · tỉ giá tạm tính "}{AB_VND_PER_USD.toLocaleString("vi-VN")}₫/$
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-xl border" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <div>
+                    <div className="text-xs font-semibold" style={{color: t.text}}>Chất lượng ảnh AI</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>High đẹp nhất nhưng đắt gấp ~4× Medium</div>
+                  </div>
+                  <div className="flex gap-1 rounded-lg p-0.5 ml-3 flex-shrink-0" style={{backgroundColor: t.border}}>
+                    {(["low","medium","high"] as const).map(q => (
+                      <button key={q} onClick={() => setAbQuality(q)} className="px-3 py-1 rounded-md text-xs font-semibold capitalize"
+                        style={abQuality===q?{backgroundColor:"#7C3AED",color:"#fff"}:{color:t.textMuted}}>{q}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {abError && <p className="text-red-400 text-xs bg-red-400/10 border border-red-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{abError}</p>}
+
+                <button onClick={() => handleAbGenerate(abMode, false)} disabled={!abUrl.trim()}
+                  className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 transition-all text-white">
+                  ✨ {abMode === "one" ? "Gen 1 ảnh duyệt" : `Tạo ${abMode === "core" ? 3 : APP_CREATIVES.length} creative`} →
                 </button>
               </div>
             )}
 
-            {/* STEP 2: Analyzing */}
-            {agStep === "analyzing" && (
-              <div className="text-center py-20 space-y-4">
-                <div className="text-5xl animate-pulse">⚡</div>
-                <div className="text-lg font-bold" style={{color: t.text}}>Đang phân tích app...</div>
-                <div className="text-sm space-y-1" style={{color: t.textMuted}}>
-                  <div>📱 Lấy thông tin từ App Store...</div>
-                  <div>🖼️ Tải screenshot & icon...</div>
-                  <div>🤖 Claude đang tạo brief...</div>
+            {abStep === "generating" && (
+              <div className="text-center py-20 space-y-6">
+                <div className="text-5xl animate-pulse">✨</div>
+                <div className="text-lg font-bold" style={{color: t.text}}>Đang tạo banner AI...</div>
+                <div className="text-sm font-medium" style={{color:"#A78BFA"}}>{abStatus}</div>
+                <div className="w-56 h-1.5 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
+                  <div className="h-full bg-gradient-to-r from-violet-500 to-purple-400 animate-pulse" style={{width:"70%"}}/>
                 </div>
               </div>
             )}
 
-            {/* STEP 3: Brief review */}
-            {agStep === "brief" && agBrief && (
-              <div className="space-y-4">
-                {/* App info card */}
-                {agAppMeta && (
-                  <div className="flex items-center gap-4 p-4 rounded-2xl border" style={cardStyle}>
-                    {agIcon && <img src={agIcon} alt="" className="w-16 h-16 rounded-2xl flex-shrink-0 shadow"/>}
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold text-sm" style={{color: t.text}}>{agAppMeta.name}</div>
-                      <div className="text-xs mt-0.5" style={{color: t.textMuted}}>{agAppMeta.category} · {agAppMeta.platform}</div>
-                      {agAppMeta.rating > 0 && <div className="text-xs mt-0.5" style={{color: t.textMuted}}>⭐ {agAppMeta.rating.toFixed(1)} ({agAppMeta.ratingCount?.toLocaleString()} ratings)</div>}
-                      {agScreenshot && <div className="text-xs mt-0.5 text-emerald-500">✓ Screenshot tải thành công</div>}
+            {abStep === "preview" && (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <div className="text-lg font-bold" style={{color: t.text}}>✅ {abPreviews.length} banner sẵn sàng</div>
+                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>
+                      {abBrief?.app_name} · {abCountry}{abBrief?.headline && <span> · &ldquo;{abBrief.headline}&rdquo;</span>}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    {/* Retries reuse the cached brief and mascot, so they bill for
+                        the images only — worth saying, since the difference is 10x. */}
+                    <button onClick={() => handleAbGenerate(abLastMode, true)} disabled={abBusyKey !== null}
+                      className="text-xs px-3 py-2 rounded-lg border disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
+                      🔄 Gen lại ({abVnd((abLastMode === "full" ? APP_CREATIVES.length : abLastMode === "core" ? 3 : 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
+                    </button>
+                    {abFailed.length > 0 && (
+                      /* Retrying the whole set to replace three failures cost
+                         the price of twenty images. This bills for three. */
+                      <button onClick={() => handleAbGenerate(abLastMode, true, abFailed)}
+                        disabled={abBusyKey !== null}
+                        className="text-xs font-semibold px-3 py-2 rounded-lg border disabled:opacity-40"
+                        style={{borderColor:"#F59E0B66", color:"#F59E0B", backgroundColor:"#F59E0B14"}}>
+                        {abBusyKey === AB_BUSY_BATCH ? "⏳ Đang gen lại..." : `↻ Gen lại ${abFailed.length} ảnh lỗi (${abVnd(abFailed.length * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})`}
+                      </button>
+                    )}
+                    {abLastMode !== "full" && (
+                      <button onClick={() => handleAbGenerate("full", true)} disabled={abBusyKey !== null}
+                        className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40"
+                        style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                        ✓ Duyệt → gen đủ {APP_CREATIVES.length} ({abVnd(APP_CREATIVES.length * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
+                      </button>
+                    )}
+                    <button onClick={abReset} className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>↩ Về đầu</button>
+                    <button onClick={abDownloadZip} className="bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl">⬇ Tải tất cả (.zip)</button>
+                  </div>
+                </div>
+
+                {/* Revision box. Retries reuse the cached brief and mascot, so a
+                    tweak costs one image — worth stating, since the difference
+                    against a fresh run is tenfold. */}
+                <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold" style={{color: t.text}}>✏️ Muốn sửa gì ở ảnh này?</span>
+                    {abRevision.trim() && (
+                      <button onClick={() => setAbRevision("")} className="text-[11px] px-2 py-0.5 rounded" style={{backgroundColor: t.border, color: t.textMuted}}>Xoá</button>
+                    )}
+                  </div>
+                  <textarea value={abRevision} onChange={(e) => setAbRevision(e.target.value)} rows={2}
+                    placeholder="VD: bỏ chồng sách đi · nền hồng hơn · nhân vật nhìn thẳng vào máy ảnh · điện thoại nghiêng nhẹ sang trái"
+                    className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-y"
+                    style={{ ...inputStyle, minHeight: 56 }} />
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={() => handleAbGenerate(abLastMode, true)} disabled={!abRevision.trim() || abBusyKey !== null}
+                      className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{ background: abRevision.trim() ? "linear-gradient(135deg,#7C3AED,#EC4899)" : "#9CA3AF" }}>
+                      ✏️ Sửa và gen lại ({abVnd((abLastMode === "full" ? APP_CREATIVES.length : abLastMode === "core" ? 3 : 1) * (AB_COST_PER_IMAGE[abQuality] ?? 0.211))})
+                    </button>
+                    <span className="text-[11px]" style={{color: t.textMuted}}>
+                      Dùng lại brief + mascot cũ nên chỉ tính tiền phần ảnh. Yêu cầu này giữ nguyên khi bấm &ldquo;Duyệt → gen đủ&rdquo;.
+                    </span>
+                  </div>
+                  <p className="text-[11px]" style={{color: t.textMuted}}>
+                    Ô này chỉ đổi <b>hình ảnh</b>. Muốn đổi <b>headline / CTA</b> thì bấm &ldquo;Về đầu&rdquo; rồi sửa trong Creative Direction.
+                  </p>
+                </div>
+
+                {abError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{abError}</p>}
+
+                {abBaseImages.length > 0 && (
+                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh sạch, không overlay ({abBaseImages.length}) — Google khuyên nên có 1 ảnh/tỉ lệ</div>
+                    <div className="flex gap-3 overflow-x-auto pb-1">
+                      {abBaseImages.map(img => (
+                        <div key={img.key} className="flex-shrink-0 space-y-1.5">
+                          {/* Not a Preview, so it cannot open the shared lightbox — open the raw PNG instead. */}
+                          <a href={img.dataUrl} target="_blank" rel="noreferrer" title="Mở ảnh gốc">
+                            <img src={img.dataUrl} alt={img.label} className="rounded-xl object-cover shadow-lg cursor-zoom-in" style={{height:140, width:"auto", maxWidth:200}}/>
+                          </a>
+                          <div className="text-[10px] text-center" style={{color: t.textMuted}}>{img.label}</div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {/* Brief editor */}
-                <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
-                  <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Review & chỉnh brief</div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      {key:"app_name",label:"Tên app"},
-                      {key:"cta_text",label:"CTA"},
-                      {key:"headline",label:"Headline",full:true},
-                      {key:"subheadline",label:"Subheadline",full:true},
-                    ].map(f => (
-                      <div key={f.key} className={f.full?"col-span-2":""}>
-                        <label className="block text-xs mb-1" style={{color: t.textMuted}}>{f.label}</label>
-                        <input value={(agBrief as unknown as Record<string,string>)[f.key]||""}
-                          onChange={e => setAgBrief(p => p ? {...p, [f.key]: e.target.value} : p)}
-                          className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex gap-5">
-                    {[{key:"primary_color",label:"Primary"},{key:"secondary_color",label:"Secondary"},{key:"accent_color",label:"Accent"}].map(c => (
-                      <div key={c.key} className="flex items-center gap-2">
-                        <input type="color" value={(agBrief as unknown as Record<string,string>)[c.key]||"#7B2FBE"}
-                          onChange={e => setAgBrief(p => p ? {...p, [c.key]: e.target.value} : p)}
-                          className="w-8 h-8 rounded cursor-pointer border" style={{borderColor: t.border}}/>
-                        <span className="text-xs" style={{color: t.textMuted}}>{c.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {/* Screenshot preview */}
-                  {agScreenshot && (
-                    <div>
-                      <div className="text-xs mb-1.5" style={{color: t.textMuted}}>Background (screenshot app)</div>
-                      <img src={agScreenshot} alt="" className="h-24 rounded-xl object-cover border" style={{borderColor: t.border}}/>
+                {abBrief && (
+                  <div className="p-3 rounded-xl border text-xs flex flex-wrap gap-3 items-center" style={{...cardStyle, borderColor:"#7C3AED44"}}>
+                    {abIcon && <img src={abIcon} alt="" className="w-8 h-8 rounded-lg flex-shrink-0"/>}
+                    <div className="flex flex-wrap gap-2 flex-1 min-w-0">
+                      <span className="px-2 py-0.5 rounded-full font-medium" style={{backgroundColor:"#7C3AED22",color:"#A78BFA"}}>H: {abBrief.headline}</span>
+                      <span className="px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>CTA: {abBrief.cta_text}</span>
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{backgroundColor:t.tabBg,color:t.textMuted}}>
+                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:abBrief.primary_color}}/>
+                        <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:abBrief.accent_color}}/>
+                        {abBrief.mood}
+                      </span>
                     </div>
-                  )}
-                </div>
-
-                {agError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{agError}</p>}
-
-                <div className="flex gap-3">
-                  <button onClick={resetAg} className="px-4 py-3 rounded-xl border text-sm transition-colors" style={{borderColor: t.border, color: t.textMuted}}>← Nhập lại</button>
-                  <button onClick={handleAgGenerate} className="flex-1 py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 transition-all text-white">
-                    Gen {AD_SIZES.length} banner PNG →
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 4: Generating */}
-            {agStep === "generating" && (
-              <div className="text-center py-20 space-y-6">
-                <div className="text-5xl animate-pulse">🎨</div>
-                <div className="text-xl font-bold" style={{color: t.text}}>Đang tạo {AD_SIZES.length} banner...</div>
-                <div className="w-48 h-1 rounded-full overflow-hidden mx-auto" style={{backgroundColor: t.border}}>
-                  <div className="h-full bg-violet-500 animate-pulse w-2/3"/>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 5: Preview */}
-            {agStep === "preview" && (
-              <div className="space-y-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg font-bold" style={{color: t.text}}>✅ {agPreviews.length} banner đã sẵn sàng</div>
-                    <div className="text-xs mt-0.5" style={{color: t.textMuted}}>{agBrief?.app_name} · {agCountry}</div>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={resetAg} className="text-xs px-3 py-2 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Gen lại</button>
-                    <button onClick={handleAgDownloadAll} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all">
-                      ⬇ Tải tất cả (.zip)
-                    </button>
-                  </div>
-                </div>
+                )}
+
                 <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
-                  {([["top5","⭐ Top 5"],["all",`Tất cả (${agPreviews.length})`]] as const).map(([tab,label])=>(
-                    <button key={tab} onClick={() => setAgActiveTab(tab)}
-                      className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
-                      style={agActiveTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>
-                      {label}
-                    </button>
+                  {([["top5",`⭐ Mỗi tỉ lệ 1 ảnh (${abPreviews.filter(p=>p.isTop5).length})`],["all",`Tất cả (${abPreviews.length})`]] as const).map(([tab,label])=>(
+                    <button key={tab} onClick={() => setAbTab(tab)} className="px-4 py-1.5 rounded-lg text-sm font-medium"
+                      style={abTab===tab?{backgroundColor:t.tabActive,color:t.text}:{color:t.textMuted}}>{label}</button>
                   ))}
                 </div>
+
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {agDisplayed.map(p => {
+                  {abShown.map(p => {
                     const scale = Math.min(1, 340/Math.max(p.width, p.height));
                     return (
-                      <div key={p.key} onClick={() => setSelectedPreview(p)}
-                        className="group rounded-2xl p-4 cursor-pointer transition-all border"
-                        style={cardStyle}
-                        onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
+                      <div key={p.key} onClick={() => setSelectedPreview(p)} className="group rounded-2xl p-4 cursor-pointer border" style={cardStyle}>
                         <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
                           <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
                         </div>
                         <div className="flex items-center justify-between">
                           <div>
-                            <div className="text-xs font-semibold" style={{color: t.text}}>{p.key}</div>
+                            <div className="text-xs font-semibold flex items-center gap-1" style={{color: t.text}}>
+                              {p.key}
+                              {APP_CREATIVES.find(c => c.key === p.key)?.noOverlay && (
+                                <span className="text-[9px] px-1 py-0.5 rounded" style={{backgroundColor:"#10B98122", color:"#10B981"}}>sạch</span>
+                              )}
+                            </div>
                             <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
                           </div>
-                          <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
-                            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded-lg transition-all hover:bg-violet-600 hover:text-white"
-                            style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                          <div className="flex gap-1 flex-shrink-0">
+                            {/* One bad frame out of twenty is now a 1,400₫ fix
+                                rather than a reason to rerun the whole set. */}
+                            <button
+                              onClick={e => { e.stopPropagation(); handleAbGenerate(abLastMode, true, [p.key]); }}
+                              disabled={abBusyKey !== null}
+                              title={`Gen lại riêng ảnh này (${abVnd(AB_COST_PER_IMAGE[abQuality] ?? 0.211)})`}
+                              className="text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                              style={{backgroundColor: t.tabBg, color: t.textSub}}>
+                              {abBusyKey === p.key ? "⏳" : "↻"}
+                            </button>
+                            <button onClick={e => { e.stopPropagation(); const a=document.createElement("a"); a.href=p.dataUrl; a.download=`${p.key}.png`; a.click(); }}
+                              title="Tải ảnh này"
+                              className="text-xs px-2 py-1 rounded-lg hover:bg-violet-600 hover:text-white"
+                              style={{backgroundColor: t.tabBg, color: t.textSub}}>⬇</button>
+                          </div>
+                        </div>
+
+                        {/* Per-image revision. The box above the grid rewrites the
+                            brief for the whole set; this one is scoped to this
+                            frame, so fixing one overlap does not restyle the
+                            other nineteen. */}
+                        <div onClick={e => e.stopPropagation()} className="mt-2 space-y-1.5">
+                          <textarea
+                            value={abCardRev[p.key] || ""}
+                            onChange={e => setAbCardRev(prev => ({ ...prev, [p.key]: e.target.value }))}
+                            rows={2}
+                            placeholder="Sửa riêng ảnh này: VD chữ đang đè lên mặt, dịch nhân vật sang phải"
+                            className="w-full text-[11px] rounded-lg px-2 py-1.5 border focus:outline-none focus:border-violet-500 resize-y"
+                            style={{ ...inputStyle, minHeight: 44 }} />
+                          <button
+                            onClick={() => handleAbGenerate(abLastMode, true, [p.key], abCardRev[p.key] || "")}
+                            disabled={!(abCardRev[p.key] || "").trim() || abBusyKey !== null}
+                            className="w-full text-[11px] font-semibold px-2 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                            style={{ background: (abCardRev[p.key] || "").trim() ? "linear-gradient(135deg,#7C3AED,#EC4899)" : "#9CA3AF" }}>
+                            {abBusyKey === p.key ? "⏳ Đang gen lại..." : `✏️ Sửa riêng ảnh này (${abVnd(AB_COST_PER_IMAGE[abQuality] ?? 0.211)})`}
+                          </button>
                         </div>
                       </div>
                     );
@@ -2076,6 +3213,221 @@ export default function Home() {
                 {ex.includes("apple") ? "🍎 App Store — Canva" : "🤖 Play Store — Canva"}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* LAUNCH CAMPAIGN PAGE */}
+        {activePage === "launch" && (
+          <div className="space-y-5">
+            {/* Connect Google Ads */}
+            <div className="p-5 border rounded-2xl" style={cardStyle}>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="font-semibold text-sm" style={{color: t.text}}>Kết nối Google Ads</div>
+                  <div className="text-xs mt-0.5" style={{color: t.textMuted}}>Authorize để tạo campaign trực tiếp</div>
+                </div>
+                {adsConnected === null ? (
+                  <div className="text-xs" style={{color: t.textMuted}}>Đang kiểm tra...</div>
+                ) : adsConnected ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-1 rounded-full bg-green-500/15 text-green-500 font-medium">✓ Đã kết nối</span>
+                    <button onClick={async()=>{ await fetch("/api/google-ads/auth?action=disconnect"); setAdsConnected(false); setAdsAccounts([]); }}
+                      className="text-xs px-2 py-1 rounded-lg border" style={{color:t.textMuted,borderColor:t.border}}>Ngắt kết nối</button>
+                  </div>
+                ) : (
+                  <a href="/api/google-ads/auth?action=connect"
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 transition-colors">
+                    🔗 Connect Google Ads
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {adsConnected && (
+              <>
+                {/* Select Account */}
+                <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                  <label className="block text-xs font-semibold uppercase tracking-wider" style={labelStyle}>Chọn tài khoản Google Ads</label>
+                  {adsNeedsBasicAccess ? (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <span className="text-2xl">⏳</span>
+                        <div>
+                          <div className="text-sm font-semibold text-amber-400 mb-1">Đang chờ phê duyệt Basic Access</div>
+                          <div className="text-xs text-amber-300/80 leading-relaxed">
+                            Developer Token hiện ở chế độ <b>Explorer (Test)</b> — không thể truy cập tài khoản Google Ads thật.<br/>
+                            Bạn đã nộp đơn xin <b>Basic Access</b>. Google thường phê duyệt trong <b>3–5 ngày làm việc</b>.
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-amber-300/70 bg-amber-500/10 rounded-lg px-3 py-2 space-y-1">
+                        <div>✅ Đơn đã được gửi đến Google Ads API Center</div>
+                        <div>📧 Bạn sẽ nhận email khi được phê duyệt</div>
+                        <div>🔄 Sau khi được duyệt, nhấn <b>Thử lại</b> để tải tài khoản</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-black font-semibold">🔄 Thử lại</button>
+                        <a href="https://ads.google.com/nav/selectaccount?dst=/aw/apicenter" target="_blank" rel="noreferrer"
+                          className="text-xs px-3 py-1.5 rounded-lg border border-amber-500/50 text-amber-400">Kiểm tra trạng thái →</a>
+                      </div>
+                    </div>
+                  ) : adsAccountsError ? (
+                    <div className="space-y-2">
+                      <div className="text-xs text-red-400 bg-red-400/10 rounded-lg px-3 py-2 break-all">{adsAccountsError}</div>
+                      <button onClick={loadAdsAccounts} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">Thử lại</button>
+                    </div>
+                  ) : adsAccountsLoading ? (
+                    <div className="text-xs" style={{color:t.textMuted}}>⏳ Đang tải tài khoản...</div>
+                  ) : adsAccounts.length === 0 ? (
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs" style={{color:t.textMuted}}>Không có tài khoản nào</div>
+                      <button onClick={loadAdsAccounts} className="text-xs px-2 py-1 rounded-lg border" style={{borderColor:t.border,color:t.textMuted}}>Tải lại</button>
+                    </div>
+                  ) : (
+                    <select value={adsSelectedAccount} onChange={e=>{ setAdsSelectedAccount(e.target.value); if(e.target.value) loadAdsCampaigns(e.target.value); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none" style={inputStyle}>
+                      <option value="">-- Chọn account --</option>
+                      {adsAccounts.map(a=>(
+                        <option key={a.id} value={a.id}>{a.name} ({a.id}) — {a.currency}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {adsSelectedAccount && (
+                  <>
+                    {/* Campaign Settings */}
+                    <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                      <div className="font-semibold text-sm" style={{color:t.text}}>Cấu hình Campaign</div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Tên campaign</label>
+                          <input value={adsCampaignName} onChange={e=>setAdsCampaignName(e.target.value)}
+                            placeholder="VD: Pix Editor - VN Q1" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Budget/ngày (VNĐ)</label>
+                          <input value={adsBudget} onChange={e=>setAdsBudget(e.target.value)} type="number"
+                            placeholder="200000" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>App ID</label>
+                          <input value={adsAppId} onChange={e=>setAdsAppId(e.target.value)}
+                            placeholder="com.apero.pixeditor" className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold mb-1.5 block" style={labelStyle}>Store</label>
+                          <select value={adsAppStore} onChange={e=>setAdsAppStore(e.target.value as "GOOGLE_APP_STORE"|"APPLE_APP_STORE")}
+                            className="w-full rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}>
+                            <option value="GOOGLE_APP_STORE">🤖 Google Play</option>
+                            <option value="APPLE_APP_STORE">🍎 App Store</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Headlines & Descriptions */}
+                    <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                      <div className="font-semibold text-sm" style={{color:t.text}}>Ad Copy</div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold" style={labelStyle}>Headlines (tối đa 5, mỗi cái ≤30 ký tự)</label>
+                        {adsHeadlines.map((h,i)=>(
+                          <div key={i} className="flex gap-2 items-center">
+                            <input value={h} onChange={e=>{ const arr=[...adsHeadlines]; arr[i]=e.target.value.slice(0,30); setAdsHeadlines(arr); }}
+                              placeholder={`Headline ${i+1}`} className="flex-1 rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                            <span className="text-xs w-8 text-right" style={{color:t.textMuted}}>{h.length}/30</span>
+                          </div>
+                        ))}
+                        {adsHeadlines.length < 5 && (
+                          <button onClick={()=>setAdsHeadlines([...adsHeadlines,""])} className="text-xs" style={{color:"#7C3AED"}}>+ Thêm headline</button>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold" style={labelStyle}>Descriptions (tối đa 5, mỗi cái ≤90 ký tự)</label>
+                        {adsDescriptions.map((d,i)=>(
+                          <div key={i} className="flex gap-2 items-center">
+                            <input value={d} onChange={e=>{ const arr=[...adsDescriptions]; arr[i]=e.target.value.slice(0,90); setAdsDescriptions(arr); }}
+                              placeholder={`Description ${i+1}`} className="flex-1 rounded-xl px-3 py-2 text-sm border focus:outline-none" style={inputStyle}/>
+                            <span className="text-xs w-8 text-right" style={{color:t.textMuted}}>{d.length}/90</span>
+                          </div>
+                        ))}
+                        {adsDescriptions.length < 5 && (
+                          <button onClick={()=>setAdsDescriptions([...adsDescriptions,""])} className="text-xs" style={{color:"#7C3AED"}}>+ Thêm description</button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Select Banners from history */}
+                    {adsBannerPool.length > 0 && (
+                      <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                        <div className="flex items-center justify-between">
+                          <div className="font-semibold text-sm" style={{color:t.text}}>Chọn banner để upload ({adsSelectedBanners.length} đã chọn)</div>
+                          <button onClick={()=>setAdsSelectedBanners(adsBannerPool.filter(p=>p.isTop5).map(p=>p.dataUrl))} className="text-xs" style={{color:"#7C3AED"}}>Chọn Top 5</button>
+                        </div>
+                        <div className="grid grid-cols-5 gap-2">
+                          {adsBannerPool.slice(0,20).map((p,i)=>{
+                            const sel = adsSelectedBanners.includes(p.dataUrl);
+                            return (
+                              <div key={i} onClick={()=>setAdsSelectedBanners(sel ? adsSelectedBanners.filter(x=>x!==p.dataUrl) : [...adsSelectedBanners,p.dataUrl])}
+                                className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${sel?"border-violet-500":"border-transparent"}`}>
+                                <img src={p.dataUrl} alt={p.key} className="w-full h-16 object-contain" style={{background:"#111"}}/>
+                                {sel && <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-violet-500 flex items-center justify-center text-white text-[9px]">✓</div>}
+                                <div className="text-[9px] text-center truncate px-1 py-0.5" style={{color:t.textMuted}}>{p.key}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="text-xs" style={{color:t.textMuted}}>💡 Gen banner ở trang Gen Banner trước rồi quay lại đây chọn</p>
+                      </div>
+                    )}
+
+                    {/* Launch Button */}
+                    {adsResult && (
+                      <div className={`px-4 py-3 rounded-xl text-sm ${adsResult.success?"bg-green-500/10 text-green-500":"bg-red-500/10 text-red-400"}`}>
+                        {adsResult.success ? `✅ ${adsResult.message}` : `❌ ${adsResult.error}`}
+                      </div>
+                    )}
+
+                    <button onClick={handleAdsLaunch} disabled={adsLaunching || !adsCampaignName || !adsAppId}
+                      className="w-full py-3.5 rounded-xl font-semibold text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-40 transition-all">
+                      {adsLaunching ? "⏳ Đang tạo campaign..." : "🚀 Tạo Campaign Google Ads"}
+                    </button>
+
+                    {/* Existing Campaigns */}
+                    {adsCampaigns.length > 0 && (
+                      <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                        <div className="font-semibold text-sm" style={{color:t.text}}>App Campaigns hiện có</div>
+                        <div className="space-y-2">
+                          {adsCampaigns.map(c=>(
+                            <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-xl border" style={{borderColor:t.border}}>
+                              <div>
+                                <div className="text-sm font-medium" style={{color:t.text}}>{c.name}</div>
+                                <div className="text-xs" style={{color:t.textMuted}}>Budget: {c.budgetPerDay.toLocaleString()}đ/ngày</div>
+                              </div>
+                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${c.status==="ENABLED"?"bg-green-500/15 text-green-500":c.status==="PAUSED"?"bg-yellow-500/15 text-yellow-500":"bg-gray-500/15 text-gray-400"}`}>
+                                {c.status}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+
+            {!adsConnected && adsConnected !== null && (
+              <div className="p-6 border rounded-2xl text-center space-y-3" style={cardStyle}>
+                <div className="text-3xl">🔗</div>
+                <div className="font-semibold" style={{color:t.text}}>Chưa kết nối Google Ads</div>
+                <div className="text-sm" style={{color:t.textMuted}}>Bấm "Connect Google Ads" ở trên để authorize</div>
+              </div>
+            )}
           </div>
         )}
 

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   try {
     const { imageBase64, language, country } = await req.json();
