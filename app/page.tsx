@@ -789,7 +789,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio">("home");
 
   // ── AI Banner ──
   type AbStep = "input" | "generating" | "preview";
@@ -808,11 +808,11 @@ export default function Home() {
   const [abBrief, setAbBrief] = useState<Brief|null>(null);
   const [abIcon, setAbIcon] = useState<string|null>(null);
   /**
-   * The raw AI artwork per slot, before any copy is drawn on it. Kept because
-   * every re-render — a new market's wording, a run reopened from history —
-   * redraws the overlay onto this instead of paying to generate again.
+   * The raw AI artwork per slot lives in abBasesRef, not in state: nothing
+   * renders from it directly, and 20 PNGs in state re-render the tree for
+   * nothing. Every re-render — a new market's wording, a run reopened from
+   * history — draws the overlay onto this instead of paying to generate again.
    */
-  const [abBases, setAbBases] = useState<Record<string,string>>({});
   const [abPreviews, setAbPreviews] = useState<Preview[]>([]);
   const [abZipBase64, setAbZipBase64] = useState("");
   const [abTab, setAbTab] = useState<"top5"|"all">("all");
@@ -877,7 +877,6 @@ export default function Home() {
     setAbFailed([]);
     abPrevRef.current = [];
     abBasesRef.current = {};
-    setAbBases({});
     setAbLocSets([]); setAbLocLangs([]);
     abRunIdRef.current = "";
     setAbCardRev({});
@@ -1086,7 +1085,6 @@ export default function Home() {
       // Merge, so retrying one slot does not drop the other nineteen artworks.
       const allBases = partial ? { ...abBasesRef.current, ...bases } : bases;
       abBasesRef.current = allBases;
-      setAbBases(allBases);
 
       setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${total} ảnh...`);
       const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
@@ -1280,7 +1278,7 @@ export default function Home() {
       if (!bases || !Object.keys(bases).length) throw new Error("Không còn ảnh gốc của lần gen này.");
       const brief = meta.brief as Brief;
       const previews = await abBuildSet(bases, brief, meta.icon);
-      abBasesRef.current = bases; setAbBases(bases);
+      abBasesRef.current = bases;
       abRunIdRef.current = meta.id;
       abPrevRef.current = previews; setAbPreviews(previews);
       setAbBrief(brief); setAbIcon(meta.icon); setAbUrl(meta.appUrl);
@@ -1491,70 +1489,6 @@ export default function Home() {
     setAdsLaunching(false);
   };
 
-  // Keyword Research state
-  const [kwAppName, setKwAppName] = useState("");
-  const [kwAppUrl, setKwAppUrl] = useState("");
-  const [kwCountry, setKwCountry] = useState("Global");
-  const [kwLang, setKwLang] = useState("English");
-  const [kwCountrySearch, setKwCountrySearch] = useState("");
-  const [kwCountryOpen, setKwCountryOpen] = useState(false);
-  const kwCountryRef = useRef<HTMLDivElement>(null);
-  const [kwLangSearch, setKwLangSearch] = useState("");
-  const [kwLangOpen, setKwLangOpen] = useState(false);
-  const kwLangRef = useRef<HTMLDivElement>(null);
-  const [kwLoading, setKwLoading] = useState(false);
-  const [kwError, setKwError] = useState("");
-  interface KwItem { keyword: string; monthly_searches: string; competition: "Low"|"Medium"|"High"; competition_index: number; cpc_min: number; cpc_max: number; relevance: number; intent: string; }
-  interface KwResult { app_name: string; keywords: KwItem[]; }
-  const [kwResult, setKwResult] = useState<KwResult|null>(null);
-  const [kwSort, setKwSort] = useState<"relevance"|"competition_index"|"cpc_max">("relevance");
-  const [kwCopied, setKwCopied] = useState(false);
-
-  const handleKwGenerate = async () => {
-    if (!kwAppName.trim() && !kwAppUrl.trim()) return;
-    setKwLoading(true); setKwError(""); setKwResult(null);
-    try {
-      const res = await fetch("/api/keywords", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appName: kwAppName, appUrl: kwAppUrl, country: kwCountry, language: kwLang }),
-      });
-      const data = await res.json();
-      if (data.success) setKwResult(data.result);
-      else setKwError(data.error || "Lỗi không xác định");
-    } catch (e) { setKwError(String(e)); }
-    finally { setKwLoading(false); }
-  };
-
-  const copyKwList = () => {
-    if (!kwResult) return;
-    const sorted = [...kwResult.keywords].sort((a, b) => {
-      if (kwSort === "relevance") return b.relevance - a.relevance;
-      if (kwSort === "competition_index") return a.competition_index - b.competition_index;
-      return b.cpc_max - a.cpc_max;
-    });
-    const text = sorted.map(k => k.keyword).join("\n");
-    navigator.clipboard.writeText(text);
-    setKwCopied(true);
-    setTimeout(() => setKwCopied(false), 2000);
-  };
-
-  // Ad Copy Generator state
-  const [adcopyAppName, setAdcopyAppName] = useState("");
-  const [adcopyMessage, setAdcopyMessage] = useState("");
-  const [adcopyCountry, setAdcopyCountry] = useState("Global");
-  const [adcopyLang, setAdcopyLang] = useState("English");
-  const [adcopyCountrySearch, setAdcopyCountrySearch] = useState("");
-  const [adcopyCountryOpen, setAdcopyCountryOpen] = useState(false);
-  const adcopyCountryRef = useRef<HTMLDivElement>(null);
-  const [adcopyLangSearch, setAdcopyLangSearch] = useState("");
-  const [adcopyLangOpen, setAdcopyLangOpen] = useState(false);
-  const adcopyLangRef = useRef<HTMLDivElement>(null);
-  const [adcopyLoading, setAdcopyLoading] = useState(false);
-  interface AdCopyResult { headlines: string[]; descriptions: string[]; ctas: string[]; }
-  const [adcopyResult, setAdcopyResult] = useState<AdCopyResult|null>(null);
-  const [adcopyCopied, setAdcopyCopied] = useState<string|null>(null);
-
   // Localize state
   const LOCALIZE_MARKETS = [
     { code: "VN", name: "Vietnam",      flag: "🇻🇳" },
@@ -1577,106 +1511,151 @@ export default function Home() {
     { code: "IN", name: "India",        flag: "🇮🇳" },
   ];
   interface LocalizeMarketResult { code: string; name: string; language: string; flag: string; headlines: string[]; descriptions: string[]; ctas: string[]; }
-  const [lcAppName, setLcAppName] = useState("");
-  const [lcHeadlines, setLcHeadlines] = useState("Download now and explore\nBoost your productivity\nTry it free today");
-  const [lcDescriptions, setLcDescriptions] = useState("The best app for your daily tasks\nMillions of users trust us every day");
-  const [lcCtas, setLcCtas] = useState("Install Free\nDownload Now\nGet Started");
-  const [lcSourceLang, setLcSourceLang] = useState("English");
-  const [lcMarkets, setLcMarkets] = useState<string[]>(["VN","ID","TH","PH","MY","SG","US"]);
-  const [lcLoading, setLcLoading] = useState(false);
-  const [lcResults, setLcResults] = useState<LocalizeMarketResult[]|null>(null);
-  const [lcError, setLcError] = useState("");
-  const [lcCopied, setLcCopied] = useState<string|null>(null);
-  const [lcActiveMarket, setLcActiveMarket] = useState<string|null>(null);
 
-  const lcToggleMarket = (code: string) => {
-    setLcMarkets(prev => prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]);
+  /* ─────────────── Ad Copy Studio ───────────────
+   * Keywords, ad copy and localisation were three pages that each asked for the
+   * app again and passed nothing to the next one. They are one flow: research a
+   * keyword, write copy FOR that keyword, ship it to other markets.
+   */
+  interface SdKeyword {
+    keyword: string; monthly_searches: string; competition: string;
+    competition_index: number; cpc_min: number; cpc_max: number;
+    relevance: number; intent: string;
+  }
+  const [sdUrl, setSdUrl] = useState("");
+  const [sdCountry, setSdCountry] = useState("Global");
+  const [sdLang, setSdLang] = useState("English");
+  const [sdAppName, setSdAppName] = useState("");
+  const [sdKeywords, setSdKeywords] = useState<SdKeyword[]>([]);
+  const [sdLoading, setSdLoading] = useState(false);
+  const [sdMoreLoading, setSdMoreLoading] = useState(false);
+  const [sdError, setSdError] = useState("");
+  const [sdSelected, setSdSelected] = useState<string>("");
+  const [sdCopy, setSdCopy] = useState<{headlines:string[];descriptions:string[];ctas:string[]}|null>(null);
+  const [sdCopyLoading, setSdCopyLoading] = useState(false);
+  const [sdCopied, setSdCopied] = useState("");
+  const [sdLocOpen, setSdLocOpen] = useState(false);
+  const [sdLocSearch, setSdLocSearch] = useState("");
+  const [sdLocMarkets, setSdLocMarkets] = useState<string[]>([]);
+  const [sdLocLoading, setSdLocLoading] = useState(false);
+  const [sdLocResults, setSdLocResults] = useState<LocalizeMarketResult[]|null>(null);
+  const sdLocRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!sdLocOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (sdLocRef.current && !sdLocRef.current.contains(e.target as Node)) setSdLocOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [sdLocOpen]);
+
+  /**
+   * "10K-100K" and "1M+" sort as strings in the wrong order entirely, so a
+   * volume band becomes a number first. Highest first is the whole point of the
+   * list — the operator reads from the top.
+   */
+  const sdVolumeScore = (band: string): number => {
+    const unit = (s: string) => {
+      const m = s.trim().match(/^([\d.]+)\s*([KMB]?)/i);
+      if (!m) return 0;
+      const mult = { K: 1e3, M: 1e6, B: 1e9 }[m[2].toUpperCase() as "K"|"M"|"B"] ?? 1;
+      return parseFloat(m[1]) * mult;
+    };
+    const parts = String(band || "").split("-");
+    if (parts.length === 2) return (unit(parts[0]) + unit(parts[1])) / 2;
+    // "1M+" has no upper bound; treat it as the band above its floor.
+    return band?.includes("+") ? unit(parts[0]) * 2 : unit(parts[0]);
   };
-  const lcSelectAll = () => setLcMarkets(LOCALIZE_MARKETS.map(m => m.code));
-  const lcSelectNone = () => setLcMarkets([]);
+  const sdSortByVolume = (list: SdKeyword[]) =>
+    [...list].sort((a, b) => sdVolumeScore(b.monthly_searches) - sdVolumeScore(a.monthly_searches));
 
-  const lcCopyText = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
-    setLcCopied(key);
-    setTimeout(() => setLcCopied(null), 2000);
+  const sdFetchKeywords = async (more = false) => {
+    if (!sdUrl.trim()) return;
+    if (more) setSdMoreLoading(true); else setSdLoading(true);
+    setSdError("");
+    if (!more) { setSdKeywords([]); setSdSelected(""); setSdCopy(null); setSdLocResults(null); }
+    try {
+      const res = await fetch("/api/keywords", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appUrl: sdUrl.trim(), appName: sdAppName, country: sdCountry, language: sdLang,
+          exclude: more ? sdKeywords.map(k => k.keyword) : [],
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "Không lấy được keyword.");
+      const found: SdKeyword[] = data.result?.keywords || [];
+      if (data.result?.app_name && !sdAppName) setSdAppName(data.result.app_name);
+      setSdKeywords(prev => {
+        // The model is told not to repeat, but a near-duplicate still slips in.
+        const seen = new Set(prev.map(k => k.keyword.toLowerCase()));
+        return sdSortByVolume([...prev, ...found.filter(k => !seen.has(k.keyword.toLowerCase()))]);
+      });
+    } catch (e) {
+      setSdError("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      if (more) setSdMoreLoading(false); else setSdLoading(false);
+    }
   };
 
-  const lcCopyAllForMarket = (market: LocalizeMarketResult) => {
-    const lines = [
-      `=== ${market.flag} ${market.name} (${market.language}) ===`,
-      "--- Headlines ---",
-      ...market.headlines.map((h, i) => `${i+1}. ${h}`),
-      "--- Descriptions ---",
-      ...market.descriptions.map((d, i) => `${i+1}. ${d}`),
-      "--- CTAs ---",
-      ...market.ctas.map((c, i) => `${i+1}. ${c}`),
-    ].join("\n");
-    navigator.clipboard.writeText(lines);
-    setLcCopied(`all-${market.code}`);
-    setTimeout(() => setLcCopied(null), 2000);
+  /** Copy written FOR the chosen keyword — that is the point of picking one. */
+  const sdGenerateCopy = async (keyword: string) => {
+    setSdSelected(keyword);
+    setSdCopyLoading(true);
+    setSdCopy(null); setSdLocResults(null); setSdError("");
+    try {
+      const res = await fetch("/api/adcopy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appName: sdAppName || sdUrl,
+          message: `Target keyword: "${keyword}". Every headline must read as an answer to someone searching that phrase; work the keyword or its close variant into at least three of the five headlines.`,
+          country: sdCountry, language: sdLang,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "Không tạo được ad copy.");
+      setSdCopy({
+        headlines: data.result.headlines || [],
+        descriptions: data.result.descriptions || [],
+        ctas: data.result.ctas || [],
+      });
+    } catch (e) {
+      setSdError("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSdCopyLoading(false);
+    }
   };
 
-  const lcCopyAll = () => {
-    if (!lcResults) return;
-    const text = lcResults.map(m => [
-      `=== ${m.flag} ${m.name} (${m.language}) ===`,
-      "Headlines: " + m.headlines.join(" | "),
-      "Descriptions: " + m.descriptions.join(" | "),
-      "CTAs: " + m.ctas.join(" | "),
-    ].join("\n")).join("\n\n");
-    navigator.clipboard.writeText(text);
-    setLcCopied("all");
-    setTimeout(() => setLcCopied(null), 2000);
-  };
-
-  const handleLocalize = async () => {
-    if (!lcAppName.trim()) return;
-    setLcLoading(true);
-    setLcError("");
-    setLcResults(null);
+  const sdLocalize = async () => {
+    if (!sdCopy || !sdLocMarkets.length) return;
+    setSdLocLoading(true); setSdError(""); setSdLocResults(null);
     try {
       const res = await fetch("/api/localize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          appName: lcAppName,
-          headlines: lcHeadlines.split("\n").map(s => s.trim()).filter(Boolean),
-          descriptions: lcDescriptions.split("\n").map(s => s.trim()).filter(Boolean),
-          ctas: lcCtas.split("\n").map(s => s.trim()).filter(Boolean),
-          markets: lcMarkets,
-          sourceLanguage: lcSourceLang,
+          appName: sdAppName || sdUrl,
+          headlines: sdCopy.headlines, descriptions: sdCopy.descriptions, ctas: sdCopy.ctas,
+          markets: sdLocMarkets, sourceLanguage: sdLang,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed");
-      setLcResults(data.results);
-      if (data.results?.length > 0) setLcActiveMarket(data.results[0].code);
-    } catch (e: unknown) {
-      setLcError(e instanceof Error ? e.message : "Translation failed");
+      if (!res.ok) throw new Error(data.error || "Localize thất bại.");
+      setSdLocResults(data.results || []);
+    } catch (e) {
+      setSdError("❌ " + (e instanceof Error ? e.message : String(e)));
     } finally {
-      setLcLoading(false);
+      setSdLocLoading(false);
     }
   };
 
-  const handleAdCopyGenerate = async () => {
-    if (!adcopyAppName.trim()) return;
-    setAdcopyLoading(true); setAdcopyResult(null);
-    try {
-      const res = await fetch("/api/adcopy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appName: adcopyAppName, message: adcopyMessage, country: adcopyCountry, language: adcopyLang }),
-      });
-      const data = await res.json();
-      if (data.success) setAdcopyResult(data.result);
-    } catch { /* silent */ }
-    finally { setAdcopyLoading(false); }
-  };
-
-  const copyText = (text: string) => {
+  const sdCopyText = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
-    setAdcopyCopied(text);
-    setTimeout(() => setAdcopyCopied(null), 1500);
+    setSdCopied(key);
+    setTimeout(() => setSdCopied(""), 1500);
   };
 
   interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
@@ -2026,9 +2005,7 @@ export default function Home() {
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
             ["aibanner", "✨", "AI Banner"],
-            ["adcopy",   "✍️", "Ad Copy"],
-            ["keywords", "🔑", "Keywords"],
-            ["localize", "🌏", "Localize"],
+            ["studio",   "🎯", "Ad Copy Studio"],
             ["launch",   "🚀", "Launch Camp"],
           ] as const).map(([page, icon, label]) => (
             <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } if (page==="launch") { checkAdsConnection(); } }}
@@ -2105,7 +2082,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="adcopy" ? "✍️ Ad Copy Generator" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="keywords" ? "🔑 Keyword Research" : activePage==="localize" ? "🌏 Multi-market Localizer" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -2639,135 +2616,6 @@ export default function Home() {
                 );
               })}
             </div>}
-          </div>
-        )}
-
-        {/* AD COPY PAGE */}
-        {activePage === "adcopy" && (
-          <div className="max-w-xl space-y-4">
-            <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Tên app / sản phẩm *</div>
-            <input value={adcopyAppName} onChange={e => setAdcopyAppName(e.target.value)}
-              placeholder="VD: Canva, PhotoRoom..."
-              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500"
-              style={inputStyle}/>
-            <div className="text-xs font-medium mb-1" style={{color: t.textMuted}}>Key message</div>
-            <textarea value={adcopyMessage} onChange={e => setAdcopyMessage(e.target.value)}
-              placeholder="VD: Chỉnh ảnh chuyên nghiệp, miễn phí..." rows={3}
-              className="w-full text-sm rounded-xl px-4 py-3 border focus:outline-none focus:border-violet-500 resize-none"
-              style={inputStyle}/>
-            <div className="grid grid-cols-2 gap-3">
-              {/* Country searchable dropdown */}
-              <div>
-                <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Thị trường</div>
-                <div ref={adcopyCountryRef} className="relative">
-                  <button type="button" onClick={() => { setAdcopyCountryOpen(o => !o); setAdcopyCountrySearch(""); }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
-                    style={{...inputStyle, borderColor: adcopyCountryOpen ? "#7C3AED" : t.inputBorder}}>
-                    <span className="truncate">{COUNTRIES.find(c => c.code === adcopyCountry)?.label || adcopyCountry}</span>
-                    <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{adcopyCountryOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {adcopyCountryOpen && (
-                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                      <div className="p-2 border-b" style={{borderColor: t.border}}>
-                        <input autoFocus value={adcopyCountrySearch} onChange={e => setAdcopyCountrySearch(e.target.value)}
-                          placeholder="🔍 Tìm quốc gia..."
-                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
-                          style={inputStyle}/>
-                      </div>
-                      <div className="max-h-48 overflow-y-auto">
-                        {COUNTRIES.filter(c => c.label.toLowerCase().includes(adcopyCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(adcopyCountrySearch.toLowerCase())).map(c => (
-                          <button key={c.code} type="button"
-                            onClick={() => { setAdcopyCountry(c.code); setAdcopyCountryOpen(false); setAdcopyCountrySearch(""); const defaultLang = COUNTRY_DEFAULT_LANG[c.code]; if (defaultLang) setAdcopyLang(defaultLang); }}
-                            className="w-full text-left px-4 py-2 text-sm transition-colors"
-                            style={{backgroundColor: adcopyCountry === c.code ? "#7C3AED22" : "transparent", color: adcopyCountry === c.code ? "#A78BFA" : t.text}}>
-                            {c.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              {/* Language searchable dropdown */}
-              <div>
-                <div className="text-xs font-medium mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</div>
-                <div ref={adcopyLangRef} className="relative">
-                  <button type="button" onClick={() => { setAdcopyLangOpen(o => !o); setAdcopyLangSearch(""); }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
-                    style={{...inputStyle, borderColor: adcopyLangOpen ? "#7C3AED" : t.inputBorder}}>
-                    <span className="truncate">{LANGUAGES.find(l => l.code === adcopyLang)?.label || adcopyLang}</span>
-                    <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{adcopyLangOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {adcopyLangOpen && (
-                    <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                      <div className="p-2 border-b" style={{borderColor: t.border}}>
-                        <input autoFocus value={adcopyLangSearch} onChange={e => setAdcopyLangSearch(e.target.value)}
-                          placeholder="🔍 Tìm ngôn ngữ..."
-                          className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500"
-                          style={inputStyle}/>
-                      </div>
-                      <div className="max-h-48 overflow-y-auto">
-                        {LANGUAGES.filter(l => l.label.toLowerCase().includes(adcopyLangSearch.toLowerCase()) || l.code.toLowerCase().includes(adcopyLangSearch.toLowerCase())).map(l => (
-                          <button key={l.code} type="button"
-                            onClick={() => { setAdcopyLang(l.code); setAdcopyLangOpen(false); setAdcopyLangSearch(""); }}
-                            className="w-full text-left px-4 py-2 text-sm transition-colors"
-                            style={{backgroundColor: adcopyLang === l.code ? "#7C3AED22" : "transparent", color: adcopyLang === l.code ? "#A78BFA" : t.text}}>
-                            {l.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-            <button onClick={handleAdCopyGenerate} disabled={adcopyLoading || !adcopyAppName.trim()}
-              className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm py-3 px-4 rounded-xl transition-all font-semibold flex items-center justify-center gap-2">
-              {adcopyLoading ? <><span className="animate-spin">⏳</span> Đang tạo...</> : <>✨ Generate Ad Copy</>}
-            </button>
-
-            {adcopyResult && (
-              <div className="space-y-4 pt-2">
-                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                  <div className="px-4 py-3 text-xs font-bold border-b flex items-center gap-2" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-                    📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(≤30 ký tự)</span>
-                  </div>
-                  {adcopyResult.headlines.map((h, i) => (
-                    <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
-                      <span className="text-sm flex-1" style={{color: t.text}}>{h}</span>
-                      <button onClick={() => copyText(h)} className="text-xs px-2 py-0.5 rounded flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===h ? "#10B98122" : t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
-                        {adcopyCopied===h ? "✓" : "copy"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                  <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
-                    📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(≤90 ký tự)</span>
-                  </div>
-                  {adcopyResult.descriptions.map((d, i) => (
-                    <div key={i} className="flex items-start justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
-                      <span className="text-sm leading-relaxed flex-1" style={{color: t.text}}>{d}</span>
-                      <button onClick={() => copyText(d)} className="text-xs px-2 py-0.5 rounded mt-0.5 flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===d ? "#10B98122" : t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
-                        {adcopyCopied===d ? "✓" : "copy"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                  <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>🎯 Call to Action</div>
-                  <div className="p-4 flex flex-wrap gap-2">
-                    {adcopyResult.ctas.map((c, i) => (
-                      <button key={i} onClick={() => copyText(c)} className="text-sm px-4 py-2 rounded-xl border transition-all"
-                        style={{borderColor: adcopyCopied===c ? "#10B981" : t.border, color: adcopyCopied===c ? "#10B981" : t.text, backgroundColor: t.tabBg}}>
-                        {adcopyCopied===c ? "✓ Copied" : c}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button onClick={handleAdCopyGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Tạo lại</button>
-              </div>
-            )}
           </div>
         )}
 
@@ -3306,186 +3154,211 @@ export default function Home() {
           </div>
         )}
 
-        {/* KEYWORD RESEARCH PAGE */}
-        {activePage === "keywords" && (
-          <div className="max-w-2xl space-y-5">
-            {/* Input form */}
-            <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
-              <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Thông tin app</div>
+        {/* AD COPY STUDIO — keyword research, copy for that keyword, localisation */}
+        {activePage === "studio" && (
+          <div className="space-y-5">
+            <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
               <div>
-                <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Tên app</label>
-                <input value={kwAppName} onChange={e => setKwAppName(e.target.value)}
-                  placeholder="VD: Canva, PhotoRoom, Snapseed..."
-                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}/>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="h-px flex-1" style={{backgroundColor: t.border}}/>
-                <span className="text-xs" style={{color: t.textMuted}}>hoặc</span>
-                <div className="h-px flex-1" style={{backgroundColor: t.border}}/>
-              </div>
-              <div>
-                <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>URL App Store / Play Store</label>
-                <input value={kwAppUrl} onChange={e => setKwAppUrl(e.target.value)}
-                  placeholder="https://apps.apple.com/... hoặc https://play.google.com/..."
-                  className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500"
-                  style={inputStyle}/>
+                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
+                  🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
+                </label>
+                <div className="flex gap-2">
+                  <input value={sdUrl} onChange={e => setSdUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") sdFetchKeywords(); }}
+                    placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
+                    className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                  <button onClick={() => sdFetchKeywords()} disabled={!sdUrl.trim() || sdLoading}
+                    className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed">
+                    {sdLoading ? "⏳ Đang phân tích..." : "🔍 Phân tích"}
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {/* Country */}
                 <div>
                   <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
-                  <div ref={kwCountryRef} className="relative">
-                    <button type="button" onClick={() => { setKwCountryOpen(o => !o); setKwCountrySearch(""); }}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none"
-                      style={{...inputStyle, borderColor: kwCountryOpen ? "#7C3AED" : t.inputBorder}}>
-                      <span className="truncate">{COUNTRIES.find(c => c.code === kwCountry)?.label || kwCountry}</span>
-                      <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{kwCountryOpen ? "▲" : "▼"}</span>
-                    </button>
-                    {kwCountryOpen && (
-                      <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                        <div className="p-2 border-b" style={{borderColor: t.border}}>
-                          <input autoFocus value={kwCountrySearch} onChange={e => setKwCountrySearch(e.target.value)}
-                            placeholder="🔍 Tìm quốc gia..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                        </div>
-                        <div className="max-h-48 overflow-y-auto">
-                          {COUNTRIES.filter(c => c.label.toLowerCase().includes(kwCountrySearch.toLowerCase()) || c.code.toLowerCase().includes(kwCountrySearch.toLowerCase())).map(c => (
-                            <button key={c.code} type="button"
-                              onClick={() => { setKwCountry(c.code); setKwCountryOpen(false); setKwCountrySearch(""); const dl = COUNTRY_DEFAULT_LANG[c.code]; if (dl) setKwLang(dl); }}
-                              className="w-full text-left px-4 py-2 text-sm"
-                              style={{backgroundColor: kwCountry === c.code ? "#7C3AED22" : "transparent", color: kwCountry === c.code ? "#A78BFA" : t.text}}>
-                              {c.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <select value={sdCountry} onChange={e => { setSdCountry(e.target.value); const dl = COUNTRY_DEFAULT_LANG[e.target.value]; if (dl) setSdLang(dl); }}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                    {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                  </select>
                 </div>
-                {/* Language */}
                 <div>
-                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ</label>
-                  <div ref={kwLangRef} className="relative">
-                    <button type="button" onClick={() => { setKwLangOpen(o => !o); setKwLangSearch(""); }}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none"
-                      style={{...inputStyle, borderColor: kwLangOpen ? "#7C3AED" : t.inputBorder}}>
-                      <span className="truncate">{LANGUAGES.find(l => l.code === kwLang)?.label || kwLang}</span>
-                      <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{kwLangOpen ? "▲" : "▼"}</span>
-                    </button>
-                    {kwLangOpen && (
-                      <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                        <div className="p-2 border-b" style={{borderColor: t.border}}>
-                          <input autoFocus value={kwLangSearch} onChange={e => setKwLangSearch(e.target.value)}
-                            placeholder="🔍 Tìm ngôn ngữ..." className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                        </div>
-                        <div className="max-h-48 overflow-y-auto">
-                          {LANGUAGES.filter(l => l.label.toLowerCase().includes(kwLangSearch.toLowerCase()) || l.code.toLowerCase().includes(kwLangSearch.toLowerCase())).map(l => (
-                            <button key={l.code} type="button"
-                              onClick={() => { setKwLang(l.code); setKwLangOpen(false); setKwLangSearch(""); }}
-                              className="w-full text-left px-4 py-2 text-sm"
-                              style={{backgroundColor: kwLang === l.code ? "#7C3AED22" : "transparent", color: kwLang === l.code ? "#A78BFA" : t.text}}>
-                              {l.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
+                  <select value={sdLang} onChange={e => setSdLang(e.target.value)}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                    {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                  </select>
                 </div>
               </div>
-              {kwError && <p className="text-red-400 text-xs bg-red-400/10 rounded-lg px-3 py-2">{kwError}</p>}
-              <button onClick={handleKwGenerate}
-                disabled={kwLoading || (!kwAppName.trim() && !kwAppUrl.trim())}
-                className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-white flex items-center justify-center gap-2">
-                {kwLoading ? <><span className="animate-spin">⏳</span> Đang phân tích...</> : <>🔑 Tìm Keywords</>}
-              </button>
+              {sdAppName && <div className="text-xs" style={{color: t.textMuted}}>📱 {sdAppName}</div>}
             </div>
 
-            {/* Results */}
-            {kwResult && (
-              <div className="space-y-3">
-                {/* Header */}
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <div className="text-sm font-bold" style={{color: t.text}}>{kwResult.app_name}</div>
-                    <div className="text-xs" style={{color: t.textMuted}}>{kwResult.keywords.length} keywords · {kwCountry !== "Global" ? kwCountry : "Global"} · ước tính bởi AI</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select value={kwSort} onChange={e => setKwSort(e.target.value as typeof kwSort)}
-                      className="text-xs rounded-lg px-2 py-1.5 border focus:outline-none" style={inputStyle}>
-                      <option value="relevance">Sắp xếp: Relevance</option>
-                      <option value="competition_index">Sắp xếp: Competition ↑</option>
-                      <option value="cpc_max">Sắp xếp: CPC ↓</option>
-                    </select>
-                    <button onClick={copyKwList}
-                      className="text-xs px-3 py-1.5 rounded-lg border transition-all active:scale-95"
-                      style={kwCopied ? {borderColor:"#10B981",color:"#10B981",backgroundColor:"#10B98111"} : {borderColor:t.border,color:t.textMuted}}>
-                      {kwCopied ? "✓ Đã copy!" : "📋 Copy list"}
-                    </button>
-                  </div>
-                </div>
+            {sdError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{sdError}</p>}
 
-                {/* Table */}
-                <div className="rounded-2xl border overflow-hidden" style={{borderColor: t.border}}>
-                  {/* Table header */}
-                  <div className="grid text-xs font-bold uppercase tracking-wider px-4 py-2.5 border-b"
-                    style={{gridTemplateColumns:"1fr 110px 90px 80px 90px", backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
-                    <div>Keyword</div>
-                    <div className="text-center">Volume/tháng</div>
-                    <div className="text-center">Competition</div>
-                    <div className="text-center">CPC (USD)</div>
-                    <div className="text-center">Intent</div>
+            {sdKeywords.length > 0 && (
+              <div className="grid lg:grid-cols-5 gap-5 items-start">
+                {/* Keywords, highest volume first */}
+                <div className="lg:col-span-3 p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>
+                      🔑 {sdKeywords.length} keyword · volume cao nhất trước
+                    </span>
+                    <span className="text-[11px]" style={{color: t.textMuted}}>Bấm một keyword để viết copy</span>
                   </div>
-                  {/* Rows */}
-                  {[...kwResult.keywords].sort((a, b) => {
-                    if (kwSort === "relevance") return b.relevance - a.relevance;
-                    if (kwSort === "competition_index") return a.competition_index - b.competition_index;
-                    return b.cpc_max - a.cpc_max;
-                  }).map((kw, i) => (
-                    <div key={i} className="grid items-center px-4 py-2.5 border-b last:border-0 hover:bg-violet-500/5 transition-colors"
-                      style={{gridTemplateColumns:"1fr 110px 90px 80px 90px", borderColor: t.border}}>
-                      <div>
-                        <div className="text-sm font-medium" style={{color: t.text}}>{kw.keyword}</div>
-                        <div className="flex items-center gap-1 mt-0.5">
-                          <div className="h-1 rounded-full overflow-hidden" style={{width:48, backgroundColor: t.progress}}>
-                            <div className="h-full bg-violet-500 rounded-full" style={{width:`${kw.relevance}%`}}/>
+                  <div className="space-y-1.5 max-h-[32rem] overflow-y-auto pr-1">
+                    {sdKeywords.map(k => {
+                      const on = sdSelected === k.keyword;
+                      return (
+                        <button key={k.keyword} onClick={() => sdGenerateCopy(k.keyword)}
+                          className="w-full text-left px-3 py-2 rounded-xl border transition-colors"
+                          style={on
+                            ? {borderColor:"#7C3AED", backgroundColor:"#7C3AED18"}
+                            : {borderColor: t.border, backgroundColor: "transparent"}}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium truncate flex-1" style={{color: on ? "#A78BFA" : t.text}}>{k.keyword}</span>
+                            <span className="text-xs font-semibold flex-shrink-0" style={{color: t.textSub}}>{k.monthly_searches}</span>
                           </div>
-                          <span className="text-xs" style={{color: t.textMuted}}>{kw.relevance}%</span>
-                        </div>
-                      </div>
-                      <div className="text-xs text-center font-medium" style={{color: t.text}}>{kw.monthly_searches}</div>
-                      <div className="text-center">
-                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                          style={{
-                            backgroundColor: kw.competition === "Low" ? "#10B98122" : kw.competition === "Medium" ? "#F59E0B22" : "#EF444422",
-                            color: kw.competition === "Low" ? "#10B981" : kw.competition === "Medium" ? "#F59E0B" : "#EF4444",
-                          }}>
-                          {kw.competition}
-                        </span>
-                      </div>
-                      <div className="text-xs text-center" style={{color: t.text}}>${kw.cpc_min.toFixed(2)}–${kw.cpc_max.toFixed(2)}</div>
-                      <div className="text-center">
-                        <span className="text-xs px-1.5 py-0.5 rounded-full"
-                          style={{
-                            backgroundColor: kw.intent === "Install" ? "#7C3AED22" : kw.intent === "Branded" ? "#3B82F622" : kw.intent === "Compare" ? "#F59E0B22" : "#64748B22",
-                            color: kw.intent === "Install" ? "#A78BFA" : kw.intent === "Branded" ? "#60A5FA" : kw.intent === "Compare" ? "#F59E0B" : t.textMuted,
-                          }}>
-                          {kw.intent}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full"
+                              style={k.competition === "High" ? {backgroundColor:"#EF444422",color:"#EF4444"}
+                                : k.competition === "Medium" ? {backgroundColor:"#F59E0B22",color:"#F59E0B"}
+                                : {backgroundColor:"#10B98122",color:"#10B981"}}>
+                              {k.competition}
+                            </span>
+                            <span className="text-[10px]" style={{color: t.textMuted}}>${k.cpc_min}–${k.cpc_max}</span>
+                            <span className="text-[10px]" style={{color: t.textMuted}}>· {k.intent}</span>
+                            <span className="text-[10px] ml-auto" style={{color: t.textMuted}}>relevance {k.relevance}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button onClick={() => sdFetchKeywords(true)} disabled={sdMoreLoading}
+                    className="w-full text-xs px-3 py-2 rounded-lg border disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
+                    {sdMoreLoading ? "⏳ Đang tìm thêm..." : "＋ Xem thêm 20 keyword"}
+                  </button>
                 </div>
 
-                {/* Disclaimer */}
-                <p className="text-xs text-center" style={{color: t.textMuted}}>
-                  ⚠️ Volume & CPC là ước tính AI, không phải dữ liệu thực từ Google Keyword Planner.
-                  Dùng để định hướng chiến lược, không dùng để báo cáo.
-                </p>
+                {/* Copy for the chosen keyword, plus localisation */}
+                <div className="lg:col-span-2 space-y-4">
+                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                    {!sdSelected ? (
+                      <p className="text-xs py-8 text-center" style={{color: t.textMuted}}>
+                        Chọn một keyword bên trái để tạo 5 tiêu đề + 5 mô tả cho đúng keyword đó.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>✍️ Ad copy cho</div>
+                            <div className="text-sm font-bold truncate" style={{color:"#A78BFA"}}>{sdSelected}</div>
+                          </div>
+                          <button onClick={() => sdGenerateCopy(sdSelected)} disabled={sdCopyLoading}
+                            className="text-xs px-2.5 py-1.5 rounded-lg border flex-shrink-0 disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
+                            {sdCopyLoading ? "⏳" : "↻ Viết lại"}
+                          </button>
+                        </div>
 
-                <button onClick={handleKwGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>
-                  🔄 Tạo lại
-                </button>
+                        {sdCopyLoading && <p className="text-xs" style={{color: t.textMuted}}>⏳ Đang viết 5 tiêu đề và 5 mô tả...</p>}
+
+                        {sdCopy && (
+                          <div className="space-y-3">
+                            {([["Tiêu đề", sdCopy.headlines, 30], ["Mô tả", sdCopy.descriptions, 90], ["CTA", sdCopy.ctas, 15]] as [string,string[],number][]).map(([label, items, limit]) => (
+                              <div key={label} className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[11px] font-semibold" style={{color: t.textSub}}>{label} (tối đa {limit} ký tự)</span>
+                                  <button onClick={() => sdCopyText(items.join("\n"), label)} className="text-[11px]" style={{color:"#7C3AED"}}>
+                                    {sdCopied === label ? "✓ Đã chép" : "Chép hết"}
+                                  </button>
+                                </div>
+                                {items.map((item, i) => (
+                                  <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
+                                    <span className="flex-1 min-w-0 break-words" style={{color: t.text}}>{item}</span>
+                                    {/* Over the limit Google truncates mid-word, so flag it here rather than in the interface. */}
+                                    <span className="text-[10px] flex-shrink-0" style={item.length > limit ? {color:"#EF4444"} : {color: t.textMuted}}>{item.length}</span>
+                                    <button onClick={() => sdCopyText(item, `${label}-${i}`)} className="text-[10px] flex-shrink-0" style={{color: t.textMuted}}>
+                                      {sdCopied === `${label}-${i}` ? "✓" : "⧉"}
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {sdCopy && (
+                    <div className="p-4 border rounded-2xl space-y-3" style={{...cardStyle, borderColor:"#10B98144"}}>
+                      <div>
+                        <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
+                        <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>Dịch bộ copy này sang nhiều thị trường cùng lúc.</div>
+                      </div>
+                      <div ref={sdLocRef} className="relative">
+                        <button type="button" onClick={() => { setSdLocOpen(o => !o); setSdLocSearch(""); }}
+                          className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
+                          style={{...inputStyle, borderColor: sdLocOpen ? "#10B981" : t.inputBorder}}>
+                          <span className="truncate" style={!sdLocMarkets.length ? {color: t.textMuted} : {}}>
+                            {sdLocMarkets.length ? `Đã chọn ${sdLocMarkets.length} thị trường` : "Chọn thị trường..."}
+                          </span>
+                          <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{sdLocOpen ? "▲" : "▼"}</span>
+                        </button>
+                        {sdLocOpen && (
+                          <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                            <div className="p-2 border-b" style={{borderColor: t.border}}>
+                              <input autoFocus value={sdLocSearch} onChange={e => setSdLocSearch(e.target.value)}
+                                placeholder="🔍 Gõ để tìm thị trường..."
+                                className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-emerald-500" style={inputStyle}/>
+                            </div>
+                            <div className="max-h-56 overflow-y-auto">
+                              {LOCALIZE_MARKETS
+                                .filter(m => !sdLocSearch.trim() || m.name.toLowerCase().includes(sdLocSearch.trim().toLowerCase()) || m.code.toLowerCase().includes(sdLocSearch.trim().toLowerCase()))
+                                .map(m => {
+                                  const on = sdLocMarkets.includes(m.code);
+                                  return (
+                                    <button key={m.code} type="button"
+                                      onClick={() => setSdLocMarkets(prev => on ? prev.filter(x => x !== m.code) : [...prev, m.code])}
+                                      className="w-full text-left px-3 py-2 text-sm flex items-center gap-2"
+                                      style={{backgroundColor: on ? "#10B98122" : "transparent", color: on ? "#10B981" : t.text}}>
+                                      <span className="w-4 flex-shrink-0">{on ? "✓" : ""}</span>
+                                      <span>{m.flag} {m.name}</span>
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                            <div className="flex items-center justify-between px-3 py-2 border-t" style={{borderColor: t.border}}>
+                              <button type="button" onClick={() => setSdLocMarkets([])} className="text-[11px]" style={{color: t.textMuted}}>Bỏ chọn tất cả</button>
+                              <button type="button" onClick={() => setSdLocOpen(false)} className="text-[11px] font-semibold" style={{color:"#10B981"}}>Xong</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={sdLocalize} disabled={!sdLocMarkets.length || sdLocLoading}
+                        className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{background: sdLocMarkets.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
+                        {sdLocLoading ? "⏳ Đang dịch..." : `🌏 Localize ${sdLocMarkets.length || ""} thị trường`}
+                      </button>
+
+                      {sdLocResults?.map(m => (
+                        <div key={m.code} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-semibold" style={{color: t.text}}>{m.flag} {m.name} <span className="text-[11px] font-normal" style={{color: t.textMuted}}>· {m.language}</span></span>
+                            <button onClick={() => sdCopyText([...m.headlines, ...m.descriptions, ...m.ctas].join("\n"), `loc-${m.code}`)}
+                              className="text-[11px]" style={{color:"#7C3AED"}}>{sdCopied === `loc-${m.code}` ? "✓ Đã chép" : "Chép hết"}</button>
+                          </div>
+                          {([["Tiêu đề", m.headlines], ["Mô tả", m.descriptions], ["CTA", m.ctas]] as [string,string[]][]).map(([label, items]) => (
+                            <div key={label}>
+                              <div className="text-[10px] font-semibold mb-0.5" style={{color: t.textMuted}}>{label}</div>
+                              {items.map((item, i) => (
+                                <div key={i} className="text-xs px-2 py-1 break-words" style={{color: t.text}}>• {item}</div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -3936,269 +3809,6 @@ export default function Home() {
         )}
 
       </main>
-
-      {/* LOCALIZE PAGE */}
-      {activePage === "localize" && (
-        <div className="space-y-6 max-w-5xl">
-          {/* Input Section */}
-          <div className="rounded-2xl border p-6 space-y-5" style={{...cardStyle}}>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-violet-900 flex items-center justify-center text-lg">🌏</div>
-              <div>
-                <div className="font-bold text-sm" style={{color: t.text}}>Multi-market Ad Copy Localizer</div>
-                <div className="text-xs" style={{color: t.textMuted}}>Dịch ad copy sang nhiều thị trường cùng lúc, tối ưu cho Google App Campaigns</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-semibold mb-1.5 block" style={{color: t.textSub}}>Tên App *</label>
-                <input
-                  value={lcAppName} onChange={e => setLcAppName(e.target.value)}
-                  placeholder="VD: Photo Editor Pro"
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold mb-1.5 block" style={{color: t.textSub}}>Ngôn ngữ nguồn</label>
-                <select
-                  value={lcSourceLang} onChange={e => setLcSourceLang(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}>
-                  {["English","Vietnamese","Indonesian","Thai","Korean","Japanese","Chinese Simplified"].map(l => (
-                    <option key={l} value={l}>{l}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
-                  <span>Headlines <span className="font-normal">(mỗi dòng 1 headline)</span></span>
-                  <span className="text-[10px]" style={{color: t.textMuted}}>≤30 ký tự/cái</span>
-                </label>
-                <textarea
-                  value={lcHeadlines} onChange={e => setLcHeadlines(e.target.value)}
-                  rows={4} placeholder={"Download now and explore\nBoost your productivity\nTry it free today"}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
-                  <span>Descriptions</span>
-                  <span className="text-[10px]" style={{color: t.textMuted}}>≤90 ký tự/cái</span>
-                </label>
-                <textarea
-                  value={lcDescriptions} onChange={e => setLcDescriptions(e.target.value)}
-                  rows={4} placeholder={"The best app for your daily tasks\nMillions of users trust us every day"}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{color: t.textSub}}>
-                  <span>CTAs</span>
-                  <span className="text-[10px]" style={{color: t.textMuted}}>≤15 ký tự/cái</span>
-                </label>
-                <textarea
-                  value={lcCtas} onChange={e => setLcCtas(e.target.value)}
-                  rows={4} placeholder={"Install Free\nDownload Now\nGet Started"}
-                  className="w-full px-3 py-2.5 rounded-xl text-sm border outline-none resize-none"
-                  style={{backgroundColor: t.input, borderColor: t.inputBorder, color: t.text}}
-                />
-              </div>
-            </div>
-
-            {/* Market selection */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-semibold" style={{color: t.textSub}}>Chọn thị trường ({lcMarkets.length}/{LOCALIZE_MARKETS.length})</label>
-                <div className="flex gap-2">
-                  <button onClick={lcSelectAll} className="text-xs px-2 py-1 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>Tất cả</button>
-                  <button onClick={lcSelectNone} className="text-xs px-2 py-1 rounded-lg border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>Bỏ chọn</button>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {LOCALIZE_MARKETS.map(m => {
-                  const selected = lcMarkets.includes(m.code);
-                  return (
-                    <button key={m.code} onClick={() => lcToggleMarket(m.code)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all"
-                      style={selected
-                        ? {backgroundColor: "#7C3AED22", borderColor: "#7C3AED", color: "#A78BFA"}
-                        : {backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
-                      <span>{m.flag}</span> {m.code}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {lcError && <div className="text-xs px-4 py-2.5 rounded-xl" style={{backgroundColor: "#EF444420", color: "#EF4444"}}>{lcError}</div>}
-
-            <button
-              onClick={handleLocalize}
-              disabled={lcLoading || !lcAppName.trim() || lcMarkets.length === 0}
-              className="w-full py-3 rounded-xl font-semibold text-sm transition-all disabled:opacity-50"
-              style={{backgroundColor: "#7C3AED", color: "white"}}>
-              {lcLoading ? "⏳ Đang dịch..." : `🌏 Dịch sang ${lcMarkets.length} thị trường`}
-            </button>
-          </div>
-
-          {/* Results */}
-          {lcResults && lcResults.length > 0 && (
-            <div className="rounded-2xl border p-6 space-y-4" style={{...cardStyle}}>
-              <div className="flex items-center justify-between">
-                <div className="font-bold text-sm" style={{color: t.text}}>Kết quả — {lcResults.length} thị trường</div>
-                <button
-                  onClick={lcCopyAll}
-                  className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border transition-colors"
-                  style={{borderColor: t.border, color: lcCopied==="all" ? "#10B981" : t.textMuted}}>
-                  {lcCopied==="all" ? "✓ Đã copy" : "📋 Copy tất cả"}
-                </button>
-              </div>
-
-              {/* Market tabs */}
-              <div className="flex flex-wrap gap-2">
-                {lcResults.map(m => (
-                  <button key={m.code} onClick={() => setLcActiveMarket(m.code)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all"
-                    style={lcActiveMarket===m.code
-                      ? {backgroundColor: "#7C3AED22", borderColor: "#7C3AED", color: "#A78BFA"}
-                      : {backgroundColor: t.tabBg, borderColor: t.border, color: t.textMuted}}>
-                    <span>{m.flag}</span> {m.code}
-                  </button>
-                ))}
-              </div>
-
-              {/* Active market detail */}
-              {lcActiveMarket && (() => {
-                const m = lcResults.find(r => r.code === lcActiveMarket);
-                if (!m) return null;
-                return (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{m.flag}</span>
-                        <div>
-                          <div className="font-semibold text-sm" style={{color: t.text}}>{m.name}</div>
-                          <div className="text-xs" style={{color: t.textMuted}}>{m.language}</div>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => lcCopyAllForMarket(m)}
-                        className="text-xs px-3 py-1.5 rounded-lg border transition-colors"
-                        style={{borderColor: t.border, color: lcCopied===`all-${m.code}` ? "#10B981" : t.textMuted}}>
-                        {lcCopied===`all-${m.code}` ? "✓ Đã copy" : "📋 Copy market này"}
-                      </button>
-                    </div>
-
-                    {/* Headlines */}
-                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Headlines <span className="font-normal normal-case">(≤30 ký tự)</span></div>
-                      {m.headlines.map((h, i) => (
-                        <div key={i} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg" style={{backgroundColor: t.card}}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-[10px] w-4 flex-shrink-0" style={{color: t.textMuted}}>{i+1}.</span>
-                            <span className="text-sm font-medium truncate" style={{color: t.text}}>{h}</span>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-[10px]" style={{color: h.length > 30 ? "#EF4444" : t.textMuted}}>{h.length}/30</span>
-                            <button onClick={() => lcCopyText(h, `h-${m.code}-${i}`)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`h-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`h-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`h-${m.code}-${i}` ? "✓" : "copy"}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Descriptions */}
-                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Descriptions <span className="font-normal normal-case">(≤90 ký tự)</span></div>
-                      {m.descriptions.map((d, i) => (
-                        <div key={i} className="flex items-start justify-between gap-3 px-3 py-2 rounded-lg" style={{backgroundColor: t.card}}>
-                          <div className="flex items-start gap-2 min-w-0">
-                            <span className="text-[10px] w-4 flex-shrink-0 mt-0.5" style={{color: t.textMuted}}>{i+1}.</span>
-                            <span className="text-sm" style={{color: t.text}}>{d}</span>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-[10px]" style={{color: d.length > 90 ? "#EF4444" : t.textMuted}}>{d.length}/90</span>
-                            <button onClick={() => lcCopyText(d, `d-${m.code}-${i}`)} className="text-xs px-2 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`d-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`d-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`d-${m.code}-${i}` ? "✓" : "copy"}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* CTAs */}
-                    <div className="rounded-xl border p-4 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                      <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>CTAs <span className="font-normal normal-case">(≤15 ký tự)</span></div>
-                      <div className="flex flex-wrap gap-2">
-                        {m.ctas.map((c, i) => (
-                          <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{backgroundColor: t.card, borderColor: t.border}}>
-                            <span className="text-sm font-medium" style={{color: t.text}}>{c}</span>
-                            <span className="text-[10px]" style={{color: c.length > 15 ? "#EF4444" : t.textMuted}}>{c.length}/15</span>
-                            <button onClick={() => lcCopyText(c, `c-${m.code}-${i}`)} className="text-xs px-1.5 py-0.5 rounded transition-colors" style={{backgroundColor: lcCopied===`c-${m.code}-${i}` ? "#10B98122" : t.tabBg, color: lcCopied===`c-${m.code}-${i}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`c-${m.code}-${i}` ? "✓" : "copy"}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* All markets summary table */}
-              <div className="mt-4">
-                <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{color: t.textMuted}}>Tổng quan tất cả thị trường</div>
-                <div className="overflow-x-auto rounded-xl border" style={{borderColor: t.border}}>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr style={{backgroundColor: t.tabBg}}>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Thị trường</th>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Headline #1</th>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>Description #1</th>
-                        <th className="text-left px-3 py-2.5 font-semibold" style={{color: t.textSub}}>CTA #1</th>
-                        <th className="px-3 py-2.5"/>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {lcResults.map((m, idx) => (
-                        <tr key={m.code}
-                          onClick={() => setLcActiveMarket(m.code)}
-                          className="cursor-pointer transition-colors"
-                          style={{backgroundColor: lcActiveMarket===m.code ? "#7C3AED11" : idx%2===0 ? t.card : t.tabBg, borderTop: `1px solid ${t.border}`}}>
-                          <td className="px-3 py-2.5">
-                            <div className="flex items-center gap-1.5">
-                              <span>{m.flag}</span>
-                              <span className="font-medium" style={{color: t.text}}>{m.code}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 max-w-[160px] truncate" style={{color: t.textSub}}>{m.headlines[0]}</td>
-                          <td className="px-3 py-2.5 max-w-[200px] truncate" style={{color: t.textSub}}>{m.descriptions[0]}</td>
-                          <td className="px-3 py-2.5" style={{color: t.textSub}}>{m.ctas[0]}</td>
-                          <td className="px-3 py-2.5">
-                            <button onClick={e => { e.stopPropagation(); lcCopyAllForMarket(m); }}
-                              className="text-[10px] px-2 py-0.5 rounded transition-colors"
-                              style={{backgroundColor: lcCopied===`all-${m.code}` ? "#10B98122" : t.tabBg, color: lcCopied===`all-${m.code}` ? "#10B981" : t.textMuted}}>
-                              {lcCopied===`all-${m.code}` ? "✓" : "copy"}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Lightbox */}
       {selectedPreview && (
