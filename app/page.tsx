@@ -849,6 +849,9 @@ export default function Home() {
 
   // Localisation of a finished set: new wording on the artwork already paid for.
   const [abLocLangs, setAbLocLangs] = useState<string[]>([]);
+  const [abLocOpen, setAbLocOpen] = useState(false);
+  const [abLocSearch, setAbLocSearch] = useState("");
+  const abLocRef = useRef<HTMLDivElement>(null);
   const [abLocBusy, setAbLocBusy] = useState("");
   const [abLocSets, setAbLocSets] = useState<{lang:string;previews:Preview[];zip:string}[]>([]);
 
@@ -1257,6 +1260,17 @@ export default function Home() {
     try { setAbHistory(await abListRuns()); } catch { /* private window, or storage blocked */ }
   };
   useEffect(() => { void abRefreshHistory(); }, []);
+
+  // Close the market picker on an outside click; a multi-select stays open
+  // while choosing, so it needs a way out that is not another click on itself.
+  useEffect(() => {
+    if (!abLocOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (abLocRef.current && !abLocRef.current.contains(e.target as Node)) setAbLocOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [abLocOpen]);
 
   /** Reopens a stored run: artwork off disk, overlay redrawn, ready to localise. */
   const handleAbOpenRun = async (meta: AbRunMeta) => {
@@ -3192,21 +3206,70 @@ export default function Home() {
                       Vẽ lại chữ trên chính bộ ảnh này — <b>không tốn tiền gen ảnh</b>, mỗi thị trường chỉ vài trăm đồng tiền dịch.
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {LANGUAGES.filter(l => l.code !== abLang).map(l => {
-                      const on = abLocLangs.includes(l.code);
-                      return (
-                        <button key={l.code}
-                          onClick={() => setAbLocLangs(prev => on ? prev.filter(x => x !== l.code) : [...prev, l.code])}
-                          className="text-xs px-2.5 py-1 rounded-full border"
-                          style={on
-                            ? {borderColor:"#10B981", backgroundColor:"#10B98122", color:"#10B981"}
-                            : {borderColor: t.border, color: t.textMuted}}>
-                          {l.label}
-                        </button>
-                      );
-                    })}
+                  <div ref={abLocRef} className="relative">
+                    <button type="button" onClick={() => { setAbLocOpen(o => !o); setAbLocSearch(""); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between focus:outline-none transition-colors"
+                      style={{...inputStyle, borderColor: abLocOpen ? "#10B981" : t.inputBorder}}>
+                      <span className="truncate" style={!abLocLangs.length ? {color: t.textMuted} : {}}>
+                        {abLocLangs.length
+                          ? `Đã chọn ${abLocLangs.length} thị trường`
+                          : "Chọn thị trường muốn localize..."}
+                      </span>
+                      <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{abLocOpen ? "▲" : "▼"}</span>
+                    </button>
+                    {abLocOpen && (
+                      <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                        <div className="p-2 border-b" style={{borderColor: t.border}}>
+                          <input autoFocus value={abLocSearch} onChange={e => setAbLocSearch(e.target.value)}
+                            placeholder="🔍 Gõ để tìm: Deutsch, German, Nhật..."
+                            className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-emerald-500"
+                            style={inputStyle}/>
+                        </div>
+                        <div className="max-h-56 overflow-y-auto">
+                          {(() => {
+                            const q = abLocSearch.trim().toLowerCase();
+                            // Match the label, the English name and the market it
+                            // maps to, so "Germany", "German" and "Deutsch" all find it.
+                            const list = LANGUAGES.filter(l => l.code !== abLang).filter(l =>
+                              !q || l.label.toLowerCase().includes(q) || l.code.toLowerCase().includes(q) ||
+                              (LANG_MARKET[l.code] || "").toLowerCase().includes(q));
+                            if (!list.length) return <div className="px-4 py-3 text-xs" style={{color: t.textMuted}}>Không tìm thấy ngôn ngữ nào.</div>;
+                            return list.map(l => {
+                              const on = abLocLangs.includes(l.code);
+                              return (
+                                <button key={l.code} type="button"
+                                  onClick={() => setAbLocLangs(prev => on ? prev.filter(x => x !== l.code) : [...prev, l.code])}
+                                  className="w-full text-left px-3 py-2 text-sm flex items-center gap-2"
+                                  style={{backgroundColor: on ? "#10B98122" : "transparent", color: on ? "#10B981" : t.text}}>
+                                  <span className="w-4 flex-shrink-0">{on ? "✓" : ""}</span>
+                                  <span className="truncate">{l.label}</span>
+                                  {LANG_MARKET[l.code] && (
+                                    <span className="ml-auto text-[11px] flex-shrink-0" style={{color: t.textMuted}}>{LANG_MARKET[l.code]}</span>
+                                  )}
+                                </button>
+                              );
+                            });
+                          })()}
+                        </div>
+                        <div className="flex items-center justify-between px-3 py-2 border-t" style={{borderColor: t.border}}>
+                          <button type="button" onClick={() => setAbLocLangs([])} className="text-[11px]" style={{color: t.textMuted}}>Bỏ chọn tất cả</button>
+                          <button type="button" onClick={() => setAbLocOpen(false)} className="text-[11px] font-semibold" style={{color:"#10B981"}}>Xong</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
+
+                  {abLocLangs.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {abLocLangs.map(code => (
+                        <span key={code} className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5"
+                          style={{borderColor:"#10B981", backgroundColor:"#10B98122", color:"#10B981"}}>
+                          {LANGUAGES.find(l => l.code === code)?.label || code}
+                          <button onClick={() => setAbLocLangs(prev => prev.filter(x => x !== code))} title="Bỏ">×</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 flex-wrap">
                     <button onClick={handleAbLocalize} disabled={!abLocLangs.length || abLocBusy !== ""}
                       className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
