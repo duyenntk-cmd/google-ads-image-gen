@@ -2854,6 +2854,26 @@ export default function Home() {
                   )}
                 </div>
 
+                {/* Market first: the creative direction is written FOR a market,
+                    and choosing it afterwards is what left a Vietnamese headline
+                    on a German campaign. */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
+                    <select value={abCountry} onChange={e => { setAbCountry(e.target.value); const dl = COUNTRY_DEFAULT_LANG[e.target.value]; if (dl) setAbLang(dl); }}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                      {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
+                    <select value={abLang} onChange={e => setAbLang(e.target.value)}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                      {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>💡 Creative direction</label>
@@ -2891,23 +2911,6 @@ export default function Home() {
                       Bấm ✨ Auto Prompt lại để viết theo <b>{abLang}</b>, nếu không chữ trên banner có thể ra sai ngôn ngữ.
                     </p>
                   )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
-                    <select value={abCountry} onChange={e => { setAbCountry(e.target.value); const dl = COUNTRY_DEFAULT_LANG[e.target.value]; if (dl) setAbLang(dl); }}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
-                      {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
-                    <select value={abLang} onChange={e => setAbLang(e.target.value)}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
-                      {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-                    </select>
-                  </div>
                 </div>
 
                 {/* Mascot — the consistency anchor across all sizes */}
