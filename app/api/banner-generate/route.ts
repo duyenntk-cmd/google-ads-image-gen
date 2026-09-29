@@ -105,9 +105,26 @@ function buildPrompt(
   // as flag chips, which only ever made sense for a language-learning app.
   const keyVisual = brief?.key_visual || "soft floating UI cards and gentle sparkles";
 
+  // With a reference image the description below it names a character too, and
+  // handed both the model drew both — a mascot and a person overlapping in one
+  // frame. The reference wins outright, and the description is demoted to pose
+  // and mood, with its identity words explicitly void.
   const heroLine = hasCharacter
-    ? `HERO: reuse the EXACT character from the provided reference image — same face, same hairstyle, same outfit, same colours, same art style. This character runs across a whole ad set, so identity must stay perfectly consistent; only pose, expression and framing may change. Here: ${heroSubject}.`
-    : `HERO: ${heroSubject}. Render as a polished 3D cartoon character (Pixar-like), appealing and expressive.`;
+    ? `HERO — there is EXACTLY ONE character in this image, and it is the one in the
+FIRST reference image. That reference is often a store screenshot: if so, the hero
+is the CHARACTER standing in it, not the screenshot — ignore its interface, text,
+buttons and layout entirely, and take only the character. Reuse it exactly: same face, same hairstyle, same
+outfit, same colours, same art style. It runs across a whole ad set, so identity
+must stay perfectly consistent; only pose, expression and framing may change.
+
+From the line that follows, take ONLY the action, pose, expression and setting.
+IGNORE every word in it describing who the character is — its species, gender,
+age, hair, clothing or whether it is a person, an animal or a robot. Those words
+describe the SAME single hero, not a companion for it. If it reads "a young woman
+holding a phone" and the reference is a robot, you draw the robot holding a phone.
+Never both. Never a person beside a mascot.
+Action and setting: ${heroSubject}.`
+    : `HERO: ${heroSubject}. Render as a polished 3D cartoon character (Pixar-like), appealing and expressive. Exactly one character in frame.`;
 
   // Show the hardware the app actually ships on. Left unsaid, the model defaults
   // to an iPhone — wrong for a Play-Store-only app, and a detail the audience
@@ -140,7 +157,7 @@ words change. Spell them correctly, with every diacritic in place.\n`
     "spread apart, and never two open hands at once.";
 
   const screenLine = hasScreenshot
-    ? `PHONE: include a clean 3D mockup of ${device}, showing the app interface from the provided screenshot reference. Keep the real UI layout recognisable — same structure, do not invent a different interface.${uiLangLine} Screen sharp and upright, not tilted away.`
+    ? `PHONE: include a clean 3D mockup of ${device}, showing the app interface from the provided screenshot reference. Keep the real UI layout recognisable — same structure, do not invent a different interface.${uiLangLine} Screen sharp and upright, not tilted away. If a character appears in that interface reference, it is the SAME hero, not another one: either leave it inside the phone screen as part of the UI, or leave it out. Never a figure in the scene plus a figure beside it.`
     : `PHONE: include a clean 3D mockup of ${device}, with a simple, plausible app interface on screen.${uiLangLine}`;
 
   const cropLine =
@@ -206,7 +223,11 @@ MUST NOT APPEAR — these ruin the asset:
 - Any headline, slogan, caption, watermark, brand logo or app-store badge anywhere in the artwork. All ad copy is composited afterwards, so leave the artwork free of it.
   The ONLY exception is the interface INSIDE the phone screen, which is part of the device and may carry its own small UI labels.
 - Anything at all inside the RESERVED zones. The headline and button are printed there; a subject, hand, phone, prop or shadow crossing into them ruins the asset.${removalLines ? `\n${removalLines}` : ""}${localise ? `\n- English words on the phone screen. Every label there must read in ${uiLanguage}.` : ""}
-- A SECOND character, mascot, robot or creature. Exactly ONE character in frame — the hero. An app icon shown as a flat badge is fine; a second animated face is not.
+- A SECOND character. Exactly ONE character in frame — the hero, and nothing else with a face.
+  Specifically forbidden: a human and a mascot/robot together, two figures side by side,
+  one character overlapping or standing behind another, a small companion creature, or a
+  character from the interface reference redrawn a second time. If the scene seems to
+  need two, it does not — draw one. An app icon as a flat badge is fine; a second face is not.
 - An open palm facing the viewer with spread fingers — the pose fingers come out wrong in.
 - Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.
 - More props than the frame calls for. A crowded frame reads as noise; stop at the stated count.
