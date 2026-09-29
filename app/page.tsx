@@ -6,6 +6,7 @@ import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
 import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
+import { abSaveRun, abListRuns, abLoadArt, abDeleteRun, AbRunMeta } from "@/lib/abHistory";
 
 interface Brief {
   app_name: string; tagline?: string; headline: string; subheadline: string; cta_text: string;
@@ -522,16 +523,6 @@ function abDrawHeadlineBlock(ctx: CanvasRenderingContext2D, x: number, y: number
   return cy;
 }
 
-/** Cover-crop to the exact asset size with no overlay at all. */
-function abRenderPlain(base: HTMLImageElement, w: number, h: number): string {
-  const canvas = document.createElement("canvas");
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d")!;
-  const cs = Math.max(w / base.width, h / base.height);
-  ctx.drawImage(base, (w - base.width * cs) / 2, (h - base.height * cs) / 2, base.width * cs, base.height * cs);
-  return canvas.toDataURL("image/png");
-}
-
 /**
  * Composites the layout onto a rendered background.
  *
@@ -693,6 +684,10 @@ const COUNTRY_DEFAULT_LANG: Record<string, string> = {
   Ethiopia: "English", Ghana: "English",
 };
 
+/** First market that speaks each language — context for the localiser. */
+const LANG_MARKET: Record<string,string> = Object.entries(COUNTRY_DEFAULT_LANG)
+  .reduce((acc, [country, lang]) => (acc[lang] ? acc : { ...acc, [lang]: country }), {} as Record<string,string>);
+
 const COUNTRIES = [
   { code: "Global",           label: "🌍 Global (Universal)" },
   // Southeast Asia
@@ -812,7 +807,12 @@ export default function Home() {
   const [abStatus, setAbStatus] = useState("");
   const [abBrief, setAbBrief] = useState<Brief|null>(null);
   const [abIcon, setAbIcon] = useState<string|null>(null);
-  const [abBaseImages, setAbBaseImages] = useState<{key:string;label:string;dataUrl:string}[]>([]);
+  /**
+   * The raw AI artwork per slot, before any copy is drawn on it. Kept because
+   * every re-render — a new market's wording, a run reopened from history —
+   * redraws the overlay onto this instead of paying to generate again.
+   */
+  const [abBases, setAbBases] = useState<Record<string,string>>({});
   const [abPreviews, setAbPreviews] = useState<Preview[]>([]);
   const [abZipBase64, setAbZipBase64] = useState("");
   const [abTab, setAbTab] = useState<"top5"|"all">("all");
@@ -843,6 +843,19 @@ export default function Home() {
   const [abBusyKey, setAbBusyKey] = useState<string|null>(null);
   /** Mirror of abPreviews: a partial regenerate merges into this synchronously. */
   const abPrevRef = useRef<Preview[]>([]);
+  const abBasesRef = useRef<Record<string,string>>({});
+  /** Id of the run being written to, so a retry updates it instead of adding one. */
+  const abRunIdRef = useRef<string>("");
+
+  // Localisation of a finished set: new wording on the artwork already paid for.
+  const [abLocLangs, setAbLocLangs] = useState<string[]>([]);
+  const [abLocBusy, setAbLocBusy] = useState("");
+  const [abLocSets, setAbLocSets] = useState<{lang:string;previews:Preview[];zip:string}[]>([]);
+
+  // Stored runs.
+  const [abHistory, setAbHistory] = useState<AbRunMeta[]>([]);
+  const [abHistOpen, setAbHistOpen] = useState(false);
+  const [abHistBusy, setAbHistBusy] = useState("");
   /**
    * Store data, brief and mascot from the last run. Regenerating reuses them so
    * a retry bills for one image instead of repeating the store call, the brief
@@ -854,12 +867,16 @@ export default function Home() {
 
   const abReset = () => {
     setAbStep("input"); setAbPreviews([]); setAbBrief(null);
-    setAbBaseImages([]); setAbError(""); setAbStatus("");
+    setAbError(""); setAbStatus("");
     // Drop the cached run too, so the next generate re-reads the store.
     abRun.current = null;
     setAbMascotUsed(null);
     setAbFailed([]);
     abPrevRef.current = [];
+    abBasesRef.current = {};
+    setAbBases({});
+    setAbLocSets([]); setAbLocLangs([]);
+    abRunIdRef.current = "";
     setAbCardRev({});
     setAbRevision(""); setAbRemovals([]);
   };
@@ -1019,7 +1036,7 @@ export default function Home() {
 
       const errors: string[] = [];
       const failedKeys: string[] = [];
-      const bases: {key:string;label:string;dataUrl:string}[] = [];
+      const bases: Record<string,string> = {};
       const baseFor: Record<string, HTMLImageElement> = {};
 
       // Core mode renders one asset per ratio — a cheap way to check the whole
@@ -1051,7 +1068,7 @@ export default function Home() {
         const r = results[i], c = slots[i];
         if (r.status === "fulfilled" && r.value?.success && r.value.images?.[0]?.dataUrl) {
           baseFor[c.key] = await abLoadImg(r.value.images[0].dataUrl);
-          if (c.isCore) bases.push({ key: c.key, label: c.label, dataUrl: r.value.images[0].dataUrl });
+          bases[c.key] = r.value.images[0].dataUrl;
         } else {
           errors.push(`${c.key}: ${r.status === "rejected" ? (r.reason as Error)?.message : r.value?.error || "unknown"}`);
           failedKeys.push(c.key);
@@ -1063,7 +1080,10 @@ export default function Home() {
         partial ? [...prev.filter((k) => !onlyKeys!.includes(k)), ...failedKeys] : failedKeys);
 
       if (!Object.keys(baseFor).length) throw new Error("Không gen được ảnh nào.\n" + errors.join("\n"));
-      if (!partial || bases.length) setAbBaseImages(bases);
+      // Merge, so retrying one slot does not drop the other nineteen artworks.
+      const allBases = partial ? { ...abBasesRef.current, ...bases } : bases;
+      abBasesRef.current = allBases;
+      setAbBases(allBases);
 
       setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${total} ảnh...`);
       const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
@@ -1080,11 +1100,9 @@ export default function Home() {
       for (const c of slots) {
         const base = baseFor[c.key];
         if (!base) continue;
-        // Google advises at least one clean asset per ratio, so the first slot of
-        // each ratio ships without the canvas overlay.
-        const dataUrl = c.noOverlay
-          ? abRenderPlain(base, c.width, c.height)
-          : abRenderBanner(base, c.width, c.height, theBrief, iconImg);
+        // Every one of the 20 ships finished. A clean asset tells the operator
+        // nothing about how the copy sits and spends a slot saying it.
+        const dataUrl = abRenderBanner(base, c.width, c.height, theBrief, iconImg);
         out.push({ key: c.key, width: c.width, height: c.height, label: c.label, isTop5: c.isCore, dataUrl });
       }
 
@@ -1099,13 +1117,35 @@ export default function Home() {
       for (const p of merged) {
         const c = APP_CREATIVES.find((x) => x.key === p.key)!;
         const bytes = Uint8Array.from(atob(p.dataUrl.split(",")[1]), (ch) => ch.charCodeAt(0));
-        folders[c.ratioKey].file(`${c.key}${c.noOverlay ? "_clean" : ""}.png`, bytes);
+        folders[c.ratioKey].file(`${c.key}.png`, bytes);
       }
 
       const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
       const reader = new FileReader();
       reader.onload = () => setAbZipBase64((reader.result as string).split(",")[1]);
       reader.readAsDataURL(blob);
+
+      // Keep the run. The artwork is the expensive part, and with it on disk a
+      // set can be reopened or localised months later for the price of a text
+      // call. A retry updates the run it belongs to instead of adding another.
+      if (!partial || !abRunIdRef.current) abRunIdRef.current = `run_${Date.now().toString(36)}`;
+      try {
+        await abSaveRun({
+          id: abRunIdRef.current,
+          createdAt: Date.now(),
+          appName: theBrief.app_name || "",
+          appUrl: abUrl.trim(),
+          country: abCountry,
+          language: abLang,
+          quality: abQuality,
+          platform,
+          brief: theBrief,
+          icon: iconB64,
+          thumb: await abThumb(merged[0]?.dataUrl || ""),
+          slotCount: merged.length,
+        }, allBases);
+        void abRefreshHistory();
+      } catch { /* storage full or blocked: the set on screen is unaffected */ }
 
       setAbError(errors.length ? "⚠️ Một số size lỗi:\n" + errors.join("\n") : "");
       setAbStatus(`Xong: ${merged.length} banner.`);
@@ -1118,6 +1158,135 @@ export default function Home() {
     } finally {
       setAbBusyKey(null);
     }
+  };
+
+  /** Redraws the whole set from stored artwork. No image generation, no cost. */
+  /** Small JPEG for the history list, so listing runs does not load 20 PNGs. */
+  const abThumb = async (dataUrl: string): Promise<string> => {
+    if (!dataUrl) return "";
+    try {
+      const img = await abLoadImg(dataUrl);
+      const w = 160, h = Math.max(1, Math.round((img.height / img.width) * w));
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d")!.drawImage(img, 0, 0, w, h);
+      return c.toDataURL("image/jpeg", 0.7);
+    } catch { return ""; }
+  };
+
+  const abBuildSet = async (bases: Record<string,string>, brief: Brief, iconB64: string|null): Promise<Preview[]> => {
+    const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
+    const out: Preview[] = [];
+    for (const c of APP_CREATIVES) {
+      const raw = bases[c.key];
+      if (!raw) continue;
+      const img = await abLoadImg(raw);
+      out.push({
+        key: c.key, width: c.width, height: c.height, label: c.label, isTop5: c.isCore,
+        dataUrl: abRenderBanner(img, c.width, c.height, brief, iconImg),
+      });
+    }
+    return out;
+  };
+
+  const abZipOf = async (previews: Preview[]): Promise<string> => {
+    const { default: JSZipMod } = await import("jszip");
+    const zip = new JSZipMod();
+    const folders: Record<string, import("jszip")> = {
+      landscape: zip.folder("1.91-1_landscape")!,
+      square: zip.folder("1-1_square")!,
+      portrait: zip.folder("4-5_portrait")!,
+    };
+    for (const p of previews) {
+      const c = APP_CREATIVES.find((x) => x.key === p.key);
+      if (!c) continue;
+      const bytes = Uint8Array.from(atob(p.dataUrl.split(",")[1]), (ch) => ch.charCodeAt(0));
+      folders[c.ratioKey].file(`${c.key}.png`, bytes);
+    }
+    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+    return await new Promise<string>((resolve) => {
+      const r = new FileReader();
+      r.onload = () => resolve((r.result as string).split(",")[1]);
+      r.readAsDataURL(blob);
+    });
+  };
+
+  const abDownloadB64Zip = (b64: string, name: string) => {
+    const a = document.createElement("a");
+    a.href = `data:application/zip;base64,${b64}`;
+    a.download = name;
+    a.click();
+  };
+
+  /**
+   * One more market from a finished set. Only the four printed strings change;
+   * the artwork is reused, so this is a text call per market, not twenty images.
+   */
+  const handleAbLocalize = async () => {
+    if (!abBrief || !abLocLangs.length) return;
+    const bases = abBasesRef.current;
+    if (!Object.keys(bases).length) { setAbError("❌ Không còn ảnh gốc để vẽ lại. Gen lại bộ ảnh trước."); return; }
+    setAbError("");
+    const sets: {lang:string;previews:Preview[];zip:string}[] = [];
+    for (const lang of abLocLangs) {
+      setAbLocBusy(`🌏 Đang localize sang ${lang}...`);
+      try {
+        const r = await abFetchJson("/api/banner-localize", {
+          copy: {
+            headline: abBrief.headline, subheadline: abBrief.subheadline,
+            cta_text: abBrief.cta_text, tagline: abBrief.tagline || "",
+          },
+          language: lang,
+          country: LANG_MARKET[lang] || "",
+          appName: abBrief.app_name,
+        }, 60000, `banner-localize:${lang}`);
+        if (!r.success) throw new Error(r.error || "localize thất bại");
+        const localBrief = { ...abBrief, ...r.copy } as Brief;
+        const previews = await abBuildSet(bases, localBrief, abIcon);
+        sets.push({ lang, previews, zip: await abZipOf(previews) });
+      } catch (e) {
+        setAbError(`⚠️ ${lang}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    setAbLocBusy("");
+    // Replace a market already produced rather than listing it twice.
+    setAbLocSets((prev) => [...prev.filter((s) => !sets.some((n) => n.lang === s.lang)), ...sets]);
+  };
+
+  const abRefreshHistory = async () => {
+    try { setAbHistory(await abListRuns()); } catch { /* private window, or storage blocked */ }
+  };
+  useEffect(() => { void abRefreshHistory(); }, []);
+
+  /** Reopens a stored run: artwork off disk, overlay redrawn, ready to localise. */
+  const handleAbOpenRun = async (meta: AbRunMeta) => {
+    setAbHistBusy(meta.id);
+    try {
+      const bases = await abLoadArt(meta.id);
+      if (!bases || !Object.keys(bases).length) throw new Error("Không còn ảnh gốc của lần gen này.");
+      const brief = meta.brief as Brief;
+      const previews = await abBuildSet(bases, brief, meta.icon);
+      abBasesRef.current = bases; setAbBases(bases);
+      abRunIdRef.current = meta.id;
+      abPrevRef.current = previews; setAbPreviews(previews);
+      setAbBrief(brief); setAbIcon(meta.icon); setAbUrl(meta.appUrl);
+      setAbCountry(meta.country); setAbLang(meta.language);
+      setAbZipBase64(await abZipOf(previews));
+      setAbLocSets([]); setAbLocLangs([]); setAbFailed([]); setAbError(""); setAbRevision("");
+      // The cached run is what "gen lại" reuses; without it a retry would go
+      // back to the store and rebuild the brief from scratch.
+      abRun.current = { shots: [], icon: meta.icon, brief, mascot: null, platform: meta.platform || "android" };
+      setAbHistOpen(false);
+      setAbStep("preview");
+    } catch (e) {
+      setAbError("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setAbHistBusy("");
+    }
+  };
+
+  const handleAbDeleteRun = async (id: string) => {
+    try { await abDeleteRun(id); await abRefreshHistory(); } catch { /* nothing to do */ }
   };
 
   const abDownloadZip = () => {
@@ -2604,7 +2773,48 @@ export default function Home() {
                   </div>
                 );
               })}
+              <button onClick={() => { setAbHistOpen(o => !o); void abRefreshHistory(); }}
+                className="ml-auto text-xs px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>
+                🕐 Lịch sử gen {abHistory.length > 0 && `(${abHistory.length})`}
+              </button>
             </div>
+
+            {abHistOpen && (
+              /* The artwork is kept, not the finished PNGs: reopening redraws
+                 the copy onto it, which is what makes localising an old set
+                 cost a text call instead of a new generation. */
+              <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🕐 Lần gen đã lưu</span>
+                  <span className="text-[11px]" style={{color: t.textMuted}}>Mở lại để xem hoặc localize — không tốn tiền gen ảnh</span>
+                </div>
+                {abHistory.length === 0 ? (
+                  <p className="text-xs" style={{color: t.textMuted}}>Chưa có lần gen nào được lưu. Gen xong một bộ là nó tự lưu vào đây.</p>
+                ) : (
+                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {abHistory.map(r => (
+                      <div key={r.id} className="flex items-center gap-3 p-2 rounded-xl border" style={{borderColor: t.border}}>
+                        {r.thumb
+                          ? <img src={r.thumb} alt="" className="w-16 h-12 object-cover rounded-lg flex-shrink-0"/>
+                          : <div className="w-16 h-12 rounded-lg flex-shrink-0" style={{backgroundColor: t.tabBg}}/>}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold truncate" style={{color: t.text}}>{r.appName || "(không tên)"}</div>
+                          <div className="text-[11px] truncate" style={{color: t.textMuted}}>
+                            {new Date(r.createdAt).toLocaleString("vi-VN")} · {r.country} · {r.language} · {r.slotCount} ảnh
+                          </div>
+                        </div>
+                        <button onClick={() => handleAbOpenRun(r)} disabled={abHistBusy !== ""}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 flex-shrink-0">
+                          {abHistBusy === r.id ? "⏳" : "Mở lại"}
+                        </button>
+                        <button onClick={() => handleAbDeleteRun(r.id)} title="Xoá khỏi lịch sử"
+                          className="text-xs px-2 py-1.5 rounded-lg flex-shrink-0" style={{backgroundColor: t.tabBg, color: t.textMuted}}>🗑</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {abStep === "input" && (
               <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
@@ -2888,22 +3098,6 @@ export default function Home() {
 
                 {abError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{abError}</p>}
 
-                {abBaseImages.length > 0 && (
-                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
-                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🎨 Ảnh sạch, không overlay ({abBaseImages.length}) — Google khuyên nên có 1 ảnh/tỉ lệ</div>
-                    <div className="flex gap-3 overflow-x-auto pb-1">
-                      {abBaseImages.map(img => (
-                        <div key={img.key} className="flex-shrink-0 space-y-1.5">
-                          {/* Not a Preview, so it cannot open the shared lightbox — open the raw PNG instead. */}
-                          <a href={img.dataUrl} target="_blank" rel="noreferrer" title="Mở ảnh gốc">
-                            <img src={img.dataUrl} alt={img.label} className="rounded-xl object-cover shadow-lg cursor-zoom-in" style={{height:140, width:"auto", maxWidth:200}}/>
-                          </a>
-                          <div className="text-[10px] text-center" style={{color: t.textMuted}}>{img.label}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 {abBrief && (
                   <div className="p-3 rounded-xl border text-xs flex flex-wrap gap-3 items-center" style={{...cardStyle, borderColor:"#7C3AED44"}}>
@@ -2939,9 +3133,6 @@ export default function Home() {
                           <div>
                             <div className="text-xs font-semibold flex items-center gap-1" style={{color: t.text}}>
                               {p.key}
-                              {APP_CREATIVES.find(c => c.key === p.key)?.noOverlay && (
-                                <span className="text-[9px] px-1 py-0.5 rounded" style={{backgroundColor:"#10B98122", color:"#10B981"}}>sạch</span>
-                              )}
                             </div>
                             <div className="text-xs" style={{color: t.textMuted}}>{p.label}</div>
                           </div>
@@ -2986,6 +3177,63 @@ export default function Home() {
                       </div>
                     );
                   })}
+                </div>
+
+                {/* Localisation. Only the four printed strings change; the
+                    artwork is the one already paid for, so each extra market is
+                    a text call rather than twenty images. */}
+                <div className="rounded-2xl border p-4 space-y-3" style={{...cardStyle, borderColor: "#10B98144"}}>
+                  <div>
+                    <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
+                    <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
+                      Vẽ lại chữ trên chính bộ ảnh này — <b>không tốn tiền gen ảnh</b>, mỗi thị trường chỉ vài trăm đồng tiền dịch.
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {LANGUAGES.filter(l => l.code !== abLang).map(l => {
+                      const on = abLocLangs.includes(l.code);
+                      return (
+                        <button key={l.code}
+                          onClick={() => setAbLocLangs(prev => on ? prev.filter(x => x !== l.code) : [...prev, l.code])}
+                          className="text-xs px-2.5 py-1 rounded-full border"
+                          style={on
+                            ? {borderColor:"#10B981", backgroundColor:"#10B98122", color:"#10B981"}
+                            : {borderColor: t.border, color: t.textMuted}}>
+                          {l.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={handleAbLocalize} disabled={!abLocLangs.length || abLocBusy !== ""}
+                      className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{background: abLocLangs.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
+                      {abLocBusy || `🌏 Localize ${abLocLangs.length || ""} thị trường`}
+                    </button>
+                    <span className="text-[11px]" style={{color: t.textMuted}}>
+                      Chữ trong <b>màn hình điện thoại</b> là một phần của ảnh nên giữ nguyên — muốn đổi cả phần đó thì phải gen lại bộ mới.
+                    </span>
+                  </div>
+
+                  {abLocSets.map(set => (
+                    <div key={set.lang} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="text-sm font-semibold" style={{color: t.text}}>
+                          {LANGUAGES.find(l => l.code === set.lang)?.label || set.lang}
+                          <span className="text-[11px] font-normal ml-2" style={{color: t.textMuted}}>{set.previews.length} banner</span>
+                        </div>
+                        <button onClick={() => abDownloadB64Zip(set.zip, `google-ads-${abBrief?.app_name || "banners"}-${set.lang}.zip`)}
+                          className="bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg">⬇ Tải .zip</button>
+                      </div>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {set.previews.map(p => (
+                          <img key={p.key} src={p.dataUrl} alt={p.label} onClick={() => setSelectedPreview(p)}
+                            className="rounded-lg shadow cursor-zoom-in flex-shrink-0"
+                            style={{height: 96, width: "auto"}}/>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -3425,7 +3673,7 @@ export default function Home() {
               <div className="p-6 border rounded-2xl text-center space-y-3" style={cardStyle}>
                 <div className="text-3xl">🔗</div>
                 <div className="font-semibold" style={{color:t.text}}>Chưa kết nối Google Ads</div>
-                <div className="text-sm" style={{color:t.textMuted}}>Bấm "Connect Google Ads" ở trên để authorize</div>
+                <div className="text-sm" style={{color:t.textMuted}}>Bấm &ldquo;Connect Google Ads&rdquo; ở trên để authorize</div>
               </div>
             )}
           </div>

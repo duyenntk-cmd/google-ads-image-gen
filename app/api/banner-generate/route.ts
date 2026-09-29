@@ -43,11 +43,23 @@ const BG_MODES: Record<string, string> = {
  * The prop count is capped too. Left open, the model kept adding — an icon, two
  * flashcards, a chart, a progress ring, sparkles — until the frame was noise.
  */
+/**
+ * Every asset now carries composited copy, so the reserved band is not a
+ * preference — a headline landing on the subject's face is the single failure
+ * the operator sees most. Stated as a hard edge of the canvas, because "leave
+ * room for text" gets treated as a suggestion and a hand or a phone drifts in.
+ */
+const RESERVED_RULE = `  Treat that band as being OUTSIDE the canvas: the subject's body, hair, hands,
+  the phone, every prop, every sparkle and every cast shadow must stop before its
+  edge. Not overlapping it slightly — not touching it at all. The band is where
+  the headline and the button get printed, and anything under them is a defect.`;
+
 const SHAPE_LAYOUT: Record<ShapeKey, string> = {
   wide: `FRAME: wide 1.91:1.
 - RESERVED AREA — absolutely nothing may enter it. Not the subject, not the phone,
   not one prop, not a sparkle: the LEFT 45% of the width, and the BOTTOM 26% of
   the height. Plain background only.
+${RESERVED_RULE}
 - Subject inside the RIGHT 40%, three-quarter or full view, facing slightly left.
 - Phone mockup beside the subject, fully inside the right 55%.
 - AT MOST 2 supporting props, both inside the right 55%.`,
@@ -55,12 +67,14 @@ const SHAPE_LAYOUT: Record<ShapeKey, string> = {
 - RESERVED AREA — absolutely nothing may enter it. Not the subject, not the phone,
   not one prop, not a sparkle: the LEFT 42% of the width, and the BOTTOM 30% of
   the height. Plain background only.
+${RESERVED_RULE}
 - Subject inside the RIGHT 45%, three-quarter or full view, facing slightly left.
 - Phone mockup beside the subject, fully inside the right 58%.
 - AT MOST 3 supporting props, all inside the right 58%, grouped near the top.`,
   tall: `FRAME: tall 4:5.
 - RESERVED AREA — absolutely nothing may enter it: the TOP 14% and the BOTTOM 34%
   of the height. Plain background only.
+${RESERVED_RULE}
 - Subject centred horizontally in the MIDDLE band, full body or waist-up.
 - AT MOST 3 supporting props, beside and just above the subject, inside that band.`,
 };
@@ -191,7 +205,7 @@ RENDER QUALITY:
 MUST NOT APPEAR — these ruin the asset:
 - Any headline, slogan, caption, watermark, brand logo or app-store badge anywhere in the artwork. All ad copy is composited afterwards, so leave the artwork free of it.
   The ONLY exception is the interface INSIDE the phone screen, which is part of the device and may carry its own small UI labels.
-- Anything at all inside the RESERVED zones — they get covered by the layout.${removalLines ? `\n${removalLines}` : ""}${localise ? `\n- English words on the phone screen. Every label there must read in ${uiLanguage}.` : ""}
+- Anything at all inside the RESERVED zones. The headline and button are printed there; a subject, hand, phone, prop or shadow crossing into them ruins the asset.${removalLines ? `\n${removalLines}` : ""}${localise ? `\n- English words on the phone screen. Every label there must read in ${uiLanguage}.` : ""}
 - A SECOND character, mascot, robot or creature. Exactly ONE character in frame — the hero. An app icon shown as a flat badge is fine; a second animated face is not.
 - An open palm facing the viewer with spread fingers — the pose fingers come out wrong in.
 - Malformed hands, extra or missing fingers, distorted faces, asymmetric eyes, extra limbs.

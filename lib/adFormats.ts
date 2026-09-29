@@ -9,6 +9,10 @@
  * Deliberately separate from AD_SIZES in adSizes.ts, which canvasGen.ts uses to
  * render one UAC variant per video frame. Different feature, different list.
  *
+ * Every slot ships finished: headline, subheadline, CTA and Play badge composited
+ * on. An asset with no copy on it was an option Google suggests, but it tells the
+ * operator nothing about how the layout sits and wastes one of the 20 slots.
+ *
  * Ratios and limits confirmed by the account owner against the Google Ads UI:
  *   1.91:1 landscape  min 600x314   recommended 1200x628
  *   1:1    square     min 200x200   recommended 1200x1200
@@ -68,11 +72,6 @@ export interface AdCreative {
   /** Creative direction appended to the prompt for this slot. */
   angle: string;
   angleLabel: string;
-  /**
-   * Google advises supplying at least one clean image per ratio with no text
-   * burned in, so the first slot of each ratio skips the canvas overlay.
-   */
-  noOverlay: boolean;
   /** First slot of each ratio — the 3-image set worth generating as a cheap test. */
   isCore: boolean;
 }
@@ -80,9 +79,6 @@ export interface AdCreative {
 export const APP_CREATIVES: AdCreative[] = RATIO_SPECS.flatMap((spec) =>
   Array.from({ length: spec.count }, (_, i) => {
     const angle = ANGLES[i % ANGLES.length];
-    // Slot 0 of each ratio ships clean, per Google's advice to include at least
-    // one asset per ratio without text burned in.
-    const noOverlay = i === 0;
     return {
       key: `${spec.key}-${i + 1}`,
       width: spec.width,
@@ -93,11 +89,8 @@ export const APP_CREATIVES: AdCreative[] = RATIO_SPECS.flatMap((spec) =>
       usage: `${spec.width}×${spec.height}`,
       angle: angle.direction,
       angleLabel: angle.label,
-      noOverlay,
-      // The preview set must carry the overlay: 17 of 20 assets have one, and a
-      // clean render tells you nothing about how the headline and CTA sit.
-      // Slot 1 where it exists, otherwise fall back to the only slot there is.
-      isCore: spec.count > 1 ? i === 1 : i === 0,
+      // The cheap preview set: one slot per ratio.
+      isCore: i === 0,
     };
   }),
 );
