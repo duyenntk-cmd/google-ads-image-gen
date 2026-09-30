@@ -20,9 +20,21 @@ không đưa khoá vào commit message hay PR.
 | 🎯 Ad Copy Studio | Keyword → ad copy cho keyword đó → localize | Claude (Anthropic) |
 | 🚀 Launch Camp | Tạo App campaign thật trên tài khoản Google Ads | Google Ads API |
 | ▶️ YouTube Upload | Up hàng loạt video Unlisted, lấy link chạy ads | YouTube Data API |
+| 🔌 MKT System | Đẩy ad template + creative sang MKT System bằng mã kết nối | API MKT System |
 
 Chi tiết từng công cụ: `references/tools.md`.
 Kiến trúc, API route, biến môi trường, quy ước code: `references/architecture.md`.
+
+## MKT System — hai điều phải nhớ
+
+Mã `mktmcp_...` là **credential của user trong tối đa 24h**, tính từ lúc user đăng nhập
+MKT System chứ không phải lúc copy, **không gia hạn và không thu hồi được**. Nó KHÔNG đặt
+vào biến môi trường Vercel như các API key khác — nó của từng người và dán lúc chạy — mà
+giữ trong cookie httpOnly phía server.
+
+Backend MKT System **cho lưu ad template không tạo campaign được** (khối chỉ 1 headline
+hoặc không có description). App tự kiểm tra theo luật lúc-tạo-campaign cho TỪNG khối
+trước khi gửi. Đừng bỏ lớp kiểm tra này.
 
 ## Ba điều hay bị hỏi nhất
 

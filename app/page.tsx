@@ -789,7 +789,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio"|"mkt">("home");
 
   // ── AI Banner ──
   type AbStep = "input" | "generating" | "preview";
@@ -1658,6 +1658,206 @@ export default function Home() {
     setTimeout(() => setSdCopied(""), 1500);
   };
 
+
+  /* ─────────────── MKT System ───────────────
+   * The connect code is the user's credential for up to a day and cannot be
+   * revoked, so it is posted once to our server, kept in an httpOnly cookie and
+   * never held here. This side only ever knows the email and the expiry.
+   */
+  interface MktTemplate { id: string; name: string; adContents?: {headlines:string[];descriptions:string[]}[] }
+  const [mkCode, setMkCode] = useState("");
+  const [mkConn, setMkConn] = useState<{email:string;expiresAt:number}|null>(null);
+  const [mkBusy, setMkBusy] = useState("");
+  const [mkError, setMkError] = useState("");
+  const [mkNote, setMkNote] = useState("");
+  const [mkTemplates, setMkTemplates] = useState<MktTemplate[]>([]);
+  const [mkTplName, setMkTplName] = useState("");
+  const [mkBlocks, setMkBlocks] = useState<{headlines:string;descriptions:string}[]>([{headlines:"",descriptions:""}]);
+  const [mkPicked, setMkPicked] = useState<string[]>([]);
+  const [mkPublic, setMkPublic] = useState(false);
+  const [mkFiles, setMkFiles] = useState<{name:string;dataUrl:string}[]>([]);
+  const mkFileRef = useRef<HTMLInputElement>(null);
+  /** Kept across retries of the same upload so the backend replays instead of duplicating. */
+  const mkIdemRef = useRef<string>("");
+
+  const mkParseBlocks = () => mkBlocks.map(b => ({
+    headlines: b.headlines.split("\n").map(s => s.trim()).filter(Boolean),
+    descriptions: b.descriptions.split("\n").map(s => s.trim()).filter(Boolean),
+  }));
+
+  /**
+   * The campaign-time rule, checked per block, live.
+   *
+   * MKT System's backend will happily SAVE a template whose block has one
+   * headline or no description — and then refuse to build a campaign from it.
+   * Better to be stopped here than at launch.
+   */
+  const mkBlockErrors = (): string[] => {
+    const out: string[] = [];
+    mkParseBlocks().forEach((b, i) => {
+      const label = `Khối ${i + 1}`;
+      const heads = Array.from(new Set(b.headlines));
+      if (heads.length < 2) out.push(`${label}: cần ≥2 headline khác nhau (đang có ${heads.length}).`);
+      if (heads.length > 5) out.push(`${label}: tối đa 5 headline.`);
+      if (b.descriptions.length < 1) out.push(`${label}: cần ≥1 description.`);
+      if (b.descriptions.length > 5) out.push(`${label}: tối đa 5 description.`);
+      heads.filter(h => h.length > 30).forEach(h => out.push(`${label}: headline ${h.length} ký tự (tối đa 30) — "${h}"`));
+      b.descriptions.filter(d => d.length > 90).forEach(d => out.push(`${label}: description ${d.length} ký tự (tối đa 90)`));
+    });
+    return out;
+  };
+
+  const mkFetchJson = async (url: string, init?: RequestInit) => {
+    const res = await fetch(url, init);
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.success === false || data?.connected === false) {
+      if (data?.error === "not_connected" || res.status === 401) {
+        setMkConn(null);
+        throw new Error("Chưa kết nối MKT System, hoặc mã đã hết hạn. Dán mã mới.");
+      }
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+    return data;
+  };
+
+  const mkRefreshConn = async () => {
+    try {
+      const d = await fetch("/api/mkt/connect").then(r => r.json());
+      setMkConn(d.connected ? { email: d.email, expiresAt: d.expiresAt } : null);
+    } catch { setMkConn(null); }
+  };
+  useEffect(() => { void mkRefreshConn(); }, []);
+
+  const mkConnect = async () => {
+    if (!mkCode.trim()) return;
+    setMkBusy("connect"); setMkError(""); setMkNote("");
+    try {
+      const d = await mkFetchJson("/api/mkt/connect", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: mkCode.trim() }),
+      });
+      setMkConn({ email: d.email, expiresAt: d.expiresAt });
+      setMkCode("");
+      await mkLoadTemplates();
+    } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
+    finally { setMkBusy(""); }
+  };
+
+  const mkDisconnect = async () => {
+    await fetch("/api/mkt/connect", { method: "DELETE" });
+    setMkConn(null); setMkTemplates([]);
+    setMkNote("Đã xoá mã khỏi web này. Mã vẫn còn hiệu lực trên MKT System tới khi hết hạn — hệ thống không thu hồi được.");
+  };
+
+  const mkLoadTemplates = async () => {
+    setMkError("");
+    try {
+      const d = await mkFetchJson("/api/mkt/ad-templates?page=1&pageSize=50");
+      setMkTemplates(d.items || []);
+    } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
+  };
+
+  const mkCreateTemplate = async () => {
+    const errs = mkBlockErrors();
+    if (errs.length) { setMkError("❌ " + errs.join("\n")); return; }
+    setMkBusy("template"); setMkError(""); setMkNote("");
+    try {
+      await mkFetchJson("/api/mkt/ad-templates", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: mkTplName.trim(), adContents: mkParseBlocks() }),
+      });
+      setMkNote(`✅ Đã tạo template "${mkTplName.trim()}".`);
+      setMkTplName("");
+      await mkLoadTemplates();
+    } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
+    finally { setMkBusy(""); }
+  };
+
+  const mkTemplateAction = async (id: string, action: "duplicate" | "delete") => {
+    setMkBusy(id); setMkError("");
+    try {
+      if (action === "duplicate") {
+        await mkFetchJson("/api/mkt/ad-templates", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "duplicate", id }),
+        });
+      } else {
+        await mkFetchJson(`/api/mkt/ad-templates?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      }
+      await mkLoadTemplates();
+    } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
+    finally { setMkBusy(""); }
+  };
+
+  /** Fills the form from the Ad Copy Studio result — that is the whole point of having both. */
+  const mkFillFromStudio = () => {
+    if (!sdCopy) return;
+    setMkTplName(`${sdAppName || "App"} — ${sdSelected || "Google Ad"}`.slice(0, 80));
+    setMkBlocks([{
+      headlines: sdCopy.headlines.slice(0, 5).join("\n"),
+      descriptions: sdCopy.descriptions.slice(0, 5).join("\n"),
+    }]);
+    setMkNote("Đã điền từ Ad Copy Studio. Kiểm tra lại giới hạn ký tự trước khi tạo.");
+  };
+
+  const mkOnFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const read = (f: File) => new Promise<{name:string;dataUrl:string}>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve({ name: f.name, dataUrl: r.result as string });
+      r.onerror = () => reject(new Error(`Không đọc được ${f.name}`));
+      r.readAsDataURL(f);
+    });
+    try {
+      const read_files = await Promise.all(Array.from(files).map(read));
+      setMkFiles(prev => [...prev, ...read_files]);
+    } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
+  };
+
+  /** 800px webp preview, the size MKT System's own uploader makes. */
+  const mkThumb = async (dataUrl: string): Promise<string | undefined> => {
+    try {
+      const img = await abLoadImg(dataUrl);
+      const w = Math.min(800, img.width);
+      const h = Math.max(1, Math.round((img.height / img.width) * w));
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d")!.drawImage(img, 0, 0, w, h);
+      return c.toDataURL("image/webp", 0.85);
+    } catch { return undefined; }
+  };
+
+  const mkUploadCreatives = async () => {
+    const fromBanners = (abPrevRef.current.length ? abPrevRef.current : abPreviews)
+      .filter(p => mkPicked.includes(p.key))
+      .map(p => ({ name: `${abBrief?.app_name || "banner"}-${p.key}.png`, dataUrl: p.dataUrl }));
+    const all = [...fromBanners, ...mkFiles];
+    if (!all.length) { setMkError("❌ Chưa chọn file hoặc banner nào."); return; }
+
+    setMkBusy("creative"); setMkError(""); setMkNote("");
+    // One key per upload attempt, reused if this same set is sent again.
+    if (!mkIdemRef.current) mkIdemRef.current = crypto.randomUUID();
+    try {
+      const items = await Promise.all(all.map(async f => ({
+        name: f.name,
+        dataUrl: f.dataUrl,
+        thumbnailDataUrl: f.dataUrl.startsWith("data:image/") ? await mkThumb(f.dataUrl) : undefined,
+        isPublic: mkPublic,
+      })));
+      const d = await mkFetchJson("/api/mkt/creatives", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items, idempotencyKey: mkIdemRef.current }),
+      });
+      mkIdemRef.current = "";
+      setMkPicked([]); setMkFiles([]);
+      setMkNote(`✅ Đã đưa ${d.creatives?.length || 0} creative vào thư viện MKT System.` +
+        (d.errors?.length ? `\n⚠️ Bỏ qua:\n${d.errors.join("\n")}` : ""));
+    } catch (e) {
+      // Key is deliberately kept: retrying with it is what prevents duplicates.
+      setMkError("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally { setMkBusy(""); }
+  };
+
   interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useEffect(() => {
@@ -2007,6 +2207,7 @@ export default function Home() {
             ["aibanner", "✨", "AI Banner"],
             ["studio",   "🎯", "Ad Copy Studio"],
             ["launch",   "🚀", "Launch Camp"],
+            ["mkt",      "🔌", "MKT System"],
           ] as const).map(([page, icon, label]) => (
             <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } if (page==="launch") { checkAdsConnection(); } }}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
@@ -2082,7 +2283,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -3150,6 +3351,187 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+            )}
+          </div>
+        )}
+
+        {/* MKT SYSTEM — ad templates and creative library over a connect code */}
+        {activePage === "mkt" && (
+          <div className="space-y-5 max-w-3xl">
+            {/* Connection. The guide asks to always show whose code is in use
+                and when it dies, so a pasted colleague's code is obvious. */}
+            <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🔌 Kết nối MKT System</div>
+              {mkConn ? (
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold truncate" style={{color: t.text}}>✅ {mkConn.email}</div>
+                    <div className="text-[11px]" style={{color: t.textMuted}}>
+                      Hết hạn {new Date(mkConn.expiresAt).toLocaleString("vi-VN")}
+                      {" · còn "}{Math.max(0, Math.round((mkConn.expiresAt - Date.now()) / 3600000))}h
+                    </div>
+                  </div>
+                  <button onClick={mkDisconnect} className="text-xs px-3 py-1.5 rounded-lg border flex-shrink-0" style={{borderColor: t.border, color: t.textMuted}}>Ngắt kết nối</button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <input value={mkCode} onChange={e => setMkCode(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") mkConnect(); }}
+                      placeholder="Dán mã mktmcp_... lấy ở trang Profile của MKT System"
+                      className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                    <button onClick={mkConnect} disabled={!mkCode.trim() || mkBusy === "connect"}
+                      className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40">
+                      {mkBusy === "connect" ? "⏳" : "Kết nối"}
+                    </button>
+                  </div>
+                  <p className="text-[11px]" style={{color: t.textMuted}}>
+                    Mã có hiệu lực <b>tối đa 24h tính từ lúc bạn đăng nhập MKT System</b> (không phải lúc copy), không gia hạn và <b>không thu hồi được</b>. Mã được giữ ở server, trình duyệt không đọc lại được.
+                  </p>
+                </div>
+              )}
+              {mkError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
+              {mkNote && <p className="text-xs bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
+            </div>
+
+            {mkConn && (
+              <>
+                {/* Ad template */}
+                <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>📝 Ad template Google</div>
+                    {sdCopy && (
+                      <button onClick={mkFillFromStudio} className="text-xs px-3 py-1.5 rounded-lg border" style={{borderColor:"#7C3AED66", color:"#A78BFA"}}>
+                        ↙ Điền từ Ad Copy Studio
+                      </button>
+                    )}
+                  </div>
+                  <input value={mkTplName} onChange={e => setMkTplName(e.target.value)}
+                    placeholder="Tên template (không trùng template Google khác)"
+                    className="w-full text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+
+                  {mkBlocks.map((b, i) => (
+                    <div key={i} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold" style={{color: t.text}}>Khối {i + 1}</span>
+                        {mkBlocks.length > 1 && (
+                          <button onClick={() => setMkBlocks(prev => prev.filter((_, j) => j !== i))} className="text-[11px]" style={{color: t.textMuted}}>Xoá khối</button>
+                        )}
+                      </div>
+                      <div>
+                        <div className="text-[11px] mb-1" style={{color: t.textMuted}}>Headlines — mỗi dòng một câu, 2–5 câu, ≤30 ký tự</div>
+                        <textarea value={b.headlines} rows={4}
+                          onChange={e => setMkBlocks(prev => prev.map((x, j) => j === i ? {...x, headlines: e.target.value} : x))}
+                          className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-y" style={inputStyle}/>
+                      </div>
+                      <div>
+                        <div className="text-[11px] mb-1" style={{color: t.textMuted}}>Descriptions — mỗi dòng một câu, 1–5 câu, ≤90 ký tự</div>
+                        <textarea value={b.descriptions} rows={3}
+                          onChange={e => setMkBlocks(prev => prev.map((x, j) => j === i ? {...x, descriptions: e.target.value} : x))}
+                          className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-y" style={inputStyle}/>
+                      </div>
+                    </div>
+                  ))}
+
+                  <button onClick={() => setMkBlocks(prev => [...prev, {headlines:"",descriptions:""}])}
+                    className="text-xs px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>＋ Thêm khối</button>
+
+                  {/* Checked against the campaign-time rule: the backend would
+                      save a template that cannot launch, and say nothing. */}
+                  {mkBlockErrors().length > 0 && (mkTplName.trim() || mkBlocks.some(b => b.headlines.trim())) && (
+                    <div className="text-[11px] rounded-lg px-3 py-2 space-y-0.5" style={{backgroundColor:"#F59E0B14", color:"#F59E0B"}}>
+                      <div className="font-semibold">⚠️ Template này lưu được nhưng KHÔNG tạo campaign được:</div>
+                      {mkBlockErrors().map((e, i) => <div key={i}>• {e}</div>)}
+                    </div>
+                  )}
+
+                  <button onClick={mkCreateTemplate} disabled={!mkTplName.trim() || mkBusy === "template" || mkBlockErrors().length > 0}
+                    className="w-full text-sm font-semibold px-4 py-2.5 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                    {mkBusy === "template" ? "⏳ Đang tạo..." : "📝 Tạo ad template"}
+                  </button>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[11px]" style={{color: t.textMuted}}>Template Google đã có ({mkTemplates.length})</span>
+                    <button onClick={mkLoadTemplates} className="text-[11px]" style={{color:"#7C3AED"}}>↻ Tải lại</button>
+                  </div>
+                  <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                    {mkTemplates.map(tpl => (
+                      <div key={tpl.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border" style={{borderColor: t.border}}>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate" style={{color: t.text}}>{tpl.name}</div>
+                          <div className="text-[10px]" style={{color: t.textMuted}}>{tpl.adContents?.length || 0} khối</div>
+                        </div>
+                        <button onClick={() => mkTemplateAction(tpl.id, "duplicate")} disabled={mkBusy === tpl.id}
+                          className="text-[11px] px-2 py-1 rounded" style={{backgroundColor: t.tabBg, color: t.textMuted}}>Nhân bản</button>
+                        <button onClick={() => mkTemplateAction(tpl.id, "delete")} disabled={mkBusy === tpl.id}
+                          className="text-[11px] px-2 py-1 rounded" style={{backgroundColor: t.tabBg, color: t.textMuted}}>🗑</button>
+                      </div>
+                    ))}
+                    {!mkTemplates.length && <p className="text-[11px]" style={{color: t.textMuted}}>Chưa có template nào, hoặc chưa bấm Tải lại.</p>}
+                  </div>
+                </div>
+
+                {/* Creative library */}
+                <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+                  <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🖼 Upload creative</div>
+
+                  {(abPrevRef.current.length || abPreviews.length) > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px]" style={{color: t.textMuted}}>Chọn từ bộ AI Banner ({mkPicked.length} đã chọn)</span>
+                        <button onClick={() => setMkPicked((abPrevRef.current.length ? abPrevRef.current : abPreviews).map(p => p.key))}
+                          className="text-[11px]" style={{color:"#7C3AED"}}>Chọn tất cả</button>
+                      </div>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {(abPrevRef.current.length ? abPrevRef.current : abPreviews).map(p => {
+                          const on = mkPicked.includes(p.key);
+                          return (
+                            <button key={p.key} onClick={() => setMkPicked(prev => on ? prev.filter(x => x !== p.key) : [...prev, p.key])}
+                              className="flex-shrink-0 rounded-lg overflow-hidden border-2"
+                              style={{borderColor: on ? "#7C3AED" : "transparent"}}>
+                              <img src={p.dataUrl} alt={p.key} style={{height: 72, width: "auto"}}/>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <input ref={mkFileRef} type="file" multiple accept=".jpg,.jpeg,.png,.gif,.mp4,.mov"
+                      onChange={e => { mkOnFiles(e.target.files); if (mkFileRef.current) mkFileRef.current.value = ""; }} className="hidden"/>
+                    <button onClick={() => mkFileRef.current?.click()}
+                      className="text-xs px-3 py-2 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>
+                      ＋ Chọn file từ máy (jpg, png, gif, mp4, mov · tối đa 300MB/file)
+                    </button>
+                    {mkFiles.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {mkFiles.map((f, i) => (
+                          <div key={i} className="flex items-center gap-2 text-xs px-2 py-1 rounded" style={{backgroundColor: t.tabBg, color: t.text}}>
+                            <span className="flex-1 truncate">{f.name}</span>
+                            <button onClick={() => setMkFiles(prev => prev.filter((_, j) => j !== i))} style={{color: t.textMuted}}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs cursor-pointer" style={{color: t.text}}>
+                    <input type="checkbox" checked={mkPublic} onChange={e => setMkPublic(e.target.checked)} className="h-4 w-4 accent-violet-500"/>
+                    Public trong thư viện creative
+                  </label>
+
+                  <button onClick={mkUploadCreatives} disabled={mkBusy === "creative" || (!mkPicked.length && !mkFiles.length)}
+                    className="w-full text-sm font-semibold px-4 py-2.5 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{background: "linear-gradient(135deg,#059669,#10B981)"}}>
+                    {mkBusy === "creative" ? "⏳ Đang upload..." : `🖼 Upload ${mkPicked.length + mkFiles.length || ""} creative`}
+                  </button>
+                  <p className="text-[11px]" style={{color: t.textMuted}}>
+                    File đi thẳng lên S3 từ server của web này nên không vướng CORS. Mỗi lần bấm dùng một Idempotency-Key, thử lại sau lỗi mạng sẽ không tạo creative trùng.
+                  </p>
+                </div>
+              </>
             )}
           </div>
         )}
