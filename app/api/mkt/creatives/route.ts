@@ -34,12 +34,74 @@ function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; contentType: strin
   return { contentType, bytes: new Uint8Array(Buffer.from(dataUrl.slice(comma + 1), "base64")) };
 }
 
+type Mkt = Awaited<ReturnType<typeof requireMkt>>;
+interface ItemIn {
+  name: string; dataUrl: string; thumbnailDataUrl?: string;
+  isPublic?: boolean; duration?: number;
+  tags?: string[]; productIds?: string[]; angleCodes?: string[]; marketTargets?: string[]; languages?: string[];
+}
+
+/** Puts one file (and its thumbnail) on S3 and returns its bulk-item fields. */
+async function prepareItem(mkt: Mkt, item: ItemIn): Promise<Record<string, unknown>> {
+  const { bytes, contentType } = decodeDataUrl(item.dataUrl);
+  const format = ALLOWED[contentType.toLowerCase()];
+  if (!format) throw new Error(`Định dạng ${contentType} không được hỗ trợ.`);
+  if (bytes.length > MAX_BYTES) throw new Error(`File quá 300MB (${(bytes.length / 1048576).toFixed(0)}MB).`);
+
+  const url = await uploadToS3(mkt, { name: item.name, contentType, bytes });
+
+  // A creative without a thumbnail still lands in the library, just
+  // without a preview — so a failed thumbnail must not fail the upload.
+  let thumbnail: string | null = null;
+  if (item.thumbnailDataUrl) {
+    try {
+      const th = decodeDataUrl(item.thumbnailDataUrl);
+      thumbnail = await uploadToS3(mkt, { name: `thumb-${item.name}`, contentType: th.contentType, bytes: th.bytes });
+    } catch { /* preview only */ }
+  }
+
+  return {
+    url,
+    name: item.name,
+    format,
+    size: bytes.length,
+    ...(thumbnail && { thumbnail }),
+    ...metaFields(item),
+  };
+}
+
+/** The optional library fields, only when set. */
+function metaFields(item: Partial<ItemIn>): Record<string, unknown> {
+  return {
+    isPublic: Boolean(item.isPublic),
+    ...(item.duration && { duration: item.duration }),
+    ...(item.tags?.length && { tags: item.tags }),
+    ...(item.productIds?.length && { productIds: item.productIds }),
+    ...(item.angleCodes?.length && { angleCodes: item.angleCodes }),
+    ...(item.marketTargets?.length && { marketTargets: item.marketTargets }),
+    ...(item.languages?.length && { languages: item.languages }),
+  };
+}
+
+/**
+ * Three modes:
+ * - default: `items` with data URLs — upload all, then one bulk call.
+ * - `mode: "upload"`: one `item` — upload it and return its bulk fields, so a
+ *   page with many banners stays under the platform's request-body limit.
+ * - `mode: "bulk"`: `items` already on S3 (from "upload") — one bulk call.
+ */
 export async function POST(req: NextRequest) {
   const unauth = await requireSession();
   if (unauth) return unauth;
   try {
     const mkt = await requireMkt();
-    const { items, idempotencyKey } = await req.json();
+    const { mode, item, items, idempotencyKey } = await req.json();
+
+    if (mode === "upload") {
+      if (!item?.dataUrl) return NextResponse.json({ success: false, error: "Không có file." }, { status: 400 });
+      return NextResponse.json({ success: true, prepared: await prepareItem(mkt, item) });
+    }
+
     if (!Array.isArray(items) || !items.length) {
       return NextResponse.json({ success: false, error: "Không có file nào." }, { status: 400 });
     }
@@ -47,41 +109,26 @@ export async function POST(req: NextRequest) {
     const prepared: Record<string, unknown>[] = [];
     const errors: string[] = [];
 
-    for (const item of items) {
-      try {
-        const { bytes, contentType } = decodeDataUrl(item.dataUrl);
-        const format = ALLOWED[contentType.toLowerCase()];
-        if (!format) throw new Error(`Định dạng ${contentType} không được hỗ trợ.`);
-        if (bytes.length > MAX_BYTES) throw new Error(`File quá 300MB (${(bytes.length / 1048576).toFixed(0)}MB).`);
-
-        const url = await uploadToS3(mkt, { name: item.name, contentType, bytes });
-
-        // A creative without a thumbnail still lands in the library, just
-        // without a preview — so a failed thumbnail must not fail the upload.
-        let thumbnail: string | null = null;
-        if (item.thumbnailDataUrl) {
-          try {
-            const th = decodeDataUrl(item.thumbnailDataUrl);
-            thumbnail = await uploadToS3(mkt, { name: `thumb-${item.name}`, contentType: th.contentType, bytes: th.bytes });
-          } catch { /* preview only */ }
+    if (mode === "bulk") {
+      for (const it of items) {
+        if (typeof it?.url !== "string" || !it.url.startsWith("https://") || !it.name || !["IMAGE", "VIDEO"].includes(it.format)) {
+          errors.push(`${it?.name || "file"}: thiếu url/name/format.`);
+          continue;
         }
-
         prepared.push({
-          url,
-          name: item.name,
-          format,
-          size: bytes.length,
-          ...(thumbnail && { thumbnail }),
-          isPublic: Boolean(item.isPublic),
-          ...(item.duration && { duration: item.duration }),
-          ...(item.tags?.length && { tags: item.tags }),
-          ...(item.productIds?.length && { productIds: item.productIds }),
-          ...(item.angleCodes?.length && { angleCodes: item.angleCodes }),
-          ...(item.marketTargets?.length && { marketTargets: item.marketTargets }),
-          ...(item.languages?.length && { languages: item.languages }),
+          url: it.url, name: String(it.name), format: it.format,
+          ...(typeof it.size === "number" && { size: it.size }),
+          ...(typeof it.thumbnail === "string" && { thumbnail: it.thumbnail }),
+          ...metaFields(it),
         });
-      } catch (e) {
-        errors.push(`${item?.name || "file"}: ${(e as Error)?.message || "lỗi không rõ"}`);
+      }
+    } else {
+      for (const it of items) {
+        try {
+          prepared.push(await prepareItem(mkt, it));
+        } catch (e) {
+          errors.push(`${it?.name || "file"}: ${(e as Error)?.message || "lỗi không rõ"}`);
+        }
       }
     }
 

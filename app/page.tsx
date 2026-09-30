@@ -1604,7 +1604,7 @@ export default function Home() {
   const sdGenerateCopy = async (keyword: string) => {
     setSdSelected(keyword);
     setSdCopyLoading(true);
-    setSdCopy(null); setSdLocResults(null); setSdError("");
+    setSdCopy(null); setSdLocResults(null); setSdError(""); setSdSelH([]); setSdSelD([]);
     try {
       const res = await fetch("/api/adcopy", {
         method: "POST",
@@ -1856,6 +1856,108 @@ export default function Home() {
       // Key is deliberately kept: retrying with it is what prevents duplicates.
       setMkError("❌ " + (e instanceof Error ? e.message : String(e)));
     } finally { setMkBusy(""); }
+  };
+
+  /* Picking straight from AI Banner and Ad Copy Studio, then a modal per the
+   * integration guide, instead of carrying the selection over to the MKT tab. */
+  const [mkModal, setMkModal] = useState<"creative"|"template"|null>(null);
+  const [abMkSel, setAbMkSel] = useState<string[]>([]);
+  const [sdSelH, setSdSelH] = useState<string[]>([]);
+  const [sdSelD, setSdSelD] = useState<string[]>([]);
+  const [mkcNames, setMkcNames] = useState<Record<string,string>>({});
+  const [mkcMeta, setMkcMeta] = useState({ tags: "", productIds: "", angleCodes: "", marketTargets: "", languages: "" });
+  const [mkcStatus, setMkcStatus] = useState<Record<string,string>>({});
+  /** S3 results per banner, kept so "Upload lại" only re-sends what failed. */
+  const mkcPreparedRef = useRef<Record<string, Record<string, unknown>>>({});
+  /** Idempotency-Key per bulk body: reused on a retry of the same body, new when the body changes. */
+  const mkcIdemRef = useRef<{ body: string; key: string } | null>(null);
+  const mkToggle = (setter: (fn: (prev: string[]) => string[]) => void, v: string) =>
+    setter(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+
+  const mkOpenCreativeModal = () => {
+    const base = (abBrief?.app_name || "banner").trim().replace(/\s+/g, "-");
+    setMkcNames(Object.fromEntries(abMkSel.map(k => [k, `${base}-${k}`])));
+    setMkcStatus({}); mkcPreparedRef.current = {}; mkcIdemRef.current = null;
+    setMkError(""); setMkNote("");
+    setMkModal("creative");
+  };
+
+  const mkUploadSelected = async () => {
+    const pool = abPrevRef.current.length ? abPrevRef.current : abPreviews;
+    const chosen = pool.filter(p => abMkSel.includes(p.key));
+    if (!chosen.length) return;
+    const list = (v: string) => v.split(",").map(x => x.trim()).filter(Boolean);
+    const meta = {
+      isPublic: mkPublic,
+      tags: list(mkcMeta.tags), productIds: list(mkcMeta.productIds), angleCodes: list(mkcMeta.angleCodes),
+      marketTargets: list(mkcMeta.marketTargets), languages: list(mkcMeta.languages),
+    };
+    setMkBusy("creative"); setMkError(""); setMkNote("");
+    try {
+      // One file per request: several PNG banners in one body would pass the
+      // hosting platform's request-size limit. Two at a time.
+      const queue = chosen.filter(p => !mkcPreparedRef.current[p.key]);
+      const worker = async () => {
+        for (let p = queue.shift(); p; p = queue.shift()) {
+          const key = p.key;
+          setMkcStatus(prev => ({ ...prev, [key]: "⏳ Đang upload..." }));
+          try {
+            const d = await mkFetchJson("/api/mkt/creatives", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mode: "upload", item: {
+                name: `${(mkcNames[key] || key).trim()}.png`, dataUrl: p.dataUrl,
+                thumbnailDataUrl: await mkThumb(p.dataUrl),
+              } }),
+            });
+            mkcPreparedRef.current[key] = d.prepared;
+            setMkcStatus(prev => ({ ...prev, [key]: "✓ Đã lên S3" }));
+          } catch (e) {
+            setMkcStatus(prev => ({ ...prev, [key]: "❌ " + (e instanceof Error ? e.message : String(e)) }));
+          }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+      const ready = chosen.filter(p => mkcPreparedRef.current[p.key]);
+      if (ready.length < chosen.length) throw new Error("Một số ảnh upload lỗi. Bấm Upload lại để thử tiếp các ảnh lỗi.");
+
+      // Name and metadata are applied here, so editing them after the S3 step still counts.
+      const items = ready.map(p => ({ ...mkcPreparedRef.current[p.key], name: (mkcNames[p.key] || p.key).trim(), ...meta }));
+      const body = JSON.stringify(items);
+      if (mkcIdemRef.current?.body !== body) mkcIdemRef.current = { body, key: crypto.randomUUID() };
+      const d = await mkFetchJson("/api/mkt/creatives", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "bulk", items, idempotencyKey: mkcIdemRef.current.key }),
+      });
+      mkcIdemRef.current = null; mkcPreparedRef.current = {};
+      setAbMkSel([]);
+      setMkNote(`✅ Đã đưa ${d.creatives?.length || 0} creative vào thư viện MKT System.` +
+        (d.errors?.length ? `\n⚠️ Bỏ qua:\n${d.errors.join("\n")}` : ""));
+    } catch (e) {
+      setMkError("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally { setMkBusy(""); }
+  };
+
+  /** Blocks of ≤5 headlines; every block needs descriptions, so they repeat when fewer. */
+  const mkOpenTemplateModal = () => {
+    if (!sdCopy) return;
+    const hs = sdCopy.headlines.filter(h => sdSelH.includes(h));
+    const ds = sdCopy.descriptions.filter(d => sdSelD.includes(d));
+    // Even split into ceil(n/5) blocks, so 6 headlines become 3+3 rather than
+    // 5+1 — a one-headline block would block the campaign.
+    const chunk = (a: string[]) => {
+      const n = Math.ceil(a.length / 5), o: string[][] = [];
+      for (let i = 0, at = 0; i < n; i++) { const size = Math.ceil((a.length - at) / (n - i)); o.push(a.slice(at, at + size)); at += size; }
+      return o;
+    };
+    const hc = chunk(hs), dc = chunk(ds);
+    const n = Math.max(hc.length, dc.length, 1);
+    setMkBlocks(Array.from({ length: n }, (_, i) => ({
+      headlines: (hc[i] || []).join("\n"),
+      descriptions: (dc[i] || dc[i % Math.max(dc.length, 1)] || []).join("\n"),
+    })));
+    setMkTplName(`${sdAppName || "App"} — ${sdSelected || "Google Ad"}`.slice(0, 80));
+    setMkError(""); setMkNote("");
+    setMkModal("template");
   };
 
   interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
@@ -3187,11 +3289,33 @@ export default function Home() {
                   ))}
                 </div>
 
+                {/* Pick banners for the MKT System creative library */}
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <button onClick={() => setAbMkSel(prev => Array.from(new Set([...prev, ...abShown.map(p => p.key)])))}
+                    className="px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>☑ Chọn tất cả</button>
+                  {abMkSel.length > 0 && (
+                    <button onClick={() => setAbMkSel([])} className="px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>Bỏ chọn</button>
+                  )}
+                  <span style={{color: t.textMuted}}>Đã chọn {abMkSel.length} ảnh</span>
+                  <button onClick={mkOpenCreativeModal} disabled={!abMkSel.length}
+                    className="ml-auto text-white font-semibold px-3 py-1.5 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{background: "linear-gradient(135deg,#059669,#10B981)"}}>
+                    🖼 Upload lên MKT ({abMkSel.length})
+                  </button>
+                </div>
+
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   {abShown.map(p => {
                     const scale = Math.min(1, 340/Math.max(p.width, p.height));
+                    const picked = abMkSel.includes(p.key);
                     return (
-                      <div key={p.key} onClick={() => setSelectedPreview(p)} className="group rounded-2xl p-4 cursor-pointer border" style={cardStyle}>
+                      <div key={p.key} onClick={() => setSelectedPreview(p)} className="group relative rounded-2xl p-4 cursor-pointer border"
+                        style={{...cardStyle, ...(picked && {borderColor: "#7C3AED", boxShadow: "0 0 0 1px #7C3AED"})}}>
+                        <button type="button" aria-label="Chọn ảnh" onClick={e => { e.stopPropagation(); mkToggle(setAbMkSel, p.key); }}
+                          className="absolute top-2 left-2 z-10 w-5 h-5 rounded border flex items-center justify-center text-[11px] font-bold"
+                          style={{backgroundColor: picked ? "#7C3AED" : t.card, borderColor: picked ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                          {picked ? "✓" : ""}
+                        </button>
                         <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
                           <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
                         </div>
@@ -3652,8 +3776,19 @@ export default function Home() {
                                     {sdCopied === label ? "✓ Đã chép" : "Chép hết"}
                                   </button>
                                 </div>
-                                {items.map((item, i) => (
+                                {items.map((item, i) => {
+                                  const sel = label === "Tiêu đề" ? sdSelH : label === "Mô tả" ? sdSelD : null;
+                                  const setSel = label === "Tiêu đề" ? setSdSelH : setSdSelD;
+                                  return (
                                   <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
+                                    {/* Headlines and descriptions can go into an MKT ad template; CTAs cannot. */}
+                                    {sel && (
+                                      <button type="button" aria-label="Chọn" onClick={() => mkToggle(setSel, item)}
+                                        className="w-4 h-4 rounded border flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                                        style={{backgroundColor: sel.includes(item) ? "#7C3AED" : "transparent", borderColor: sel.includes(item) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                                        {sel.includes(item) ? "✓" : ""}
+                                      </button>
+                                    )}
                                     <span className="flex-1 min-w-0 break-words" style={{color: t.text}}>{item}</span>
                                     {/* Over the limit Google truncates mid-word, so flag it here rather than in the interface. */}
                                     <span className="text-[10px] flex-shrink-0" style={item.length > limit ? {color:"#EF4444"} : {color: t.textMuted}}>{item.length}</span>
@@ -3661,9 +3796,19 @@ export default function Home() {
                                       {sdCopied === `${label}-${i}` ? "✓" : "⧉"}
                                     </button>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             ))}
+                            <div className="flex items-center gap-2 pt-1">
+                              <button onClick={() => { setSdSelH([...sdCopy.headlines]); setSdSelD([...sdCopy.descriptions]); }}
+                                className="text-[11px] px-2.5 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>☑ Chọn hết tiêu đề + mô tả</button>
+                              <button onClick={mkOpenTemplateModal} disabled={!sdSelH.length && !sdSelD.length}
+                                className="flex-1 text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                                style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                                📝 Tạo ad template MKT ({sdSelH.length} tiêu đề · {sdSelD.length} mô tả)
+                              </button>
+                            </div>
                           </div>
                         )}
                       </>
@@ -4191,6 +4336,138 @@ export default function Home() {
         )}
 
       </main>
+
+      {/* MKT System modals, opened from AI Banner and Ad Copy Studio */}
+      {mkModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-6" onClick={() => { if (!mkBusy) setMkModal(null); }}>
+          <div className="rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto space-y-4 border" style={{...cardStyle, boxShadow:"0 25px 80px rgba(0,0,0,0.4)"}} onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-bold" style={{color: t.text}}>{mkModal === "creative" ? "🖼 Upload creative lên MKT System" : "📝 Tạo ad template Google"}</div>
+                <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
+                  {mkModal === "creative"
+                    ? `${abMkSel.length} ảnh · jpg/png/gif/mp4/mov, tối đa 300MB/file`
+                    : "Mỗi khối: 2–5 headline khác nhau (≤30 ký tự), 1–5 description (≤90 ký tự). Mọi khối đều được dùng khi tạo campaign."}
+                </div>
+              </div>
+              <button onClick={() => setMkModal(null)} disabled={!!mkBusy} className="px-2 py-1 rounded-lg" style={{color: t.textMuted}}>✕</button>
+            </div>
+
+            {!mkConn ? (
+              <div className="space-y-2">
+                <div className="text-sm" style={{color: t.text}}>Chưa kết nối MKT System. Dán mã kết nối (trang Profile của MKT System → <b>Kết nối Claude</b>):</div>
+                <div className="flex gap-2">
+                  <input value={mkCode} onChange={e => setMkCode(e.target.value)} onKeyDown={e => { if (e.key === "Enter") mkConnect(); }}
+                    placeholder="mktmcp_..." className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                  <button onClick={mkConnect} disabled={!mkCode.trim() || mkBusy === "connect"}
+                    className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40">
+                    {mkBusy === "connect" ? "⏳" : "Kết nối"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-[11px] px-3 py-2 rounded-lg" style={{backgroundColor: t.tabBg, color: t.textMuted}}>
+                Tài khoản: <b style={{color: t.text}}>{mkConn.email}</b> · hết hạn {new Date(mkConn.expiresAt).toLocaleString("vi-VN")}
+              </div>
+            )}
+
+            {mkConn && mkModal === "creative" && (
+              <>
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Tên hiển thị trong thư viện *</div>
+                  {(abPrevRef.current.length ? abPrevRef.current : abPreviews).filter(p => abMkSel.includes(p.key)).map(p => (
+                    <div key={p.key} className="flex items-center gap-3">
+                      <img src={p.dataUrl} alt="" className="w-12 h-12 object-contain rounded border flex-shrink-0" style={{borderColor: t.border}}/>
+                      <div className="flex-1 min-w-0">
+                        <input value={mkcNames[p.key] ?? ""} onChange={e => setMkcNames(prev => ({...prev, [p.key]: e.target.value}))} disabled={!!mkBusy}
+                          className="w-full text-sm rounded-lg px-3 py-1.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                        <div className="text-[10px] mt-0.5 truncate" style={{color: (mkcStatus[p.key] || "").startsWith("❌") ? "#EF4444" : t.textMuted}}>
+                          {p.width}×{p.height} · {mkcStatus[p.key] || "Chờ upload"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-4 text-sm" style={{color: t.text}}>
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>Quyền xem</span>
+                  <label className="flex items-center gap-1.5 cursor-pointer"><input type="radio" checked={!mkPublic} onChange={() => setMkPublic(false)} disabled={!!mkBusy}/> Private</label>
+                  <label className="flex items-center gap-1.5 cursor-pointer"><input type="radio" checked={mkPublic} onChange={() => setMkPublic(true)} disabled={!!mkBusy}/> Public</label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {([["tags","Tags","tag1, tag2"],["productIds","Product IDs","id1, id2"],["angleCodes","Angle codes","ANGLE_1, ANGLE_2"],["marketTargets","Market targets","VN, US"],["languages","Languages","vi, en"]] as const).map(([k, label, ph]) => (
+                    <div key={k}>
+                      <label className="block text-xs mb-1" style={{color: t.textMuted}}>{label} <span className="opacity-70">(cách nhau dấu phẩy)</span></label>
+                      <input value={mkcMeta[k]} onChange={e => setMkcMeta(prev => ({...prev, [k]: e.target.value}))} placeholder={ph} disabled={!!mkBusy}
+                        className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {mkConn && mkModal === "template" && (
+              <>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{color: t.textMuted}}>Tên template *</label>
+                  <input value={mkTplName} onChange={e => setMkTplName(e.target.value)} disabled={!!mkBusy}
+                    placeholder="Không trùng template Google khác"
+                    className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                </div>
+                {mkBlocks.map((b, i) => (
+                  <div key={i} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold" style={{color: t.text}}>Khối {i + 1}</span>
+                      {mkBlocks.length > 1 && (
+                        <button onClick={() => setMkBlocks(prev => prev.filter((_, j) => j !== i))} className="text-[11px]" style={{color: t.textMuted}}>Xoá khối</button>
+                      )}
+                    </div>
+                    {(["headlines","descriptions"] as const).map(f => (
+                      <div key={f}>
+                        <div className="text-[11px] mb-1" style={{color: t.textMuted}}>{f === "headlines" ? "Headlines — mỗi dòng một câu, ≤30 ký tự" : "Descriptions — mỗi dòng một câu, ≤90 ký tự"}</div>
+                        <textarea value={b[f]} rows={f === "headlines" ? 4 : 3} disabled={!!mkBusy}
+                          onChange={e => setMkBlocks(prev => prev.map((x, j) => j === i ? {...x, [f]: e.target.value} : x))}
+                          className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500 resize-y" style={inputStyle}/>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <button onClick={() => setMkBlocks(prev => [...prev, {headlines:"",descriptions:""}])} disabled={!!mkBusy}
+                  className="text-xs px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>＋ Thêm khối</button>
+                {mkBlockErrors().length > 0 && (
+                  <div className="text-[11px] rounded-lg px-3 py-2 space-y-0.5" style={{backgroundColor:"#F59E0B14", color:"#F59E0B"}}>
+                    <div className="font-semibold">⚠️ Chưa đủ điều kiện tạo campaign:</div>
+                    {mkBlockErrors().map((e, i) => <div key={i}>• {e}</div>)}
+                  </div>
+                )}
+              </>
+            )}
+
+            {mkError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
+            {mkNote && <p className="text-xs bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
+
+            {mkConn && (
+              <div className="flex gap-3">
+                <button onClick={() => setMkModal(null)} disabled={!!mkBusy} className="px-4 py-2.5 rounded-xl border text-sm" style={{borderColor: t.border, color: t.textMuted}}>
+                  {mkNote.startsWith("✅") ? "Đóng" : "Huỷ"}
+                </button>
+                {!mkNote.startsWith("✅") && (mkModal === "creative" ? (
+                  <button onClick={mkUploadSelected} disabled={!!mkBusy || !abMkSel.length || abMkSel.some(k => !(mkcNames[k] || "").trim())}
+                    className="flex-1 text-sm font-semibold px-4 py-2.5 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{background: "linear-gradient(135deg,#059669,#10B981)"}}>
+                    {mkBusy === "creative" ? "⏳ Đang upload..." : Object.keys(mkcStatus).length ? "↻ Upload lại" : `🖼 Upload ${abMkSel.length} creative`}
+                  </button>
+                ) : (
+                  <button onClick={mkCreateTemplate} disabled={!!mkBusy || !mkTplName.trim() || mkBlockErrors().length > 0}
+                    className="flex-1 text-sm font-semibold px-4 py-2.5 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                    {mkBusy === "template" ? "⏳ Đang tạo..." : "📝 Tạo template"}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Lightbox */}
       {selectedPreview && (
