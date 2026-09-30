@@ -5,6 +5,10 @@ import { useSession, signOut } from "next-auth/react";
 import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
 import { generateAllBanners } from "@/lib/canvasGen";
+import Link from "next/link";
+import { useMktConnection } from "@/lib/useMktConnection";
+import MktUploadCreativeModal, { type CreativeSource } from "@/components/MktUploadCreativeModal";
+import MktAdTemplateModal from "@/components/MktAdTemplateModal";
 
 interface Brief {
   app_name: string; headline: string; subheadline: string; cta_text: string;
@@ -154,6 +158,23 @@ export default function Home() {
   const [deviceType, setDeviceType] = useState<"phone"|"tablet">("phone");
   const [devicePreviewIndex, setDevicePreviewIndex] = useState(0);
   const [selectedPreview, setSelectedPreview] = useState<Preview|null>(null);
+
+  // MKT System integration
+  const mktConn = useMktConnection();
+  const [genSelected, setGenSelected] = useState<string[]>([]);
+  const [agSelected, setAgSelected] = useState<string[]>([]);
+  const [adSelHeadlines, setAdSelHeadlines] = useState<string[]>([]);
+  const [adSelDescriptions, setAdSelDescriptions] = useState<string[]>([]);
+  const [mktCreativeSources, setMktCreativeSources] = useState<CreativeSource[]|null>(null);
+  const [mktTemplateOpen, setMktTemplateOpen] = useState(false);
+  const toggleIn = (setter: (fn: (prev: string[]) => string[]) => void, value: string) =>
+    setter(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
+  const openCreativeUpload = (list: Preview[], selectedKeys: string[], appName: string) => {
+    const chosen = list.filter(p => selectedKeys.includes(p.key));
+    if (chosen.length === 0) return;
+    const base = (appName || "banner").trim().replace(/\s+/g, "-");
+    setMktCreativeSources(chosen.map(p => ({ key: p.key, name: `${base}-${p.key}`, dataUrl: p.dataUrl, width: p.width, height: p.height })));
+  };
   const videoInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const iconInputRef = useRef<HTMLInputElement>(null);
@@ -312,7 +333,7 @@ export default function Home() {
     setAgStep("generating"); setAgError("");
     try {
       const generated = await generateAllBanners(agBrief, agScreenshot || null);
-      setAgPreviews(generated);
+      setAgPreviews(generated); setAgSelected([]);
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
       const top5 = zip.folder("top5")!;
@@ -504,7 +525,7 @@ export default function Home() {
 
   const handleAdCopyGenerate = async () => {
     if (!adcopyAppName.trim()) return;
-    setAdcopyLoading(true); setAdcopyResult(null);
+    setAdcopyLoading(true); setAdcopyResult(null); setAdSelHeadlines([]); setAdSelDescriptions([]);
     try {
       const res = await fetch("/api/adcopy", {
         method: "POST",
@@ -669,7 +690,7 @@ export default function Home() {
       const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
       const bgDataUrl = frames[bestIdx]?.dataUrl || null;
       const generated = await generateAllBanners(brief, bgDataUrl);
-      setPreviews(generated);
+      setPreviews(generated); setGenSelected([]);
 
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
@@ -884,6 +905,13 @@ export default function Home() {
         {ytAuthenticated && <span className="ml-auto w-2 h-2 rounded-full bg-green-400 flex-shrink-0"/>}
       </button>
     ))}
+    <Link href="/mkt-auth"
+      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
+      style={{color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}
+      title={mktConn ? `${mktConn.email} · hết hạn ${new Date(mktConn.expiresAt).toLocaleString("vi-VN")}` : "Chưa kết nối"}>
+      <span>🔗</span>MKT System
+      <span className={`ml-auto w-2 h-2 rounded-full flex-shrink-0 ${mktConn ? "bg-green-400" : "bg-slate-400/40"}`}/>
+    </Link>
     <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Nghiên cứu</div>
           {([
             ["competitor", "🔍", "Competitor Ads"],
@@ -1444,15 +1472,35 @@ export default function Home() {
             })()}
 
             {/* Banner grid */}
+            {activeTab !== "device" && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <button onClick={() => setGenSelected(prev => Array.from(new Set([...prev, ...displayedPreviews.map(p => p.key)])))}
+                className="px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>☑ Chọn tất cả</button>
+              {genSelected.length > 0 && (
+                <button onClick={() => setGenSelected([])} className="px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>Bỏ chọn</button>
+              )}
+              <span style={{color: t.textMuted}}>Đã chọn {genSelected.length} ảnh</span>
+              <button onClick={() => openCreativeUpload(previews, genSelected, brief.app_name)} disabled={genSelected.length === 0}
+                className="ml-auto bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-3 py-1.5 rounded-lg">
+                ⬆ Upload lên MKT ({genSelected.length})
+              </button>
+            </div>
+            )}
             {activeTab !== "device" && <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               {displayedPreviews.map(p=>{
                 const scale=Math.min(1,340/Math.max(p.width,p.height));
                 return (
                   <div key={p.key} onClick={()=>setSelectedPreview(p)}
-                    className="group rounded-2xl p-4 cursor-pointer transition-all border"
-                    style={{...cardStyle, transition:"box-shadow 0.2s, border-color 0.2s, background-color 0.2s"}}
+                    className="group relative rounded-2xl p-4 cursor-pointer transition-all border"
+                    style={{...cardStyle, transition:"box-shadow 0.2s, border-color 0.2s, background-color 0.2s", ...(genSelected.includes(p.key) && {borderColor:"#7C3AED"})}}
                     onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = genSelected.includes(p.key) ? "#7C3AED" : t.border; }}>
+                    <button type="button" onClick={e => { e.stopPropagation(); toggleIn(setGenSelected, p.key); }}
+                      aria-label="Chọn ảnh"
+                      className="absolute top-2 left-2 w-5 h-5 rounded border flex items-center justify-center text-[11px] font-bold z-10"
+                      style={{backgroundColor: genSelected.includes(p.key) ? "#7C3AED" : t.card, borderColor: genSelected.includes(p.key) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                      {genSelected.includes(p.key) ? "✓" : ""}
+                    </button>
                     <div className="flex items-center justify-center mb-3" style={{height:Math.round(p.height*scale)+16}}>
                       <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
                     </div>
@@ -1563,10 +1611,20 @@ export default function Home() {
                 <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
                   <div className="px-4 py-3 text-xs font-bold border-b flex items-center gap-2" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
                     📣 Headlines <span className="font-normal" style={{color: t.textMuted}}>(≤30 ký tự)</span>
+                    <button onClick={() => setAdSelHeadlines(adSelHeadlines.length === adcopyResult.headlines.length ? [] : [...adcopyResult.headlines])}
+                      className="ml-auto font-normal text-[11px]" style={{color: "#A78BFA"}}>
+                      {adSelHeadlines.length === adcopyResult.headlines.length ? "Bỏ chọn" : "Chọn tất cả"}
+                    </button>
                   </div>
                   {adcopyResult.headlines.map((h, i) => (
                     <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
+                      <button type="button" onClick={() => toggleIn(setAdSelHeadlines, h)} aria-label="Chọn"
+                        className="w-4 h-4 rounded border flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                        style={{backgroundColor: adSelHeadlines.includes(h) ? "#7C3AED" : "transparent", borderColor: adSelHeadlines.includes(h) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                        {adSelHeadlines.includes(h) ? "✓" : ""}
+                      </button>
                       <span className="text-sm flex-1" style={{color: t.text}}>{h}</span>
+                      <span className="text-[10px] flex-shrink-0" style={{color: h.length > 30 ? "#EF4444" : t.textMuted}}>{h.length}/30</span>
                       <button onClick={() => copyText(h)} className="text-xs px-2 py-0.5 rounded flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===h ? "#10B98122" : t.tabBg, color: adcopyCopied===h ? "#10B981" : t.textMuted}}>
                         {adcopyCopied===h ? "✓" : "copy"}
                       </button>
@@ -1574,12 +1632,22 @@ export default function Home() {
                   ))}
                 </div>
                 <div className="rounded-2xl border overflow-hidden" style={cardStyle}>
-                  <div className="px-4 py-3 text-xs font-bold border-b" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
+                  <div className="px-4 py-3 text-xs font-bold border-b flex items-center gap-2" style={{backgroundColor: t.tabBg, borderColor: t.border, color: t.text}}>
                     📝 Descriptions <span className="font-normal" style={{color: t.textMuted}}>(≤90 ký tự)</span>
+                    <button onClick={() => setAdSelDescriptions(adSelDescriptions.length === adcopyResult.descriptions.length ? [] : [...adcopyResult.descriptions])}
+                      className="ml-auto font-normal text-[11px]" style={{color: "#A78BFA"}}>
+                      {adSelDescriptions.length === adcopyResult.descriptions.length ? "Bỏ chọn" : "Chọn tất cả"}
+                    </button>
                   </div>
                   {adcopyResult.descriptions.map((d, i) => (
                     <div key={i} className="flex items-start justify-between px-4 py-2.5 gap-2 border-b last:border-0" style={{borderColor: t.border}}>
+                      <button type="button" onClick={() => toggleIn(setAdSelDescriptions, d)} aria-label="Chọn"
+                        className="w-4 h-4 rounded border flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                        style={{backgroundColor: adSelDescriptions.includes(d) ? "#7C3AED" : "transparent", borderColor: adSelDescriptions.includes(d) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                        {adSelDescriptions.includes(d) ? "✓" : ""}
+                      </button>
                       <span className="text-sm leading-relaxed flex-1" style={{color: t.text}}>{d}</span>
+                      <span className="text-[10px] mt-1 flex-shrink-0" style={{color: d.length > 90 ? "#EF4444" : t.textMuted}}>{d.length}/90</span>
                       <button onClick={() => copyText(d)} className="text-xs px-2 py-0.5 rounded mt-0.5 flex-shrink-0 transition-colors" style={{backgroundColor: adcopyCopied===d ? "#10B98122" : t.tabBg, color: adcopyCopied===d ? "#10B981" : t.textMuted}}>
                         {adcopyCopied===d ? "✓" : "copy"}
                       </button>
@@ -1597,6 +1665,10 @@ export default function Home() {
                     ))}
                   </div>
                 </div>
+                <button onClick={() => setMktTemplateOpen(true)} disabled={adSelHeadlines.length + adSelDescriptions.length === 0}
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm py-2.5 rounded-xl font-semibold">
+                  📋 Tạo ad template Google trên MKT ({adSelHeadlines.length} headline · {adSelDescriptions.length} description)
+                </button>
                 <button onClick={handleAdCopyGenerate} className="w-full text-sm py-2 rounded-xl border transition-colors" style={{borderColor: t.border, color: t.textMuted}}>🔄 Tạo lại</button>
               </div>
             )}
@@ -1825,15 +1897,33 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <button onClick={() => setAgSelected(prev => Array.from(new Set([...prev, ...agDisplayed.map(p => p.key)])))}
+                className="px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>☑ Chọn tất cả</button>
+              {agSelected.length > 0 && (
+                <button onClick={() => setAgSelected([])} className="px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>Bỏ chọn</button>
+              )}
+              <span style={{color: t.textMuted}}>Đã chọn {agSelected.length} ảnh</span>
+              <button onClick={() => openCreativeUpload(agPreviews, agSelected, agBrief?.app_name || "")} disabled={agSelected.length === 0}
+                className="ml-auto bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-3 py-1.5 rounded-lg">
+                ⬆ Upload lên MKT ({agSelected.length})
+              </button>
+            </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   {agDisplayed.map(p => {
                     const scale = Math.min(1, 340/Math.max(p.width, p.height));
                     return (
                       <div key={p.key} onClick={() => setSelectedPreview(p)}
-                        className="group rounded-2xl p-4 cursor-pointer transition-all border"
-                        style={cardStyle}
+                        className="group relative rounded-2xl p-4 cursor-pointer transition-all border"
+                        style={{...cardStyle, ...(agSelected.includes(p.key) && {borderColor:"#7C3AED"})}}
                         onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadowHover; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(139,92,246,0.4)"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = t.border; }}>
+                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = t.cardShadow; (e.currentTarget as HTMLDivElement).style.borderColor = agSelected.includes(p.key) ? "#7C3AED" : t.border; }}>
+                    <button type="button" onClick={e => { e.stopPropagation(); toggleIn(setAgSelected, p.key); }}
+                      aria-label="Chọn ảnh"
+                      className="absolute top-2 left-2 w-5 h-5 rounded border flex items-center justify-center text-[11px] font-bold z-10"
+                      style={{backgroundColor: agSelected.includes(p.key) ? "#7C3AED" : t.card, borderColor: agSelected.includes(p.key) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                      {agSelected.includes(p.key) ? "✓" : ""}
+                    </button>
                         <div className="flex items-center justify-center mb-3" style={{height: Math.round(p.height*scale)+16}}>
                           <img src={p.dataUrl} alt={p.label} style={{width:Math.round(p.width*scale),height:Math.round(p.height*scale)}} className="rounded shadow-lg"/>
                         </div>
@@ -2553,6 +2643,16 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+      {mktCreativeSources && (
+        <MktUploadCreativeModal sources={mktCreativeSources} t={t} onClose={() => setMktCreativeSources(null)} />
+      )}
+      {mktTemplateOpen && adcopyResult && (
+        <MktAdTemplateModal
+          headlines={adcopyResult.headlines.filter(h => adSelHeadlines.includes(h))}
+          descriptions={adcopyResult.descriptions.filter(d => adSelDescriptions.includes(d))}
+          defaultName={`${adcopyAppName.trim() || "App"} - Google Ad - ${adcopyCountry}`}
+          t={t} onClose={() => setMktTemplateOpen(false)} />
       )}
       </div>{/* end main content */}
       </div>{/* end inner flex */}
