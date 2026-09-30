@@ -1767,6 +1767,7 @@ export default function Home() {
         body: JSON.stringify({ name: mkTplName.trim(), adContents: mkParseBlocks() }),
       });
       setMkNote(`✅ Đã tạo template "${mkTplName.trim()}".`);
+      if (mkModal === "template") setSdBasket([]);
       setMkTplName("");
       await mkLoadTemplates();
     } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
@@ -1864,6 +1865,8 @@ export default function Home() {
   const [abMkSel, setAbMkSel] = useState<string[]>([]);
   const [sdSelH, setSdSelH] = useState<string[]>([]);
   const [sdSelD, setSdSelD] = useState<string[]>([]);
+  /** Content picked per keyword; each entry becomes a block of the template. */
+  const [sdBasket, setSdBasket] = useState<{keyword:string;headlines:string[];descriptions:string[]}[]>([]);
   const [mkcNames, setMkcNames] = useState<Record<string,string>>({});
   const [mkcMeta, setMkcMeta] = useState({ tags: "", productIds: "", angleCodes: "", marketTargets: "", languages: "" });
   const [mkcStatus, setMkcStatus] = useState<Record<string,string>>({});
@@ -1937,25 +1940,34 @@ export default function Home() {
     } finally { setMkBusy(""); }
   };
 
-  /** Blocks of ≤5 headlines; every block needs descriptions, so they repeat when fewer. */
+  /** Adds the current keyword's picks as a block; picking again for the same keyword replaces it. */
+  const sdAddToBasket = () => {
+    if (!sdCopy || (!sdSelH.length && !sdSelD.length)) return;
+    const entry = {
+      keyword: sdSelected || "(không keyword)",
+      headlines: sdCopy.headlines.filter(h => sdSelH.includes(h)),
+      descriptions: sdCopy.descriptions.filter(d => sdSelD.includes(d)),
+    };
+    setSdBasket(prev => prev.some(b => b.keyword === entry.keyword)
+      ? prev.map(b => b.keyword === entry.keyword ? entry : b)
+      : [...prev, entry]);
+  };
+
+  /** One block per keyword in the basket. A keyword with more than 5 headlines
+   *  is split evenly (6 → 3+3, not 5+1: a one-headline block blocks the campaign),
+   *  its descriptions going with every part. */
   const mkOpenTemplateModal = () => {
-    if (!sdCopy) return;
-    const hs = sdCopy.headlines.filter(h => sdSelH.includes(h));
-    const ds = sdCopy.descriptions.filter(d => sdSelD.includes(d));
-    // Even split into ceil(n/5) blocks, so 6 headlines become 3+3 rather than
-    // 5+1 — a one-headline block would block the campaign.
-    const chunk = (a: string[]) => {
-      const n = Math.ceil(a.length / 5), o: string[][] = [];
+    if (!sdBasket.length) return;
+    const split = (a: string[]) => {
+      const n = Math.max(1, Math.ceil(a.length / 5)), o: string[][] = [];
       for (let i = 0, at = 0; i < n; i++) { const size = Math.ceil((a.length - at) / (n - i)); o.push(a.slice(at, at + size)); at += size; }
       return o;
     };
-    const hc = chunk(hs), dc = chunk(ds);
-    const n = Math.max(hc.length, dc.length, 1);
-    setMkBlocks(Array.from({ length: n }, (_, i) => ({
-      headlines: (hc[i] || []).join("\n"),
-      descriptions: (dc[i] || dc[i % Math.max(dc.length, 1)] || []).join("\n"),
-    })));
-    setMkTplName(`${sdAppName || "App"} — ${sdSelected || "Google Ad"}`.slice(0, 80));
+    setMkBlocks(sdBasket.flatMap(b => {
+      const hc = split(b.headlines), dc = split(b.descriptions);
+      return hc.map((h, i) => ({ headlines: h.join("\n"), descriptions: (dc[i] || dc[0] || []).join("\n") }));
+    }));
+    setMkTplName(`${sdAppName || "App"} — ${sdBasket.map(b => b.keyword).join(", ")}`.slice(0, 80));
     setMkError(""); setMkNote("");
     setMkModal("template");
   };
@@ -3803,10 +3815,12 @@ export default function Home() {
                             <div className="flex items-center gap-2 pt-1">
                               <button onClick={() => { setSdSelH([...sdCopy.headlines]); setSdSelD([...sdCopy.descriptions]); }}
                                 className="text-[11px] px-2.5 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>☑ Chọn hết tiêu đề + mô tả</button>
-                              <button onClick={mkOpenTemplateModal} disabled={!sdSelH.length && !sdSelD.length}
+                              <button onClick={sdAddToBasket} disabled={!sdSelH.length && !sdSelD.length}
                                 className="flex-1 text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
                                 style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
-                                📝 Tạo ad template MKT ({sdSelH.length} tiêu đề · {sdSelD.length} mô tả)
+                                {sdBasket.some(b => b.keyword === sdSelected)
+                                  ? `↻ Cập nhật Khối ${sdBasket.findIndex(b => b.keyword === sdSelected) + 1} (${sdSelH.length} tiêu đề · ${sdSelD.length} mô tả)`
+                                  : `➕ Thêm vào template — Khối ${sdBasket.length + 1} (${sdSelH.length} tiêu đề · ${sdSelD.length} mô tả)`}
                               </button>
                             </div>
                           </div>
@@ -3814,6 +3828,31 @@ export default function Home() {
                       </>
                     )}
                   </div>
+
+                  {/* Template basket: survives switching keyword, one block per keyword */}
+                  {sdBasket.length > 0 && (
+                    <div className="p-4 border rounded-2xl space-y-2" style={{...cardStyle, borderColor:"#7C3AED66"}}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-bold" style={{color: t.text}}>📝 Ad template MKT — {sdBasket.length} khối</div>
+                        <button onClick={() => setSdBasket([])} className="text-[11px]" style={{color: t.textMuted}}>Xoá hết</button>
+                      </div>
+                      <div className="text-[11px]" style={{color: t.textMuted}}>Chọn keyword khác, tick content rồi bấm ➕ để thêm khối tiếp theo.</div>
+                      {sdBasket.map((b, i) => (
+                        <div key={b.keyword} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
+                          <span className="font-semibold flex-shrink-0" style={{color: "#A78BFA"}}>Khối {i + 1}</span>
+                          <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{b.keyword}</span>
+                          <span className="flex-shrink-0" style={{color: t.textMuted}}>{b.headlines.length} tiêu đề · {b.descriptions.length} mô tả</span>
+                          <button onClick={() => setSdBasket(prev => prev.filter((_, j) => j !== i))} title="Bỏ khối này"
+                            className="flex-shrink-0 px-1" style={{color: t.textMuted}}>✕</button>
+                        </div>
+                      ))}
+                      <button onClick={mkOpenTemplateModal}
+                        className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white"
+                        style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                        📝 Tạo ad template MKT ({sdBasket.length} khối)
+                      </button>
+                    </div>
+                  )}
 
                   {sdCopy && (
                     <div className="p-4 border rounded-2xl space-y-3" style={{...cardStyle, borderColor:"#10B98144"}}>
