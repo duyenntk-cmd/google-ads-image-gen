@@ -1692,9 +1692,9 @@ export default function Home() {
    * headline or no description — and then refuse to build a campaign from it.
    * Better to be stopped here than at launch.
    */
-  const mkBlockErrors = (): string[] => {
+  const mkValidate = (blocks: {headlines:string[];descriptions:string[]}[]): string[] => {
     const out: string[] = [];
-    mkParseBlocks().forEach((b, i) => {
+    blocks.forEach((b, i) => {
       const label = `Khối ${i + 1}`;
       const heads = Array.from(new Set(b.headlines));
       if (heads.length < 2) out.push(`${label}: cần ≥2 headline khác nhau (đang có ${heads.length}).`);
@@ -1706,6 +1706,7 @@ export default function Home() {
     });
     return out;
   };
+  const mkBlockErrors = (): string[] => mkValidate(mkParseBlocks());
 
   const mkFetchJson = async (url: string, init?: RequestInit) => {
     const res = await fetch(url, init);
@@ -1767,7 +1768,8 @@ export default function Home() {
         body: JSON.stringify({ name: mkTplName.trim(), adContents: mkParseBlocks() }),
       });
       setMkNote(`✅ Đã tạo template "${mkTplName.trim()}".`);
-      if (mkModal === "template") setSdBasket([]);
+      const origin = mkTplOriginRef.current;
+      if (origin) setSdLocTplDone(prev => ({ ...prev, [origin]: mkTplName.trim() }));
       setMkTplName("");
       await mkLoadTemplates();
     } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
@@ -1867,6 +1869,15 @@ export default function Home() {
   const [sdSelD, setSdSelD] = useState<string[]>([]);
   /** Content picked per keyword; each entry becomes a block of the template. */
   const [sdBasket, setSdBasket] = useState<{keyword:string;headlines:string[];descriptions:string[]}[]>([]);
+  /** What the Localize box translates: the copy on screen, or the picked blocks. */
+  const [sdLocSource, setSdLocSource] = useState<"copy"|"basket">("copy");
+  /** Localized blocks per market, same block order as the basket at the time. */
+  const [sdLocBlocks, setSdLocBlocks] = useState<{code:string;name:string;flag:string;language:string;keywords:string[];blocks:{headlines:string[];descriptions:string[]}[]}[]|null>(null);
+  /** Market code → name of the template created for it. */
+  const [sdLocTplDone, setSdLocTplDone] = useState<Record<string,string>>({});
+  /** Market code the open template modal was started from, if any. */
+  const mkTplOriginRef = useRef<string|null>(null);
+  const sdLocFromBasket = sdBasket.length > 0 && (sdLocSource === "basket" || !sdCopy);
   const [mkcNames, setMkcNames] = useState<Record<string,string>>({});
   const [mkcMeta, setMkcMeta] = useState({ tags: "", productIds: "", angleCodes: "", marketTargets: "", languages: "" });
   const [mkcStatus, setMkcStatus] = useState<Record<string,string>>({});
@@ -1948,28 +1959,110 @@ export default function Home() {
       headlines: sdCopy.headlines.filter(h => sdSelH.includes(h)),
       descriptions: sdCopy.descriptions.filter(d => sdSelD.includes(d)),
     };
+    setSdLocSource("basket");
     setSdBasket(prev => prev.some(b => b.keyword === entry.keyword)
       ? prev.map(b => b.keyword === entry.keyword ? entry : b)
       : [...prev, entry]);
   };
 
-  /** One block per keyword in the basket. A keyword with more than 5 headlines
-   *  is split evenly (6 → 3+3, not 5+1: a one-headline block blocks the campaign),
-   *  its descriptions going with every part. */
-  const mkOpenTemplateModal = () => {
-    if (!sdBasket.length) return;
+  /** One block per entry. An entry with more than 5 headlines is split evenly
+   *  (6 → 3+3, not 5+1: a one-headline block blocks the campaign), its
+   *  descriptions going with every part. */
+  const mkSplitBlocks = (entries: {headlines:string[];descriptions:string[]}[]) => {
     const split = (a: string[]) => {
       const n = Math.max(1, Math.ceil(a.length / 5)), o: string[][] = [];
       for (let i = 0, at = 0; i < n; i++) { const size = Math.ceil((a.length - at) / (n - i)); o.push(a.slice(at, at + size)); at += size; }
       return o;
     };
-    setMkBlocks(sdBasket.flatMap(b => {
+    return entries.flatMap(b => {
       const hc = split(b.headlines), dc = split(b.descriptions);
-      return hc.map((h, i) => ({ headlines: h.join("\n"), descriptions: (dc[i] || dc[0] || []).join("\n") }));
-    }));
-    setMkTplName(`${sdAppName || "App"} — ${sdBasket.map(b => b.keyword).join(", ")}`.slice(0, 80));
+      return hc.map((h, i) => ({ headlines: h, descriptions: dc[i] || dc[0] || [] }));
+    });
+  };
+
+  const mkOpenTemplateFor = (entries: {headlines:string[];descriptions:string[]}[], name: string, origin: string | null) => {
+    if (!entries.length) return;
+    setMkBlocks(mkSplitBlocks(entries).map(b => ({ headlines: b.headlines.join("\n"), descriptions: b.descriptions.join("\n") })));
+    setMkTplName(name.slice(0, 80));
+    mkTplOriginRef.current = origin;
     setMkError(""); setMkNote("");
     setMkModal("template");
+  };
+
+  const mkOpenTemplateModal = () =>
+    mkOpenTemplateFor(sdBasket, `${sdAppName || "App"} — ${sdBasket.map(b => b.keyword).join(", ")}`, null);
+
+  const sdLocTplName = (m: {code:string;keywords:string[]}) =>
+    `${sdAppName || "App"} — ${m.keywords.join(", ")} — ${m.code}`;
+
+  /**
+   * Localizes the picked blocks. One request per block, so each market's
+   * answer keeps exactly that block's lines instead of relying on the model
+   * to keep a flattened list in order.
+   */
+  const sdLocalizeBasket = async () => {
+    if (!sdBasket.length || !sdLocMarkets.length) return;
+    const basket = sdBasket;
+    setSdLocLoading(true); setSdError(""); setSdLocBlocks(null); setSdLocTplDone({}); setMkNote(""); setMkError("");
+    try {
+      const perBlock = await Promise.all(basket.map(async b => {
+        const res = await fetch("/api/localize", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            appName: sdAppName || sdUrl,
+            headlines: b.headlines, descriptions: b.descriptions, ctas: [],
+            markets: sdLocMarkets, sourceLanguage: sdLang,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(`Khối "${b.keyword}": ${data.error || "Localize thất bại."}`);
+        return (data.results || []) as LocalizeMarketResult[];
+      }));
+      const markets = LOCALIZE_MARKETS.filter(m => sdLocMarkets.includes(m.code)).map(m => {
+        const first = perBlock[0].find(r => r.code === m.code);
+        return {
+          code: m.code, name: m.name, flag: m.flag, language: first?.language || "",
+          keywords: basket.map(b => b.keyword),
+          blocks: perBlock.map(results => {
+            const r = results.find(x => x.code === m.code);
+            return { headlines: r?.headlines || [], descriptions: r?.descriptions || [] };
+          }),
+        };
+      });
+      setSdLocBlocks(markets);
+    } catch (e) {
+      setSdError("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSdLocLoading(false);
+    }
+  };
+
+  /** Creates one template per localized market straight away, skipping ones that fail the campaign rule. */
+  const sdCreateAllLocTemplates = async () => {
+    if (!sdLocBlocks) return;
+    if (!mkConn) { mkOpenTemplateFor(sdLocBlocks[0].blocks, sdLocTplName(sdLocBlocks[0]), sdLocBlocks[0].code); return; }
+    setMkBusy("loc-all"); setMkError(""); setMkNote("");
+    const done: string[] = [], failed: string[] = [];
+    for (const m of sdLocBlocks) {
+      if (sdLocTplDone[m.code]) continue;
+      const blocks = mkSplitBlocks(m.blocks);
+      const errs = mkValidate(blocks);
+      if (errs.length) { failed.push(`${m.flag} ${m.code}: ${errs.join("; ")}`); continue; }
+      try {
+        await mkFetchJson("/api/mkt/ad-templates", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: sdLocTplName(m), adContents: blocks }),
+        });
+        setSdLocTplDone(prev => ({ ...prev, [m.code]: sdLocTplName(m) }));
+        done.push(`${m.flag} ${m.code}`);
+      } catch (e) {
+        failed.push(`${m.flag} ${m.code}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (done.length) setMkNote(`✅ Đã tạo ${done.length} template: ${done.join(", ")}`);
+    if (failed.length) setMkError("❌ Chưa tạo được:\n" + failed.join("\n"));
+    setMkBusy("");
+    void mkLoadTemplates();
   };
 
   interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
@@ -3854,12 +3947,24 @@ export default function Home() {
                     </div>
                   )}
 
-                  {sdCopy && (
+                  {(sdCopy || sdBasket.length > 0) && (
                     <div className="p-4 border rounded-2xl space-y-3" style={{...cardStyle, borderColor:"#10B98144"}}>
                       <div>
                         <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
-                        <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>Dịch bộ copy này sang nhiều thị trường cùng lúc.</div>
+                        <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
+                          {sdLocFromBasket
+                            ? `Dịch ${sdBasket.length} khối đã chọn sang nhiều thị trường, giữ nguyên từng khối — mỗi thị trường tạo được 1 template.`
+                            : "Dịch bộ copy này sang nhiều thị trường cùng lúc."}
+                        </div>
                       </div>
+                      {sdCopy && sdBasket.length > 0 && (
+                        <div className="flex gap-1 rounded-lg p-1 w-fit text-[11px]" style={{backgroundColor: t.tabBg}}>
+                          {([["basket", `📝 ${sdBasket.length} khối đã chọn`], ["copy", "✍️ Bộ copy hiện tại"]] as const).map(([k, label]) => (
+                            <button key={k} onClick={() => setSdLocSource(k)} className="px-3 py-1 rounded-md font-medium"
+                              style={sdLocSource === k ? {backgroundColor: t.tabActive, color: t.text} : {color: t.textMuted}}>{label}</button>
+                          ))}
+                        </div>
+                      )}
                       <div ref={sdLocRef} className="relative">
                         <button type="button" onClick={() => { setSdLocOpen(o => !o); setSdLocSearch(""); }}
                           className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
@@ -3899,13 +4004,64 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                      <button onClick={sdLocalize} disabled={!sdLocMarkets.length || sdLocLoading}
+                      <button onClick={sdLocFromBasket ? sdLocalizeBasket : sdLocalize} disabled={!sdLocMarkets.length || sdLocLoading}
                         className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
                         style={{background: sdLocMarkets.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
-                        {sdLocLoading ? "⏳ Đang dịch..." : `🌏 Localize ${sdLocMarkets.length || ""} thị trường`}
+                        {sdLocLoading ? "⏳ Đang dịch..." : `🌏 Localize ${sdLocFromBasket ? `${sdBasket.length} khối · ` : ""}${sdLocMarkets.length || ""} thị trường`}
                       </button>
 
-                      {sdLocResults?.map(m => (
+                      {/* Localized blocks, one template per market */}
+                      {sdLocFromBasket && sdLocBlocks && sdLocBlocks.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px]" style={{color: t.textMuted}}>
+                              {Object.keys(sdLocTplDone).length}/{sdLocBlocks.length} thị trường đã có template
+                            </span>
+                            <button onClick={sdCreateAllLocTemplates} disabled={!!mkBusy || sdLocBlocks.every(m => sdLocTplDone[m.code])}
+                              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                              style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                              {mkBusy === "loc-all" ? "⏳ Đang tạo..." : `📝 Tạo tất cả (${sdLocBlocks.filter(m => !sdLocTplDone[m.code]).length} template)`}
+                            </button>
+                          </div>
+                          {!mkModal && mkError && <p className="text-amber-400 text-[11px] bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
+                          {!mkModal && mkNote && <p className="text-[11px] bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
+                          {sdLocBlocks.map(m => {
+                            const errs = mkValidate(mkSplitBlocks(m.blocks));
+                            return (
+                              <div key={m.code} className="rounded-xl border p-3 space-y-2" style={{borderColor: sdLocTplDone[m.code] ? "#10B98166" : t.border, backgroundColor: t.tabBg}}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-sm font-semibold" style={{color: t.text}}>{m.flag} {m.name} <span className="text-[11px] font-normal" style={{color: t.textMuted}}>· {m.language}</span></span>
+                                  {sdLocTplDone[m.code] ? (
+                                    <span className="text-[11px] font-semibold" style={{color:"#10B981"}}>✓ Đã tạo template</span>
+                                  ) : (
+                                    <button onClick={() => mkOpenTemplateFor(m.blocks, sdLocTplName(m), m.code)} disabled={!!mkBusy}
+                                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg text-white disabled:opacity-40"
+                                      style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>📝 Tạo template {m.code}</button>
+                                  )}
+                                </div>
+                                {m.blocks.map((b, i) => (
+                                  <div key={i} className="rounded-lg px-2 py-1.5" style={{backgroundColor: t.card}}>
+                                    <div className="text-[10px] font-semibold mb-0.5" style={{color: "#A78BFA"}}>Khối {i + 1} · {m.keywords[i]}</div>
+                                    {b.headlines.map((h, k) => (
+                                      <div key={`h${k}`} className="text-xs px-1 break-words flex gap-2" style={{color: t.text}}>
+                                        <span className="flex-1">• {h}</span><span className="text-[10px]" style={{color: h.length > 30 ? "#EF4444" : t.textMuted}}>{h.length}</span>
+                                      </div>
+                                    ))}
+                                    {b.descriptions.map((d, k) => (
+                                      <div key={`d${k}`} className="text-xs px-1 break-words flex gap-2" style={{color: t.textSub}}>
+                                        <span className="flex-1">– {d}</span><span className="text-[10px]" style={{color: d.length > 90 ? "#EF4444" : t.textMuted}}>{d.length}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))}
+                                {errs.length > 0 && <div className="text-[10px]" style={{color:"#F59E0B"}}>⚠️ {errs.join(" · ")}</div>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {!sdLocFromBasket && sdLocResults?.map(m => (
                         <div key={m.code} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-semibold" style={{color: t.text}}>{m.flag} {m.name} <span className="text-[11px] font-normal" style={{color: t.textMuted}}>· {m.language}</span></span>

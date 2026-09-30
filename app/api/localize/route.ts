@@ -106,9 +106,9 @@ Return ONLY a valid JSON array, no markdown, no explanation:
       name: market.name,
       language: market.language,
       flag: market.flag,
-      headlines: item.headlines.map(h => h.slice(0, 30)),
-      descriptions: item.descriptions.map(d => d.slice(0, 90)),
-      ctas: item.ctas.map(c => c.slice(0, 15)),
+      headlines: (item.headlines || []).map(h => h.slice(0, 30)),
+      descriptions: (item.descriptions || []).map(d => d.slice(0, 90)),
+      ctas: (item.ctas || []).map(c => c.slice(0, 15)),
     };
   });
 }
@@ -118,9 +118,10 @@ export async function POST(req: NextRequest) {
   if (unauth) return unauth;
   try {
     const body: LocalizeRequest = await req.json();
-    const { appName, headlines, descriptions, ctas, markets, sourceLanguage = "English" } = body;
+    const { appName, headlines, descriptions, ctas = [], markets, sourceLanguage = "English" } = body;
 
-    if (!appName || !headlines?.length || !descriptions?.length || !ctas?.length || !markets?.length) {
+    // CTAs are optional: an ad-template block has headlines and descriptions only.
+    if (!appName || !headlines?.length || !descriptions?.length || !markets?.length) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
