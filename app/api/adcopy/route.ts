@@ -25,14 +25,12 @@ ${marketCtx} ${langCtx}
 Generate Google Ads copy with strict character limits. Return ONLY valid JSON, no markdown:
 {
   "headlines": ["h1", "h2", "h3", "h4", "h5"],
-  "descriptions": ["d1", "d2", "d3", "d4", "d5"],
-  "ctas": ["cta1", "cta2", "cta3", "cta4", "cta5"]
+  "descriptions": ["d1", "d2", "d3", "d4", "d5"]
 }
 
 Rules:
 - headlines: exactly 5 items, each MAX 30 characters (count carefully). Varied angles: benefit, urgency, social proof, feature, emotional.
 - descriptions: exactly 5 items, each MAX 90 characters. Expand on the headline value proposition.
-- ctas: exactly 5 items, each MAX 15 characters. Action verbs (Download, Try Free, Get Started, Install Now, Open App).
 - All text must be in ${language || "English"}.
 - Make them compelling and relevant to ${country || "global"} users.`;
 
@@ -50,10 +48,10 @@ Rules:
     // Ensure minimum counts
     result.headlines = result.headlines || [];
     result.descriptions = result.descriptions || [];
-    result.ctas = result.ctas || [];
+    // No CTAs: an App campaign ad template takes headlines and descriptions only.
+    result.ctas = [];
     while (result.descriptions.length < 5) result.descriptions.push("Discover the app everyone is talking about. Download free today.");
     while (result.headlines.length < 5) result.headlines.push("Try It Free Today");
-    while (result.ctas.length < 5) result.ctas.push("Download Now");
     return NextResponse.json({ success: true, result });
   } catch (err) {
     console.error("AdCopy error:", err);
