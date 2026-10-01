@@ -688,6 +688,31 @@ const COUNTRY_DEFAULT_LANG: Record<string, string> = {
 const LANG_MARKET: Record<string,string> = Object.entries(COUNTRY_DEFAULT_LANG)
   .reduce((acc, [country, lang]) => (acc[lang] ? acc : { ...acc, [lang]: country }), {} as Record<string,string>);
 
+/* Codes for MKT template names, so "VI-VN" in MKT's search finds every
+ * Vietnamese template. Language + market, ISO 639-1 / ISO 3166-1. */
+const LANG_ISO: Record<string,string> = {
+  English: "EN", Vietnamese: "VI", Indonesian: "ID", Thai: "TH", Korean: "KO", Japanese: "JA",
+  "Chinese Simplified": "ZH", Arabic: "AR", Spanish: "ES", Portuguese: "PT", Russian: "RU",
+  French: "FR", German: "DE", Hindi: "HI", Bengali: "BN", Filipino: "TL", Malay: "MS",
+};
+const COUNTRY_ISO: Record<string,string> = {
+  Vietnam: "VN", Indonesia: "ID", Thailand: "TH", Philippines: "PH", Malaysia: "MY", Singapore: "SG",
+  Myanmar: "MM", Cambodia: "KH", Japan: "JP", "South Korea": "KR", China: "CN", Taiwan: "TW",
+  "Hong Kong": "HK", India: "IN", Pakistan: "PK", Bangladesh: "BD", "Sri Lanka": "LK",
+  "Saudi Arabia": "SA", UAE: "AE", Egypt: "EG", Turkey: "TR", Israel: "IL", Iraq: "IQ",
+  USA: "US", Canada: "CA", Mexico: "MX", Brazil: "BR", Argentina: "AR", Colombia: "CO",
+  Chile: "CL", Peru: "PE", Germany: "DE", France: "FR", "United Kingdom": "GB", Italy: "IT",
+  Spain: "ES", Netherlands: "NL", Poland: "PL", Sweden: "SE", Norway: "NO", Denmark: "DK",
+  Finland: "FI", Belgium: "BE", Switzerland: "CH", Austria: "AT", Portugal: "PT", Greece: "GR",
+  Ukraine: "UA", Russia: "RU", Australia: "AU", "New Zealand": "NZ", Nigeria: "NG",
+  "South Africa": "ZA", Kenya: "KE", Ethiopia: "ET", Ghana: "GH",
+};
+/** Language each Localize market is translated into. */
+const MARKET_LANG_ISO: Record<string,string> = {
+  VN: "VI", ID: "ID", TH: "TH", PH: "TL", MY: "MS", SG: "EN", KR: "KO", JP: "JA", TW: "ZH",
+  CN: "ZH", SA: "AR", BD: "BN", BR: "PT", DE: "DE", FR: "FR", ES: "ES", US: "EN", IN: "HI",
+};
+
 const COUNTRIES = [
   { code: "Global",           label: "🌍 Global (Universal)" },
   // Southeast Asia
@@ -1538,7 +1563,6 @@ export default function Home() {
   const [sdLocSearch, setSdLocSearch] = useState("");
   const [sdLocMarkets, setSdLocMarkets] = useState<string[]>([]);
   const [sdLocLoading, setSdLocLoading] = useState(false);
-  const [sdLocResults, setSdLocResults] = useState<LocalizeMarketResult[]|null>(null);
   const sdLocRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1574,7 +1598,7 @@ export default function Home() {
     if (!sdUrl.trim()) return;
     if (more) setSdMoreLoading(true); else setSdLoading(true);
     setSdError("");
-    if (!more) { setSdKeywords([]); setSdSelected(""); setSdCopy(null); setSdLocResults(null); }
+    if (!more) { setSdKeywords([]); setSdSelected(""); setSdCopy(null); }
     try {
       const res = await fetch("/api/keywords", {
         method: "POST",
@@ -1604,7 +1628,7 @@ export default function Home() {
   const sdGenerateCopy = async (keyword: string) => {
     setSdSelected(keyword);
     setSdCopyLoading(true);
-    setSdCopy(null); setSdLocResults(null); setSdError(""); setSdSelH([]); setSdSelD([]);
+    setSdCopy(null); setSdError(""); setSdSelH([]); setSdSelD([]);
     try {
       const res = await fetch("/api/adcopy", {
         method: "POST",
@@ -1626,29 +1650,6 @@ export default function Home() {
       setSdError("❌ " + (e instanceof Error ? e.message : String(e)));
     } finally {
       setSdCopyLoading(false);
-    }
-  };
-
-  const sdLocalize = async () => {
-    if (!sdCopy || !sdLocMarkets.length) return;
-    setSdLocLoading(true); setSdError(""); setSdLocResults(null);
-    try {
-      const res = await fetch("/api/localize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName: sdAppName || sdUrl,
-          headlines: sdCopy.headlines, descriptions: sdCopy.descriptions, ctas: [],
-          markets: sdLocMarkets, sourceLanguage: sdLang,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Localize thất bại.");
-      setSdLocResults(data.results || []);
-    } catch (e) {
-      setSdError("❌ " + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setSdLocLoading(false);
     }
   };
 
@@ -1869,15 +1870,12 @@ export default function Home() {
   const [sdSelD, setSdSelD] = useState<string[]>([]);
   /** Content picked per keyword; each entry becomes a block of the template. */
   const [sdBasket, setSdBasket] = useState<{keyword:string;headlines:string[];descriptions:string[]}[]>([]);
-  /** What the Localize box translates: the copy on screen, or the picked blocks. */
-  const [sdLocSource, setSdLocSource] = useState<"copy"|"basket">("copy");
   /** Localized blocks per market, same block order as the basket at the time. */
   const [sdLocBlocks, setSdLocBlocks] = useState<{code:string;name:string;flag:string;language:string;keywords:string[];blocks:{headlines:string[];descriptions:string[]}[]}[]|null>(null);
   /** Market code → name of the template created for it. */
   const [sdLocTplDone, setSdLocTplDone] = useState<Record<string,string>>({});
   /** Market code the open template modal was started from, if any. */
   const mkTplOriginRef = useRef<string|null>(null);
-  const sdLocFromBasket = sdBasket.length > 0 && (sdLocSource === "basket" || !sdCopy);
   const [mkcNames, setMkcNames] = useState<Record<string,string>>({});
   const [mkcMeta, setMkcMeta] = useState({ tags: "", productIds: "", angleCodes: "", marketTargets: "", languages: "" });
   const [mkcStatus, setMkcStatus] = useState<Record<string,string>>({});
@@ -1959,7 +1957,6 @@ export default function Home() {
       headlines: sdCopy.headlines.filter(h => sdSelH.includes(h)),
       descriptions: sdCopy.descriptions.filter(d => sdSelD.includes(d)),
     };
-    setSdLocSource("basket");
     setSdBasket(prev => prev.some(b => b.keyword === entry.keyword)
       ? prev.map(b => b.keyword === entry.keyword ? entry : b)
       : [...prev, entry]);
@@ -1989,11 +1986,31 @@ export default function Home() {
     setMkModal("template");
   };
 
-  const mkOpenTemplateModal = () =>
-    mkOpenTemplateFor(sdBasket, `${sdAppName || "App"} — ${sdBasket.map(b => b.keyword).join(", ")}`, null);
+  /**
+   * Template names: "App | VI-VN | keyword +1 | 251001-1430".
+   * The language-market tag sits in its own slot so typing "VI-VN" (or just
+   * "VI-") in MKT System's template search lists every template for it; the
+   * stamp keeps names unique, which MKT System requires.
+   */
+  const mkBuildTplName = (tag: string, keywords: string[], stamp: string) => {
+    const app = (sdAppName || "App").trim().slice(0, 24);
+    const kw = keywords.length ? keywords[0].slice(0, 28) + (keywords.length > 1 ? ` +${keywords.length - 1}` : "") : "copy";
+    return `${app} | ${tag} | ${kw} | ${stamp}`;
+  };
+  const mkStamp = () => {
+    const d = new Date(), p = (n: number) => String(n).padStart(2, "0");
+    return `${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  };
+  /** Tag of the copy as written: its language and the market picked for it. */
+  const sdSourceTag = () => `${LANG_ISO[sdLang] || "XX"}-${COUNTRY_ISO[sdCountry] || "GLOBAL"}`;
 
+  const mkOpenTemplateModal = () =>
+    mkOpenTemplateFor(sdBasket, mkBuildTplName(sdSourceTag(), sdBasket.map(b => b.keyword), mkStamp()), null);
+
+  /** One stamp per localize run, so a market's templates sort and search together. */
+  const sdLocStampRef = useRef("");
   const sdLocTplName = (m: {code:string;keywords:string[]}) =>
-    `${sdAppName || "App"} — ${m.keywords.join(", ")} — ${m.code}`;
+    mkBuildTplName(`${MARKET_LANG_ISO[m.code] || "XX"}-${m.code}`, m.keywords, sdLocStampRef.current || mkStamp());
 
   /**
    * Localizes the picked blocks. One request per block, so each market's
@@ -2004,6 +2021,7 @@ export default function Home() {
     if (!sdBasket.length || !sdLocMarkets.length) return;
     const basket = sdBasket;
     setSdLocLoading(true); setSdError(""); setSdLocBlocks(null); setSdLocTplDone({}); setMkNote(""); setMkError("");
+    sdLocStampRef.current = mkStamp();
     try {
       const perBlock = await Promise.all(basket.map(async b => {
         const res = await fetch("/api/localize", {
@@ -3952,19 +3970,11 @@ export default function Home() {
                       <div>
                         <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
                         <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
-                          {sdLocFromBasket
+                          {sdBasket.length
                             ? `Dịch ${sdBasket.length} khối đã chọn sang nhiều thị trường, giữ nguyên từng khối — mỗi thị trường tạo được 1 template.`
-                            : "Dịch bộ copy này sang nhiều thị trường cùng lúc."}
+                            : "Tick tiêu đề / mô tả rồi bấm ➕ Thêm vào template trước — localize dịch theo các khối đã chọn."}
                         </div>
                       </div>
-                      {sdCopy && sdBasket.length > 0 && (
-                        <div className="flex gap-1 rounded-lg p-1 w-fit text-[11px]" style={{backgroundColor: t.tabBg}}>
-                          {([["basket", `📝 ${sdBasket.length} khối đã chọn`], ["copy", "✍️ Bộ copy hiện tại"]] as const).map(([k, label]) => (
-                            <button key={k} onClick={() => setSdLocSource(k)} className="px-3 py-1 rounded-md font-medium"
-                              style={sdLocSource === k ? {backgroundColor: t.tabActive, color: t.text} : {color: t.textMuted}}>{label}</button>
-                          ))}
-                        </div>
-                      )}
                       <div ref={sdLocRef} className="relative">
                         <button type="button" onClick={() => { setSdLocOpen(o => !o); setSdLocSearch(""); }}
                           className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
@@ -4004,14 +4014,14 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                      <button onClick={sdLocFromBasket ? sdLocalizeBasket : sdLocalize} disabled={!sdLocMarkets.length || sdLocLoading}
+                      <button onClick={sdLocalizeBasket} disabled={!sdBasket.length || !sdLocMarkets.length || sdLocLoading}
                         className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
-                        style={{background: sdLocMarkets.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
-                        {sdLocLoading ? "⏳ Đang dịch..." : `🌏 Localize ${sdLocFromBasket ? `${sdBasket.length} khối · ` : ""}${sdLocMarkets.length || ""} thị trường`}
+                        style={{background: sdBasket.length && sdLocMarkets.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
+                        {sdLocLoading ? "⏳ Đang dịch..." : !sdBasket.length ? "🌏 Thêm ít nhất 1 khối để localize" : `🌏 Localize ${sdBasket.length} khối · ${sdLocMarkets.length || ""} thị trường`}
                       </button>
 
                       {/* Localized blocks, one template per market */}
-                      {sdLocFromBasket && sdLocBlocks && sdLocBlocks.length > 0 && (
+                      {sdLocBlocks && sdLocBlocks.length > 0 && (
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-[11px]" style={{color: t.textMuted}}>
@@ -4060,24 +4070,6 @@ export default function Home() {
                           })}
                         </div>
                       )}
-
-                      {!sdLocFromBasket && sdLocResults?.map(m => (
-                        <div key={m.code} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold" style={{color: t.text}}>{m.flag} {m.name} <span className="text-[11px] font-normal" style={{color: t.textMuted}}>· {m.language}</span></span>
-                            <button onClick={() => sdCopyText([...m.headlines, ...m.descriptions].join("\n"), `loc-${m.code}`)}
-                              className="text-[11px]" style={{color:"#7C3AED"}}>{sdCopied === `loc-${m.code}` ? "✓ Đã chép" : "Chép hết"}</button>
-                          </div>
-                          {([["Tiêu đề", m.headlines], ["Mô tả", m.descriptions]] as [string,string[]][]).map(([label, items]) => (
-                            <div key={label}>
-                              <div className="text-[10px] font-semibold mb-0.5" style={{color: t.textMuted}}>{label}</div>
-                              {items.map((item, i) => (
-                                <div key={i} className="text-xs px-2 py-1 break-words" style={{color: t.text}}>• {item}</div>
-                              ))}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
                     </div>
                   )}
                 </div>
@@ -4607,6 +4599,9 @@ export default function Home() {
                   <input value={mkTplName} onChange={e => setMkTplName(e.target.value)} disabled={!!mkBusy}
                     placeholder="Không trùng template Google khác"
                     className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                  <div className="text-[10px] mt-1" style={{color: t.textMuted}}>
+                    Định dạng: <b>App | NGÔN NGỮ-THỊ TRƯỜNG | keyword | ngày-giờ</b>. Trên MKT System gõ mã như &ldquo;VI-VN&rdquo; vào ô tìm để lọc theo ngôn ngữ.
+                  </div>
                 </div>
                 {mkBlocks.map((b, i) => (
                   <div key={i} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
