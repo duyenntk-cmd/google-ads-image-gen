@@ -1638,7 +1638,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           appName: sdAppName || sdUrl,
-          headlines: sdCopy.headlines, descriptions: sdCopy.descriptions, ctas: sdCopy.ctas,
+          headlines: sdCopy.headlines, descriptions: sdCopy.descriptions, ctas: [],
           markets: sdLocMarkets, sourceLanguage: sdLang,
         }),
       });
@@ -3873,7 +3873,7 @@ export default function Home() {
 
                         {sdCopy && (
                           <div className="space-y-3">
-                            {([["Tiêu đề", sdCopy.headlines, 30], ["Mô tả", sdCopy.descriptions, 90], ["CTA", sdCopy.ctas, 15]] as [string,string[],number][]).map(([label, items, limit]) => (
+                            {([["Tiêu đề", sdCopy.headlines, 30], ["Mô tả", sdCopy.descriptions, 90]] as [string,string[],number][]).map(([label, items, limit]) => (
                               <div key={label} className="space-y-1">
                                 <div className="flex items-center justify-between">
                                   <span className="text-[11px] font-semibold" style={{color: t.textSub}}>{label} (tối đa {limit} ký tự)</span>
@@ -4065,10 +4065,10 @@ export default function Home() {
                         <div key={m.code} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-semibold" style={{color: t.text}}>{m.flag} {m.name} <span className="text-[11px] font-normal" style={{color: t.textMuted}}>· {m.language}</span></span>
-                            <button onClick={() => sdCopyText([...m.headlines, ...m.descriptions, ...m.ctas].join("\n"), `loc-${m.code}`)}
+                            <button onClick={() => sdCopyText([...m.headlines, ...m.descriptions].join("\n"), `loc-${m.code}`)}
                               className="text-[11px]" style={{color:"#7C3AED"}}>{sdCopied === `loc-${m.code}` ? "✓ Đã chép" : "Chép hết"}</button>
                           </div>
-                          {([["Tiêu đề", m.headlines], ["Mô tả", m.descriptions], ["CTA", m.ctas]] as [string,string[]][]).map(([label, items]) => (
+                          {([["Tiêu đề", m.headlines], ["Mô tả", m.descriptions]] as [string,string[]][]).map(([label, items]) => (
                             <div key={label}>
                               <div className="text-[10px] font-semibold mb-0.5" style={{color: t.textMuted}}>{label}</div>
                               {items.map((item, i) => (
