@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 30;
 
@@ -32,8 +33,10 @@ async function lookupAppMeta(url: string): Promise<string> {
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
-    const { appName, appUrl, country, language } = await req.json();
+    const { appName, appUrl, country, language, exclude } = await req.json();
 
     let appContext = appName || "";
     if (appUrl?.trim().startsWith("http")) {
@@ -72,6 +75,9 @@ Generate exactly 20 high-quality Google Ads keywords for this mobile app. Return
   ]
 }
 
+${Array.isArray(exclude) && exclude.length
+  ? `ALREADY SUGGESTED — do not repeat any of these, and do not offer near-duplicates of them. Find genuinely different angles:\n${exclude.slice(0, 200).map((k: string) => `- ${k}`).join("\n")}\n`
+  : ""}
 Rules:
 - Mix of: branded (app name variants), category, feature-based, competitor, problem-solution keywords
 - monthly_searches: use ranges like "1K-10K", "10K-100K", "100K-1M", "1M+"

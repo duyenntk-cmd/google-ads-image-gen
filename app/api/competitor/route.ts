@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 
@@ -23,6 +24,8 @@ async function stFetch(path: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     if (!AUTH) return NextResponse.json({ success: false, error: "SENSORTOWER_API_KEY not configured" }, { status: 500 });
 
