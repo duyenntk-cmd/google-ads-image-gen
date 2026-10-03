@@ -688,13 +688,7 @@ const COUNTRY_DEFAULT_LANG: Record<string, string> = {
 const LANG_MARKET: Record<string,string> = Object.entries(COUNTRY_DEFAULT_LANG)
   .reduce((acc, [country, lang]) => (acc[lang] ? acc : { ...acc, [lang]: country }), {} as Record<string,string>);
 
-/* Codes for MKT template names, so "VI-VN" in MKT's search finds every
- * Vietnamese template. Language + market, ISO 639-1 / ISO 3166-1. */
-const LANG_ISO: Record<string,string> = {
-  English: "EN", Vietnamese: "VI", Indonesian: "ID", Thai: "TH", Korean: "KO", Japanese: "JA",
-  "Chinese Simplified": "ZH", Arabic: "AR", Spanish: "ES", Portuguese: "PT", Russian: "RU",
-  French: "FR", German: "DE", Hindi: "HI", Bengali: "BN", Filipino: "TL", Malay: "MS",
-};
+/** ISO 3166-1 market codes for MKT creative tags and template names. */
 const COUNTRY_ISO: Record<string,string> = {
   Vietnam: "VN", Indonesia: "ID", Thailand: "TH", Philippines: "PH", Malaysia: "MY", Singapore: "SG",
   Myanmar: "MM", Cambodia: "KH", Japan: "JP", "South Korea": "KR", China: "CN", Taiwan: "TW",
@@ -707,12 +701,6 @@ const COUNTRY_ISO: Record<string,string> = {
   Ukraine: "UA", Russia: "RU", Australia: "AU", "New Zealand": "NZ", Nigeria: "NG",
   "South Africa": "ZA", Kenya: "KE", Ethiopia: "ET", Ghana: "GH",
 };
-/** Language each Localize market is translated into. */
-const MARKET_LANG_ISO: Record<string,string> = {
-  VN: "VI", ID: "ID", TH: "TH", PH: "TL", MY: "MS", SG: "EN", KR: "KO", JP: "JA", TW: "ZH",
-  CN: "ZH", SA: "AR", BD: "BN", BR: "PT", DE: "DE", FR: "FR", ES: "ES", US: "EN", IN: "HI",
-};
-
 const COUNTRIES = [
   { code: "Global",           label: "🌍 Global (Universal)" },
   // Southeast Asia
@@ -1741,6 +1729,8 @@ export default function Home() {
       setMkConn({ email: d.email, expiresAt: d.expiresAt });
       setMkCode("");
       await mkLoadTemplates();
+      const build = mkTplNameBuilderRef.current;
+      if (mkModal === "template" && build) setMkTplName(build(await sdEnsureGen()));
     } catch (e) { setMkError("❌ " + (e instanceof Error ? e.message : String(e))); }
     finally { setMkBusy(""); }
   };
@@ -1886,9 +1876,35 @@ export default function Home() {
   const mkToggle = (setter: (fn: (prev: string[]) => string[]) => void, v: string) =>
     setter(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
 
-  const mkOpenCreativeModal = () => {
+  /** Local date as 20261002 — the day tag on creatives and the prefix of template names. */
+  const mkToday = () => {
+    const d = new Date(), p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+  };
+
+  /**
+   * Which AI Banner run of the day the picked banners come from: run ids are
+   * "run_" + base-36 creation time, so today's runs sort by it. A run that was
+   * not stored (storage blocked) counts as the next one.
+   */
+  const abGenOfToday = async (): Promise<number> => {
+    const runTime = (id: string) => parseInt(id.replace(/^run_/, ""), 36);
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    try {
+      const today = (await abListRuns())
+        .map(r => r.id).filter(id => runTime(id) >= start.getTime())
+        .sort((a, b) => runTime(a) - runTime(b));
+      const i = today.indexOf(abRunIdRef.current);
+      return i >= 0 ? i + 1 : today.length + 1;
+    } catch { return 1; }
+  };
+
+  const mkOpenCreativeModal = async () => {
     const base = (abBrief?.app_name || "banner").trim().replace(/\s+/g, "-");
     setMkcNames(Object.fromEntries(abMkSel.map(k => [k, `${base}-${k}`])));
+    // Day, gen and market go in as tags; prefilled so they can be checked or edited.
+    const tags = [mkToday(), `Gen${await abGenOfToday()}`, COUNTRY_ISO[abCountry] || "GLOBAL"];
+    setMkcMeta(prev => ({ ...prev, tags: tags.join(", ") }));
     setMkcStatus({}); mkcPreparedRef.current = {}; mkcIdemRef.current = null;
     setMkError(""); setMkNote("");
     setMkModal("creative");
@@ -1957,6 +1973,7 @@ export default function Home() {
       headlines: sdCopy.headlines.filter(h => sdSelH.includes(h)),
       descriptions: sdCopy.descriptions.filter(d => sdSelD.includes(d)),
     };
+    sdResetGen();
     setSdBasket(prev => prev.some(b => b.keyword === entry.keyword)
       ? prev.map(b => b.keyword === entry.keyword ? entry : b)
       : [...prev, entry]);
@@ -1979,6 +1996,7 @@ export default function Home() {
 
   const mkOpenTemplateFor = (entries: {headlines:string[];descriptions:string[]}[], name: string, origin: string | null) => {
     if (!entries.length) return;
+    if (!name.match(/^\d{8}_Gen\d+_/)) mkTplNameBuilderRef.current = null;
     setMkBlocks(mkSplitBlocks(entries).map(b => ({ headlines: b.headlines.join("\n"), descriptions: b.descriptions.join("\n") })));
     setMkTplName(name.slice(0, 80));
     mkTplOriginRef.current = origin;
@@ -1987,30 +2005,42 @@ export default function Home() {
   };
 
   /**
-   * Template names: "App | VI-VN | keyword +1 | 251001-1430".
-   * The language-market tag sits in its own slot so typing "VI-VN" (or just
-   * "VI-") in MKT System's template search lists every template for it; the
-   * stamp keeps names unique, which MKT System requires.
+   * Template names: "20261002_Gen1_VN" — day, which batch of that day, market.
+   * One basket is one batch: its source template and every localized market
+   * share the Gen number and differ by market. The number is the day's highest
+   * Gen already on MKT System plus one, so two machines do not collide and
+   * names stay unique, as MKT System requires.
    */
-  const mkBuildTplName = (tag: string, keywords: string[], stamp: string) => {
-    const app = (sdAppName || "App").trim().slice(0, 24);
-    const kw = keywords.length ? keywords[0].slice(0, 28) + (keywords.length > 1 ? ` +${keywords.length - 1}` : "") : "copy";
-    return `${app} | ${tag} | ${kw} | ${stamp}`;
+  const sdGenRef = useRef<{ date: string; n: number } | null>(null);
+  const sdResetGen = () => { sdGenRef.current = null; };
+  const sdEnsureGen = async (): Promise<number> => {
+    const date = mkToday();
+    if (sdGenRef.current?.date === date) return sdGenRef.current.n;
+    try {
+      const d = await mkFetchJson(`/api/mkt/ad-templates?search=${date}&page=1&pageSize=100`);
+      let max = 0;
+      for (const tpl of (d.items || []) as MktTemplate[]) {
+        const m = /^(\d{8})_Gen(\d+)_/i.exec(tpl.name || "");
+        if (m && m[1] === date) max = Math.max(max, Number(m[2]));
+      }
+      sdGenRef.current = { date, n: max + 1 };
+      return max + 1;
+    } catch {
+      // Not connected yet: a guess, not cached, so it is redone after connecting.
+      return 1;
+    }
   };
-  const mkStamp = () => {
-    const d = new Date(), p = (n: number) => String(n).padStart(2, "0");
-    return `${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  const sdTplNameFor = (market: string, n: number) => `${mkToday()}_Gen${n}_${market}`;
+  /** Rebuilds the open modal's name once the real Gen number is known (e.g. after connecting). */
+  const mkTplNameBuilderRef = useRef<((n: number) => string) | null>(null);
+
+  const sdOpenTemplate = async (entries: {headlines:string[];descriptions:string[]}[], market: string, origin: string | null) => {
+    const build = (n: number) => sdTplNameFor(market, n);
+    mkTplNameBuilderRef.current = build;
+    mkOpenTemplateFor(entries, build(await sdEnsureGen()), origin);
   };
-  /** Tag of the copy as written: its language and the market picked for it. */
-  const sdSourceTag = () => `${LANG_ISO[sdLang] || "XX"}-${COUNTRY_ISO[sdCountry] || "GLOBAL"}`;
 
-  const mkOpenTemplateModal = () =>
-    mkOpenTemplateFor(sdBasket, mkBuildTplName(sdSourceTag(), sdBasket.map(b => b.keyword), mkStamp()), null);
-
-  /** One stamp per localize run, so a market's templates sort and search together. */
-  const sdLocStampRef = useRef("");
-  const sdLocTplName = (m: {code:string;keywords:string[]}) =>
-    mkBuildTplName(`${MARKET_LANG_ISO[m.code] || "XX"}-${m.code}`, m.keywords, sdLocStampRef.current || mkStamp());
+  const mkOpenTemplateModal = () => sdOpenTemplate(sdBasket, COUNTRY_ISO[sdCountry] || "GLOBAL", null);
 
   /**
    * Localizes the picked blocks. One request per block, so each market's
@@ -2021,7 +2051,6 @@ export default function Home() {
     if (!sdBasket.length || !sdLocMarkets.length) return;
     const basket = sdBasket;
     setSdLocLoading(true); setSdError(""); setSdLocBlocks(null); setSdLocTplDone({}); setMkNote(""); setMkError("");
-    sdLocStampRef.current = mkStamp();
     try {
       const perBlock = await Promise.all(basket.map(async b => {
         const res = await fetch("/api/localize", {
@@ -2058,9 +2087,10 @@ export default function Home() {
   /** Creates one template per localized market straight away, skipping ones that fail the campaign rule. */
   const sdCreateAllLocTemplates = async () => {
     if (!sdLocBlocks) return;
-    if (!mkConn) { mkOpenTemplateFor(sdLocBlocks[0].blocks, sdLocTplName(sdLocBlocks[0]), sdLocBlocks[0].code); return; }
+    if (!mkConn) { void sdOpenTemplate(sdLocBlocks[0].blocks, sdLocBlocks[0].code, sdLocBlocks[0].code); return; }
     setMkBusy("loc-all"); setMkError(""); setMkNote("");
     const done: string[] = [], failed: string[] = [];
+    const gen = await sdEnsureGen();
     for (const m of sdLocBlocks) {
       if (sdLocTplDone[m.code]) continue;
       const blocks = mkSplitBlocks(m.blocks);
@@ -2069,9 +2099,9 @@ export default function Home() {
       try {
         await mkFetchJson("/api/mkt/ad-templates", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: sdLocTplName(m), adContents: blocks }),
+          body: JSON.stringify({ name: sdTplNameFor(m.code, gen), adContents: blocks }),
         });
-        setSdLocTplDone(prev => ({ ...prev, [m.code]: sdLocTplName(m) }));
+        setSdLocTplDone(prev => ({ ...prev, [m.code]: sdTplNameFor(m.code, gen) }));
         done.push(`${m.flag} ${m.code}`);
       } catch (e) {
         failed.push(`${m.flag} ${m.code}: ${e instanceof Error ? e.message : String(e)}`);
@@ -3945,7 +3975,7 @@ export default function Home() {
                     <div className="p-4 border rounded-2xl space-y-2" style={{...cardStyle, borderColor:"#7C3AED66"}}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-sm font-bold" style={{color: t.text}}>📝 Ad template MKT — {sdBasket.length} khối</div>
-                        <button onClick={() => setSdBasket([])} className="text-[11px]" style={{color: t.textMuted}}>Xoá hết</button>
+                        <button onClick={() => { setSdBasket([]); sdResetGen(); }} className="text-[11px]" style={{color: t.textMuted}}>Xoá hết</button>
                       </div>
                       <div className="text-[11px]" style={{color: t.textMuted}}>Chọn keyword khác, tick content rồi bấm ➕ để thêm khối tiếp theo.</div>
                       {sdBasket.map((b, i) => (
@@ -3953,7 +3983,7 @@ export default function Home() {
                           <span className="font-semibold flex-shrink-0" style={{color: "#A78BFA"}}>Khối {i + 1}</span>
                           <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{b.keyword}</span>
                           <span className="flex-shrink-0" style={{color: t.textMuted}}>{b.headlines.length} tiêu đề · {b.descriptions.length} mô tả</span>
-                          <button onClick={() => setSdBasket(prev => prev.filter((_, j) => j !== i))} title="Bỏ khối này"
+                          <button onClick={() => { setSdBasket(prev => prev.filter((_, j) => j !== i)); sdResetGen(); }} title="Bỏ khối này"
                             className="flex-shrink-0 px-1" style={{color: t.textMuted}}>✕</button>
                         </div>
                       ))}
@@ -4044,7 +4074,7 @@ export default function Home() {
                                   {sdLocTplDone[m.code] ? (
                                     <span className="text-[11px] font-semibold" style={{color:"#10B981"}}>✓ Đã tạo template</span>
                                   ) : (
-                                    <button onClick={() => mkOpenTemplateFor(m.blocks, sdLocTplName(m), m.code)} disabled={!!mkBusy}
+                                    <button onClick={() => sdOpenTemplate(m.blocks, m.code, m.code)} disabled={!!mkBusy}
                                       className="text-[11px] font-semibold px-2.5 py-1 rounded-lg text-white disabled:opacity-40"
                                       style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>📝 Tạo template {m.code}</button>
                                   )}
@@ -4600,7 +4630,7 @@ export default function Home() {
                     placeholder="Không trùng template Google khác"
                     className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
                   <div className="text-[10px] mt-1" style={{color: t.textMuted}}>
-                    Định dạng: <b>App | NGÔN NGỮ-THỊ TRƯỜNG | keyword | ngày-giờ</b>. Trên MKT System gõ mã như &ldquo;VI-VN&rdquo; vào ô tìm để lọc theo ngôn ngữ.
+                    Định dạng: <b>NgàyThángNăm_GenN_THỊTRƯỜNG</b>, ví dụ 20261002_Gen1_VN. Cùng một bộ khối thì chung số Gen, khác thị trường. Trên MKT gõ &ldquo;20261002_Gen1&rdquo; hoặc &ldquo;_VN&rdquo; để lọc.
                   </div>
                 </div>
                 {mkBlocks.map((b, i) => (
