@@ -1996,7 +1996,7 @@ export default function Home() {
 
   const mkOpenTemplateFor = (entries: {headlines:string[];descriptions:string[]}[], name: string, origin: string | null) => {
     if (!entries.length) return;
-    if (!name.match(/^\d{8}_Gen\d+_/)) mkTplNameBuilderRef.current = null;
+    if (!name.match(/^Ad_Template_\d{8}_Gen\d+_/)) mkTplNameBuilderRef.current = null;
     setMkBlocks(mkSplitBlocks(entries).map(b => ({ headlines: b.headlines.join("\n"), descriptions: b.descriptions.join("\n") })));
     setMkTplName(name.slice(0, 80));
     mkTplOriginRef.current = origin;
@@ -2005,7 +2005,7 @@ export default function Home() {
   };
 
   /**
-   * Template names: "20261002_Gen1_VN" — day, which batch of that day, market.
+   * Template names: "Ad_Template_20261005_Gen1_US" — day, which batch of that day, market.
    * One basket is one batch: its source template and every localized market
    * share the Gen number and differ by market. The number is the day's highest
    * Gen already on MKT System plus one, so two machines do not collide and
@@ -2020,7 +2020,8 @@ export default function Home() {
       const d = await mkFetchJson(`/api/mkt/ad-templates?search=${date}&page=1&pageSize=100`);
       let max = 0;
       for (const tpl of (d.items || []) as MktTemplate[]) {
-        const m = /^(\d{8})_Gen(\d+)_/i.exec(tpl.name || "");
+        // The bare "20261005_Gen1_US" form is the earlier naming; counted so Gen numbers never repeat.
+        const m = /^(?:Ad_Template_)?(\d{8})_Gen(\d+)_/i.exec(tpl.name || "");
         if (m && m[1] === date) max = Math.max(max, Number(m[2]));
       }
       sdGenRef.current = { date, n: max + 1 };
@@ -2030,7 +2031,7 @@ export default function Home() {
       return 1;
     }
   };
-  const sdTplNameFor = (market: string, n: number) => `${mkToday()}_Gen${n}_${market}`;
+  const sdTplNameFor = (market: string, n: number) => `Ad_Template_${mkToday()}_Gen${n}_${market}`;
   /** Rebuilds the open modal's name once the real Gen number is known (e.g. after connecting). */
   const mkTplNameBuilderRef = useRef<((n: number) => string) | null>(null);
 
@@ -4630,7 +4631,7 @@ export default function Home() {
                     placeholder="Không trùng template Google khác"
                     className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
                   <div className="text-[10px] mt-1" style={{color: t.textMuted}}>
-                    Định dạng: <b>NgàyThángNăm_GenN_THỊTRƯỜNG</b>, ví dụ 20261002_Gen1_VN. Cùng một bộ khối thì chung số Gen, khác thị trường. Trên MKT gõ &ldquo;20261002_Gen1&rdquo; hoặc &ldquo;_VN&rdquo; để lọc.
+                    Định dạng: <b>Ad_Template_NgàyThángNăm_GenN_THỊTRƯỜNG</b>, ví dụ Ad_Template_20261005_Gen1_US. Cùng một bộ khối thì chung số Gen, khác thị trường. Trên MKT gõ &ldquo;20261005_Gen1&rdquo; hoặc &ldquo;_US&rdquo; để lọc.
                   </div>
                 </div>
                 {mkBlocks.map((b, i) => (
