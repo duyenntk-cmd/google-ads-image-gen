@@ -894,6 +894,7 @@ export default function Home() {
     abRunIdRef.current = "";
     setAbCardRev({});
     setAbRevision(""); setAbRemovals([]);
+    setCbCopy(null); setCbLocCopy({}); setCbCopyError(""); cbResetPush();
   };
 
   /**
@@ -992,6 +993,8 @@ export default function Home() {
         setAbStatus("♻️ Dùng lại brief + mascot, chỉ gen lại ảnh...");
       } else {
       setAbMascotUsed(null);
+      // The ad copy for this market is written while the images render.
+      void cbGenerateCopy();
       setAbStatus("📱 Đang lấy thông tin app...");
       const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang }, 60000, "screenshots");
       if (!ss.success) throw new Error(ss.error);
@@ -1098,6 +1101,10 @@ export default function Home() {
       // Merge, so retrying one slot does not drop the other nineteen artworks.
       const allBases = partial ? { ...abBasesRef.current, ...bases } : bases;
       abBasesRef.current = allBases;
+      // New artwork means new files to push: a new set entirely, or the redone slots.
+      if (partial) {
+        for (const k of Object.keys(bases)) { delete cbPreparedRef.current[`${abLang}:${k}`]; cbBulkedRef.current.delete(`${abLang}:${k}`); }
+      } else cbResetPush();
 
       setAbStatus(`📐 Overlay logo / hook / CTA / Play badge → ${total} ảnh...`);
       const iconImg = iconB64 ? await abLoadImg(iconB64) : null;
@@ -1241,6 +1248,9 @@ export default function Home() {
     const bases = abBasesRef.current;
     if (!Object.keys(bases).length) { setAbError("❌ Không còn ảnh gốc để vẽ lại. Gen lại bộ ảnh trước."); return; }
     setAbError("");
+    // The ad copy goes into the same languages, in parallel with the redraw.
+    const copyDone = cbLocalizeCopy(abLocLangs);
+    cbResetPush(abLocLangs);
     const sets: {lang:string;previews:Preview[];zip:string}[] = [];
     for (const lang of abLocLangs) {
       setAbLocBusy(`🌏 Đang localize sang ${lang}...`);
@@ -1262,6 +1272,7 @@ export default function Home() {
         setAbError(`⚠️ ${lang}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
+    await copyDone;
     setAbLocBusy("");
     // Replace a market already produced rather than listing it twice.
     setAbLocSets((prev) => [...prev.filter((s) => !sets.some((n) => n.lang === s.lang)), ...sets]);
@@ -1298,6 +1309,7 @@ export default function Home() {
       setAbCountry(meta.country); setAbLang(meta.language);
       setAbZipBase64(await abZipOf(previews));
       setAbLocSets([]); setAbLocLangs([]); setAbFailed([]); setAbError(""); setAbRevision("");
+      setCbCopy(null); setCbLocCopy({}); setCbCopyError(""); cbResetPush();
       // The cached run is what "gen lại" reuses; without it a retry would go
       // back to the store and rebuild the brief from scratch.
       abRun.current = { shots: [], icon: meta.icon, brief, mascot: null, platform: meta.platform || "android" };
@@ -2013,9 +2025,9 @@ export default function Home() {
    */
   const sdGenRef = useRef<{ date: string; n: number } | null>(null);
   const sdResetGen = () => { sdGenRef.current = null; };
-  const sdEnsureGen = async (): Promise<number> => {
+  /** Today's highest Gen already on MKT System plus one, or null when it cannot be read. */
+  const mkFetchNextGen = async (): Promise<number | null> => {
     const date = mkToday();
-    if (sdGenRef.current?.date === date) return sdGenRef.current.n;
     try {
       const d = await mkFetchJson(`/api/mkt/ad-templates?search=${date}&page=1&pageSize=100`);
       let max = 0;
@@ -2024,12 +2036,19 @@ export default function Home() {
         const m = /^(?:Ad_Template_)?(\d{8})_Gen(\d+)_/i.exec(tpl.name || "");
         if (m && m[1] === date) max = Math.max(max, Number(m[2]));
       }
-      sdGenRef.current = { date, n: max + 1 };
       return max + 1;
     } catch {
-      // Not connected yet: a guess, not cached, so it is redone after connecting.
-      return 1;
+      return null;
     }
+  };
+  const sdEnsureGen = async (): Promise<number> => {
+    const date = mkToday();
+    if (sdGenRef.current?.date === date) return sdGenRef.current.n;
+    const n = await mkFetchNextGen();
+    // Not connected yet: a guess, not cached, so it is redone after connecting.
+    if (n === null) return 1;
+    sdGenRef.current = { date, n };
+    return n;
   };
   const sdTplNameFor = (market: string, n: number) => `Ad_Template_${mkToday()}_Gen${n}_${market}`;
   /** Rebuilds the open modal's name once the real Gen number is known (e.g. after connecting). */
@@ -2112,6 +2131,222 @@ export default function Home() {
     if (failed.length) setMkError("❌ Chưa tạo được:\n" + failed.join("\n"));
     setMkBusy("");
     void mkLoadTemplates();
+  };
+
+  /* ─────────────── Banner + Ad Copy (AI Banner page) ───────────────
+   * Step 2 writes the ad copy for the approval image's market while the image
+   * renders. Step 3 localizes the copy into the same languages as the images
+   * and pushes everything to MKT System in one go: every set's banners as
+   * creatives (tags: day, Gen, market) and one ad template per market, named
+   * Ad_Template_<day>_Gen<n>_<market>. Creatives and templates of one push
+   * share the Gen, so they can be matched up on MKT.
+   */
+  type CbCopy = { headlines: string[]; descriptions: string[] };
+  const [cbCopy, setCbCopy] = useState<CbCopy | null>(null);
+  const [cbCopyLoading, setCbCopyLoading] = useState(false);
+  const [cbCopyError, setCbCopyError] = useState("");
+  const [cbSelH, setCbSelH] = useState<string[]>([]);
+  const [cbSelD, setCbSelD] = useState<string[]>([]);
+  /** Localized copy per language (LANGUAGES code), from the selected lines. */
+  const [cbLocCopy, setCbLocCopy] = useState<Record<string, CbCopy>>({});
+  const [cbLocCopyBusy, setCbLocCopyBusy] = useState(false);
+  const [cbPushBusy, setCbPushBusy] = useState("");
+  const [cbPushLog, setCbPushLog] = useState<string[]>([]);
+  /** Gen of this set on MKT, fixed at the first push so a retry keeps the same names. */
+  const cbGenRef = useRef<number | null>(null);
+  /** "<lang>:<slot>" → bulk fields of a file already on S3. */
+  const cbPreparedRef = useRef<Record<string, Record<string, unknown>>>({});
+  /** "<lang>:<slot>" ids already created as creatives. */
+  const cbBulkedRef = useRef<Set<string>>(new Set());
+  /** Market → template name already created. */
+  const cbTplDoneRef = useRef<Record<string, string>>({});
+  const cbIdemRef = useRef<{ body: string; key: string } | null>(null);
+
+  /** Forget what was pushed, for a new set (or for the given languages only). */
+  const cbResetPush = (langs?: string[]) => {
+    if (!langs) {
+      cbGenRef.current = null; cbPreparedRef.current = {}; cbBulkedRef.current = new Set();
+      cbTplDoneRef.current = {}; cbIdemRef.current = null; setCbPushLog([]);
+      return;
+    }
+    for (const id of Object.keys(cbPreparedRef.current)) if (langs.some(l => id.startsWith(`${l}:`))) delete cbPreparedRef.current[id];
+    for (const id of Array.from(cbBulkedRef.current)) if (langs.some(l => id.startsWith(`${l}:`))) cbBulkedRef.current.delete(id);
+  };
+
+  /** Market tag of a language's set: the chosen country for the source language, else the language's home market. */
+  const cbMarketOf = (lang: string) => lang === abLang
+    ? (COUNTRY_ISO[abCountry] || "GLOBAL")
+    : (COUNTRY_ISO[LANG_MARKET[lang] || ""] || lang.slice(0, 2).toUpperCase());
+
+  /** The selected lines of the source copy — what gets localized and pushed. */
+  const cbSource = (): CbCopy => ({
+    headlines: (cbCopy?.headlines || []).filter(h => cbSelH.includes(h)),
+    descriptions: (cbCopy?.descriptions || []).filter(d => cbSelD.includes(d)),
+  });
+
+  const cbGenerateCopy = async () => {
+    setCbCopyLoading(true); setCbCopyError(""); setCbCopy(null); setCbLocCopy({});
+    try {
+      const fetchedName = abFetched?.name && abFetched.name !== "(không rõ tên)" ? abFetched.name : "";
+      const appName = fetchedName || abBrief?.app_name || abAppNameFromUrl(abUrl) || abUrl.trim();
+      const direction = abPrompt.trim();
+      const res = await fetch("/api/adcopy", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appName,
+          message: direction
+            ? `Match the angle and promise of this campaign's creative direction:\n${direction.slice(0, 1500)}`
+            : "",
+          country: abCountry, language: abLang,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "Không tạo được ad copy.");
+      const copy: CbCopy = { headlines: data.result.headlines || [], descriptions: data.result.descriptions || [] };
+      setCbCopy(copy);
+      // Everything within the limits starts selected; over-length lines would block the template.
+      setCbSelH(copy.headlines.filter(h => h.length <= 30));
+      setCbSelD(copy.descriptions.filter(d => d.length <= 90));
+    } catch (e) {
+      setCbCopyError("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCbCopyLoading(false);
+    }
+  };
+
+  /** Translates the selected copy into the given languages, alongside the image localization. */
+  const cbLocalizeCopy = async (langs: string[]) => {
+    const src = cbSource();
+    if (!langs.length || !src.headlines.length || !src.descriptions.length) return;
+    setCbLocCopyBusy(true);
+    try {
+      const res = await fetch("/api/localize", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appName: abBrief?.app_name || abFetched?.name || abAppNameFromUrl(abUrl),
+          headlines: src.headlines, descriptions: src.descriptions, ctas: [],
+          targets: langs.map(l => ({ code: l, name: LANG_MARKET[l] || l, language: l })),
+          sourceLanguage: abLang,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Localize ad copy thất bại.");
+      const got: Record<string, CbCopy> = {};
+      for (const r of (data.results || []) as LocalizeMarketResult[]) got[r.code] = { headlines: r.headlines, descriptions: r.descriptions };
+      setCbLocCopy(prev => ({ ...prev, ...got }));
+      const missing = langs.filter(l => !got[l]);
+      if (missing.length) setCbCopyError(`⚠️ Chưa dịch được ad copy: ${missing.join(", ")}`);
+    } catch (e) {
+      setCbCopyError("❌ Localize ad copy: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCbLocCopyBusy(false);
+    }
+  };
+
+  /** Every finished language set: the source set first, then each localized one. */
+  const cbSets = () => [
+    { lang: abLang, previews: abPrevRef.current.length ? abPrevRef.current : abPreviews, copy: cbCopy ? cbSource() : null },
+    ...abLocSets.map(s => ({ lang: s.lang, previews: s.previews, copy: cbLocCopy[s.lang] || null })),
+  ];
+
+  /**
+   * Pushes every set to MKT System: one ad template per market first (cheap,
+   * independent of the upload), then each banner to S3 one file per request,
+   * then a single bulk call for the creatives. Whatever already went through
+   * is remembered, so pressing again only redoes what failed.
+   */
+  const cbPushAll = async () => {
+    if (!mkConn) { setCbPushLog(["❌ Chưa kết nối MKT System — dán mã kết nối ở trên."]); return; }
+    const sets = cbSets();
+    const log: string[] = [];
+    setCbPushLog([]);
+    try {
+      if (cbGenRef.current === null) {
+        setCbPushBusy("🔢 Đang lấy số Gen trên MKT...");
+        const n = await mkFetchNextGen();
+        if (n === null) throw new Error("Không đọc được danh sách template trên MKT để đánh số Gen.");
+        cbGenRef.current = n;
+      }
+      const gen = cbGenRef.current, date = mkToday();
+
+      // 1. Ad templates, one per market.
+      setCbPushBusy("📝 Đang tạo ad template...");
+      for (const s of sets) {
+        const market = cbMarketOf(s.lang);
+        const name = sdTplNameFor(market, gen);
+        if (cbTplDoneRef.current[market]) { log.push(`✓ ${name} (đã tạo trước đó)`); continue; }
+        if (!s.copy || !s.copy.headlines.length) { log.push(`⚠️ ${market}: chưa có ad copy${s.lang === abLang ? "" : " — bấm Localize lại"}, bỏ qua template`); continue; }
+        const blocks = mkSplitBlocks([s.copy]);
+        const errs = mkValidate(blocks);
+        if (errs.length) { log.push(`⚠️ ${name}: ${errs.join("; ")}`); continue; }
+        try {
+          await mkFetchJson("/api/mkt/ad-templates", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, adContents: blocks }),
+          });
+          cbTplDoneRef.current[market] = name;
+          log.push(`✅ Template ${name}`);
+        } catch (e) {
+          log.push(`❌ Template ${name}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        setCbPushLog([...log]);
+      }
+
+      // 2. Banners to S3, one file per request, two at a time.
+      const jobs = sets.flatMap(s => s.previews.map(p => ({ s, p, id: `${s.lang}:${p.key}` })));
+      const todo = jobs.filter(j => !cbPreparedRef.current[j.id]);
+      let done = jobs.length - todo.length;
+      const failed: string[] = [];
+      setCbPushBusy(`⬆ Đang upload ảnh ${done}/${jobs.length}...`);
+      const queue = [...todo];
+      const worker = async () => {
+        for (let j = queue.shift(); j; j = queue.shift()) {
+          const market = cbMarketOf(j.s.lang);
+          try {
+            const d = await mkFetchJson("/api/mkt/creatives", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mode: "upload", item: {
+                name: `${date}_Gen${gen}_${market}_${j.p.key}.png`,
+                dataUrl: j.p.dataUrl,
+                thumbnailDataUrl: await mkThumb(j.p.dataUrl),
+                isPublic: false,
+                tags: [date, `Gen${gen}`, market],
+              } }),
+            });
+            cbPreparedRef.current[j.id] = d.prepared;
+          } catch (e) {
+            failed.push(`${market} ${j.p.key}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+          done++;
+          setCbPushBusy(`⬆ Đang upload ảnh ${done}/${jobs.length}...`);
+        }
+      };
+      await Promise.all([worker(), worker()]);
+
+      // 3. One bulk call for everything on S3 not yet in the library.
+      const ready = jobs.filter(j => cbPreparedRef.current[j.id] && !cbBulkedRef.current.has(j.id));
+      if (ready.length) {
+        setCbPushBusy(`🖼 Đang tạo ${ready.length} creative trong thư viện...`);
+        const items = ready.map(j => cbPreparedRef.current[j.id]);
+        const body = JSON.stringify(items);
+        if (cbIdemRef.current?.body !== body) cbIdemRef.current = { body, key: crypto.randomUUID() };
+        const d = await mkFetchJson("/api/mkt/creatives", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "bulk", items, idempotencyKey: cbIdemRef.current.key }),
+        });
+        ready.forEach(j => cbBulkedRef.current.add(j.id));
+        cbIdemRef.current = null;
+        log.push(`✅ ${d.creatives?.length ?? ready.length} creative (tag ${date}, Gen${gen}, ${Array.from(new Set(ready.map(j => cbMarketOf(j.s.lang)))).join("/")})`);
+      } else if (!failed.length) {
+        log.push("✓ Creative đã có đủ trên MKT từ lần trước");
+      }
+      if (failed.length) log.push(`❌ ${failed.length} ảnh upload lỗi — bấm lại để thử tiếp:\n${failed.join("\n")}`);
+    } catch (e) {
+      log.push("❌ " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCbPushLog(log);
+      setCbPushBusy("");
+    }
   };
 
   interface HistoryItem { id: string; appName: string; date: string; thumbnail: string; count: number; }
@@ -2460,7 +2695,7 @@ export default function Home() {
           {([
             ["home",     "🏠", "Home"],
             ["generate", "🎨", "Gen Banner"],
-            ["aibanner", "✨", "AI Banner"],
+            ["aibanner", "🚀", "Banner + Ad Copy"],
             ["studio",   "🎯", "Ad Copy Studio"],
             ["launch",   "🚀", "Launch Camp"],
             ["mkt",      "🔌", "MKT System"],
@@ -2539,7 +2774,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "✨ AI Banner Design" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "🚀 Banner + Ad Copy" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -3080,18 +3315,23 @@ export default function Home() {
         {activePage === "aibanner" && (
           <div className="space-y-6 max-w-2xl">
             <div className="flex items-center gap-2 text-xs" style={{color: t.textMuted}}>
-              {([["input","1","Nhập thông tin"],["generating","2","AI tạo ảnh"],["preview","3","Kết quả"]] as [AbStep,string,string][]).map(([s,n,label],i) => {
-                const order: AbStep[] = ["input","generating","preview"];
-                const done = order.indexOf(abStep) > order.indexOf(s), active = abStep === s;
-                return (
-                  <div key={s} className="flex items-center gap-2">
-                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${active?"bg-violet-600 text-white":done?"bg-violet-600/40 text-violet-400":""}`}
-                      style={!active&&!done?{backgroundColor:t.tabBg,color:t.textMuted}:{}}>{n}</span>
-                    <span style={active?{color:"#A78BFA"}:{}}>{label}</span>
-                    {i<2&&<span>→</span>}
-                  </div>
-                );
-              })}
+              {(() => {
+                // 1 link + prompt · 2 mascot, scope, approval image + ad copy · 3 full set, localize, MKT
+                const cur = abStep === "input" ? (abPrompt.trim() ? 2 : 1)
+                  : abStep === "generating" ? (abMode === "full" || abLastMode === "full" ? 3 : 2)
+                  : abLastMode === "full" ? 3 : 2;
+                return ([[1,"Link & prompt"],[2,"Mascot · duyệt ảnh + ad copy"],[3,"Gen đủ · localize · lên MKT"]] as const).map(([n,label],i) => {
+                  const done = cur > n, active = cur === n;
+                  return (
+                    <div key={n} className="flex items-center gap-2">
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${active?"bg-violet-600 text-white":done?"bg-violet-600/40 text-violet-400":""}`}
+                        style={!active&&!done?{backgroundColor:t.tabBg,color:t.textMuted}:{}}>{n}</span>
+                      <span style={active?{color:"#A78BFA"}:{}}>{label}</span>
+                      {i<2&&<span>→</span>}
+                    </div>
+                  );
+                });
+              })()}
               <button onClick={() => { setAbHistOpen(o => !o); void abRefreshHistory(); }}
                 className="ml-auto text-xs px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>
                 🕐 Lịch sử gen {abHistory.length > 0 && `(${abHistory.length})`}
@@ -3136,7 +3376,9 @@ export default function Home() {
             )}
 
             {abStep === "input" && (
+              <>
               <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                <div className="text-sm font-bold" style={{color: t.text}}>Bước 1 · Link store, thị trường & creative direction</div>
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
                     🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
@@ -3232,6 +3474,15 @@ export default function Home() {
                   )}
                 </div>
 
+              </div>
+
+              <div className="p-5 border rounded-2xl space-y-4" style={cardStyle}>
+                <div>
+                  <div className="text-sm font-bold" style={{color: t.text}}>Bước 2 · Mascot, phạm vi gen & duyệt mẫu</div>
+                  <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
+                    Bấm gen là AI viết luôn <b>ad copy</b> (5 tiêu đề + 5 mô tả) cho thị trường {COUNTRIES.find(c => c.code === abCountry)?.label || abCountry} · {abLang}, chạy song song với ảnh.
+                  </div>
+                </div>
                 {/* Mascot — the consistency anchor across all sizes */}
                 <div className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                   <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer" style={{color: t.text}}>
@@ -3335,9 +3586,10 @@ export default function Home() {
 
                 <button onClick={() => handleAbGenerate(abMode, false)} disabled={!abUrl.trim()}
                   className="w-full py-3 rounded-xl font-semibold text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-40 transition-all text-white">
-                  ✨ {abMode === "one" ? "Gen 1 ảnh duyệt" : `Tạo ${abMode === "core" ? 3 : APP_CREATIVES.length} creative`} →
+                  ✨ {abMode === "one" ? "Gen 1 ảnh duyệt + ad copy" : `Tạo ${abMode === "core" ? 3 : APP_CREATIVES.length} creative + ad copy`} →
                 </button>
               </div>
+              </>
             )}
 
             {abStep === "generating" && (
@@ -3436,6 +3688,43 @@ export default function Home() {
                   </div>
                 )}
 
+
+                {/* Ad copy written for this market alongside the images. Ticked
+                    lines are what gets localized and becomes the ad template. */}
+                <div className="rounded-2xl border p-4 space-y-3" style={{...cardStyle, borderColor:"#7C3AED44"}}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-bold" style={{color: t.text}}>✍️ Ad copy · {cbMarketOf(abLang)} · {abLang}</div>
+                      <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>Dòng được tick sẽ được localize cùng ảnh và thành ad template trên MKT.</div>
+                    </div>
+                    <button onClick={cbGenerateCopy} disabled={cbCopyLoading}
+                      className="text-xs px-2.5 py-1.5 rounded-lg border flex-shrink-0 disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
+                      {cbCopyLoading ? "⏳ Đang viết..." : cbCopy ? "↻ Viết lại" : "✍️ Viết ad copy"}
+                    </button>
+                  </div>
+                  {cbCopyLoading && !cbCopy && <p className="text-xs" style={{color: t.textMuted}}>⏳ Đang viết 5 tiêu đề và 5 mô tả...</p>}
+                  {cbCopyError && <p className="text-amber-400 text-[11px] bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap">{cbCopyError}</p>}
+                  {cbCopy && ([["Tiêu đề", cbCopy.headlines, 30, cbSelH, setCbSelH], ["Mô tả", cbCopy.descriptions, 90, cbSelD, setCbSelD]] as const).map(([label, items, limit, sel, setSel]) => (
+                    <div key={label} className="space-y-1">
+                      <div className="text-[11px] font-semibold" style={{color: t.textSub}}>{label} (tối đa {limit} ký tự) · đã chọn {sel.length}</div>
+                      {items.map((item, i) => (
+                        <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
+                          <button type="button" aria-label="Chọn" onClick={() => mkToggle(setSel, item)}
+                            className="w-4 h-4 rounded border flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                            style={{backgroundColor: sel.includes(item) ? "#7C3AED" : "transparent", borderColor: sel.includes(item) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                            {sel.includes(item) ? "✓" : ""}
+                          </button>
+                          <span className="flex-1 min-w-0 break-words" style={{color: t.text}}>{item}</span>
+                          <span className="text-[10px] flex-shrink-0" style={{color: item.length > limit ? "#EF4444" : t.textMuted}}>{item.length}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {cbCopy && mkValidate(mkSplitBlocks([cbSource()])).length > 0 && (
+                    <div className="text-[11px]" style={{color:"#F59E0B"}}>⚠️ {mkValidate(mkSplitBlocks([cbSource()])).join(" · ")}</div>
+                  )}
+                </div>
+
                 <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
                   {([["top5",`⭐ Mỗi tỉ lệ 1 ảnh (${abPreviews.filter(p=>p.isTop5).length})`],["all",`Tất cả (${abPreviews.length})`]] as const).map(([tab,label])=>(
                     <button key={tab} onClick={() => setAbTab(tab)} className="px-4 py-1.5 rounded-lg text-sm font-medium"
@@ -3530,7 +3819,7 @@ export default function Home() {
                   <div>
                     <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
                     <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
-                      Vẽ lại chữ trên chính bộ ảnh này — <b>không tốn tiền gen ảnh</b>, mỗi thị trường chỉ vài trăm đồng tiền dịch.
+                      Vẽ lại chữ trên chính bộ ảnh này — <b>không tốn tiền gen ảnh</b> — và dịch luôn ad copy đã tick. Mỗi ngôn ngữ một file zip.
                     </div>
                   </div>
                   <div ref={abLocRef} className="relative">
@@ -3618,6 +3907,15 @@ export default function Home() {
                         <button onClick={() => abDownloadB64Zip(set.zip, `google-ads-${abBrief?.app_name || "banners"}-${set.lang}.zip`)}
                           className="bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg">⬇ Tải .zip</button>
                       </div>
+                      {cbLocCopy[set.lang] ? (
+                        <div className="rounded-lg px-2.5 py-1.5 text-xs space-y-0.5" style={{backgroundColor: t.card}}>
+                          <div className="text-[10px] font-semibold" style={{color:"#A78BFA"}}>✍️ Ad copy · {cbMarketOf(set.lang)}</div>
+                          {cbLocCopy[set.lang].headlines.map((h, i) => <div key={`h${i}`} style={{color: t.text}}>• {h}</div>)}
+                          {cbLocCopy[set.lang].descriptions.map((d, i) => <div key={`d${i}`} style={{color: t.textSub}}>– {d}</div>)}
+                        </div>
+                      ) : cbCopy && (
+                        <div className="text-[11px]" style={{color: t.textMuted}}>{cbLocCopyBusy ? "⏳ Đang dịch ad copy..." : "Chưa có ad copy cho ngôn ngữ này — bấm Localize lại."}</div>
+                      )}
                       <div className="flex gap-2 overflow-x-auto pb-1">
                         {set.previews.map(p => (
                           <img key={p.key} src={p.dataUrl} alt={p.label} onClick={() => setSelectedPreview(p)}
@@ -3628,6 +3926,58 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
+
+                {/* Step 3: everything to MKT System in one press */}
+                {abLastMode === "full" && (() => {
+                  const sets = cbSets();
+                  const nImgs = sets.reduce((a, x) => a + x.previews.length, 0);
+                  return (
+                    <div className="rounded-2xl border p-4 space-y-3" style={{...cardStyle, borderColor:"#7C3AED66"}}>
+                      <div>
+                        <div className="text-sm font-bold" style={{color: t.text}}>🚀 Bước 3 · Đưa lên MKT System</div>
+                        <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
+                          {nImgs} ảnh thành creative (tag ngày · Gen · thị trường) và {sets.length} ad template
+                          {" "}<b>Ad_Template_{mkToday()}_Gen{cbGenRef.current ?? "N"}_THỊTRƯỜNG</b>. Creative và template cùng một số Gen.
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        {sets.map(x => (
+                          <div key={x.lang} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
+                            <span className="font-semibold w-16 flex-shrink-0" style={{color:"#A78BFA"}}>{cbMarketOf(x.lang)}</span>
+                            <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{LANGUAGES.find(l => l.code === x.lang)?.label || x.lang}</span>
+                            <span className="flex-shrink-0" style={{color: t.textMuted}}>{x.previews.length} ảnh · {x.copy ? `${x.copy.headlines.length} tiêu đề, ${x.copy.descriptions.length} mô tả` : "chưa có ad copy"}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {!mkConn ? (
+                        <div className="space-y-1.5">
+                          <div className="text-xs" style={{color: t.text}}>Chưa kết nối MKT System — dán mã kết nối (Profile → <b>Kết nối Claude</b>):</div>
+                          <div className="flex gap-2">
+                            <input value={mkCode} onChange={e => setMkCode(e.target.value)} onKeyDown={e => { if (e.key === "Enter") mkConnect(); }}
+                              placeholder="mktmcp_..." className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                            <button onClick={mkConnect} disabled={!mkCode.trim() || mkBusy === "connect"}
+                              className="flex-shrink-0 px-4 py-2 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40">
+                              {mkBusy === "connect" ? "⏳" : "Kết nối"}
+                            </button>
+                          </div>
+                          {mkError && <p className="text-amber-400 text-[11px]">{mkError}</p>}
+                        </div>
+                      ) : (
+                        <div className="text-[11px]" style={{color: t.textMuted}}>Tài khoản MKT: <b style={{color: t.text}}>{mkConn.email}</b></div>
+                      )}
+                      <button onClick={cbPushAll} disabled={!mkConn || !!cbPushBusy || abLocBusy !== "" || cbLocCopyBusy}
+                        className="w-full text-sm font-semibold px-4 py-2.5 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                        {cbPushBusy || `🚀 Đưa ${nImgs} ảnh + ${sets.length} ad template lên MKT`}
+                      </button>
+                      {cbPushLog.length > 0 && (
+                        <div className="text-[11px] rounded-lg px-3 py-2 space-y-0.5 whitespace-pre-wrap break-words" style={{backgroundColor: t.tabBg, color: t.text}}>
+                          {cbPushLog.map((l, i) => <div key={i}>{l}</div>)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
