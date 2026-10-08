@@ -894,7 +894,7 @@ export default function Home() {
     abRunIdRef.current = "";
     setAbCardRev({});
     setAbRevision(""); setAbRemovals([]);
-    setCbCopy(null); setCbLocCopy({}); setCbCopyError(""); cbResetPush();
+    setCbLocCopy({}); setCbCopyError(""); cbResetPush();
   };
 
   /**
@@ -993,8 +993,8 @@ export default function Home() {
         setAbStatus("♻️ Dùng lại brief + mascot, chỉ gen lại ảnh...");
       } else {
       setAbMascotUsed(null);
-      // The ad copy for this market is written while the images render.
-      void cbGenerateCopy();
+      // Ad Copy Studio researches keywords for this market while the images render.
+      cbStartStudio();
       setAbStatus("📱 Đang lấy thông tin app...");
       const ss = await abFetchJson("/api/screenshots", { appUrl: abUrl.trim(), country: abStoreCountry(abCountry, abLang), language: abLang }, 60000, "screenshots");
       if (!ss.success) throw new Error(ss.error);
@@ -1309,7 +1309,7 @@ export default function Home() {
       setAbCountry(meta.country); setAbLang(meta.language);
       setAbZipBase64(await abZipOf(previews));
       setAbLocSets([]); setAbLocLangs([]); setAbFailed([]); setAbError(""); setAbRevision("");
-      setCbCopy(null); setCbLocCopy({}); setCbCopyError(""); cbResetPush();
+      setCbLocCopy({}); setCbCopyError(""); cbResetPush();
       // The cached run is what "gen lại" reuses; without it a retry would go
       // back to the store and rebuild the brief from scratch.
       abRun.current = { shots: [], icon: meta.icon, brief, mascot: null, platform: meta.platform || "android" };
@@ -1594,8 +1594,10 @@ export default function Home() {
   const sdSortByVolume = (list: SdKeyword[]) =>
     [...list].sort((a, b) => sdVolumeScore(b.monthly_searches) - sdVolumeScore(a.monthly_searches));
 
-  const sdFetchKeywords = async (more = false) => {
-    if (!sdUrl.trim()) return;
+  /** @param over values to use instead of the Studio's own inputs (the Banner + Ad Copy page passes its step 1). */
+  const sdFetchKeywords = async (more = false, over?: { url: string; country: string; lang: string; appName: string }) => {
+    const url = over?.url ?? sdUrl, country = over?.country ?? sdCountry, lang = over?.lang ?? sdLang, name = over?.appName ?? sdAppName;
+    if (!url.trim()) return;
     if (more) setSdMoreLoading(true); else setSdLoading(true);
     setSdError("");
     if (!more) { setSdKeywords([]); setSdSelected(""); setSdCopy(null); }
@@ -1604,14 +1606,14 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          appUrl: sdUrl.trim(), appName: sdAppName, country: sdCountry, language: sdLang,
+          appUrl: url.trim(), appName: name, country, language: lang,
           exclude: more ? sdKeywords.map(k => k.keyword) : [],
         }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || "Không lấy được keyword.");
       const found: SdKeyword[] = data.result?.keywords || [];
-      if (data.result?.app_name && !sdAppName) setSdAppName(data.result.app_name);
+      if (data.result?.app_name && !name) setSdAppName(data.result.app_name);
       setSdKeywords(prev => {
         // The model is told not to repeat, but a near-duplicate still slips in.
         const seen = new Set(prev.map(k => k.keyword.toLowerCase()));
@@ -2134,22 +2136,22 @@ export default function Home() {
   };
 
   /* ─────────────── Banner + Ad Copy (AI Banner page) ───────────────
-   * Step 2 writes the ad copy for the approval image's market while the image
-   * renders. Step 3 localizes the copy into the same languages as the images
-   * and pushes everything to MKT System in one go: every set's banners as
-   * creatives (tags: day, Gen, market) and one ad template per market, named
+   * Step 2 opens Ad Copy Studio on the same app, market and language: it
+   * finds keywords while the approval image renders, and the blocks picked
+   * there (one per keyword) are the ad copy. Step 3 localizes those blocks
+   * into the same languages as the images and pushes everything to MKT System
+   * in one go: every set's banners as creatives (tags: day, Gen, market) and
+   * one ad template per market with all its blocks, named
    * Ad_Template_<day>_Gen<n>_<market>. Creatives and templates of one push
    * share the Gen, so they can be matched up on MKT.
    */
-  type CbCopy = { headlines: string[]; descriptions: string[] };
-  const [cbCopy, setCbCopy] = useState<CbCopy | null>(null);
-  const [cbCopyLoading, setCbCopyLoading] = useState(false);
-  const [cbCopyError, setCbCopyError] = useState("");
-  const [cbSelH, setCbSelH] = useState<string[]>([]);
-  const [cbSelD, setCbSelD] = useState<string[]>([]);
-  /** Localized copy per language (LANGUAGES code), from the selected lines. */
-  const [cbLocCopy, setCbLocCopy] = useState<Record<string, CbCopy>>({});
+  type CbBlock = { headlines: string[]; descriptions: string[] };
+  /** Localized blocks per language (LANGUAGES code), in basket order. */
+  const [cbLocCopy, setCbLocCopy] = useState<Record<string, CbBlock[]>>({});
+  /** The basket the localized blocks were made from; a different basket makes them stale. */
+  const [cbLocSig, setCbLocSig] = useState("");
   const [cbLocCopyBusy, setCbLocCopyBusy] = useState(false);
+  const [cbCopyError, setCbCopyError] = useState("");
   const [cbPushBusy, setCbPushBusy] = useState("");
   const [cbPushLog, setCbPushLog] = useState<string[]>([]);
   /** Gen of this set on MKT, fixed at the first push so a retry keeps the same names. */
@@ -2161,6 +2163,8 @@ export default function Home() {
   /** Market → template name already created. */
   const cbTplDoneRef = useRef<Record<string, string>>({});
   const cbIdemRef = useRef<{ body: string; key: string } | null>(null);
+  /** App the Studio's keywords and basket belong to, so a new app starts clean. */
+  const cbStudioUrlRef = useRef("");
 
   /** Forget what was pushed, for a new set (or for the given languages only). */
   const cbResetPush = (langs?: string[]) => {
@@ -2178,63 +2182,63 @@ export default function Home() {
     ? (COUNTRY_ISO[abCountry] || "GLOBAL")
     : (COUNTRY_ISO[LANG_MARKET[lang] || ""] || lang.slice(0, 2).toUpperCase());
 
-  /** The selected lines of the source copy — what gets localized and pushed. */
-  const cbSource = (): CbCopy => ({
-    headlines: (cbCopy?.headlines || []).filter(h => cbSelH.includes(h)),
-    descriptions: (cbCopy?.descriptions || []).filter(d => cbSelD.includes(d)),
-  });
-
-  const cbGenerateCopy = async () => {
-    setCbCopyLoading(true); setCbCopyError(""); setCbCopy(null); setCbLocCopy({});
-    try {
-      const fetchedName = abFetched?.name && abFetched.name !== "(không rõ tên)" ? abFetched.name : "";
-      const appName = fetchedName || abBrief?.app_name || abAppNameFromUrl(abUrl) || abUrl.trim();
-      const direction = abPrompt.trim();
-      const res = await fetch("/api/adcopy", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName,
-          message: direction
-            ? `Match the angle and promise of this campaign's creative direction:\n${direction.slice(0, 1500)}`
-            : "",
-          country: abCountry, language: abLang,
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Không tạo được ad copy.");
-      const copy: CbCopy = { headlines: data.result.headlines || [], descriptions: data.result.descriptions || [] };
-      setCbCopy(copy);
-      // Everything within the limits starts selected; over-length lines would block the template.
-      setCbSelH(copy.headlines.filter(h => h.length <= 30));
-      setCbSelD(copy.descriptions.filter(d => d.length <= 90));
-    } catch (e) {
-      setCbCopyError("❌ " + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setCbCopyLoading(false);
-    }
+  const cbBasketSig = () => JSON.stringify(sdBasket);
+  const cbAppName = () => {
+    const fetched = abFetched?.name && abFetched.name !== "(không rõ tên)" ? abFetched.name : "";
+    return fetched || abBrief?.app_name || abAppNameFromUrl(abUrl) || "";
   };
 
-  /** Translates the selected copy into the given languages, alongside the image localization. */
+  // On this page the Studio works on step 1's app, market and language.
+  useEffect(() => {
+    if (activePage !== "aibanner") return;
+    setSdUrl(abUrl); setSdCountry(abCountry); setSdLang(abLang);
+    const fetched = abFetched?.name && abFetched.name !== "(không rõ tên)" ? abFetched.name : "";
+    if (fetched) setSdAppName(fetched);
+  }, [activePage, abUrl, abCountry, abLang, abFetched]);
+
+  /** Starts the Studio's keyword research for this app and market, alongside the approval image. */
+  const cbStartStudio = () => {
+    const key = `${abUrl.trim()}|${abCountry}|${abLang}`;
+    if (cbStudioUrlRef.current === key && sdKeywords.length) return;
+    if (cbStudioUrlRef.current.split("|")[0] !== abUrl.trim()) { setSdBasket([]); sdResetGen(); }
+    cbStudioUrlRef.current = key;
+    setSdSelH([]); setSdSelD([]);
+    void sdFetchKeywords(false, { url: abUrl, country: abCountry, lang: abLang, appName: cbAppName() });
+  };
+
+  /**
+   * Translates every block into the given languages, alongside the image
+   * localization. One request per block, so each language keeps exactly the
+   * basket's block structure.
+   */
   const cbLocalizeCopy = async (langs: string[]) => {
-    const src = cbSource();
-    if (!langs.length || !src.headlines.length || !src.descriptions.length) return;
-    setCbLocCopyBusy(true);
+    const basket = sdBasket.filter(b => b.headlines.length && b.descriptions.length);
+    if (!langs.length || !basket.length) return;
+    setCbLocCopyBusy(true); setCbCopyError("");
     try {
-      const res = await fetch("/api/localize", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appName: abBrief?.app_name || abFetched?.name || abAppNameFromUrl(abUrl),
-          headlines: src.headlines, descriptions: src.descriptions, ctas: [],
-          targets: langs.map(l => ({ code: l, name: LANG_MARKET[l] || l, language: l })),
-          sourceLanguage: abLang,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Localize ad copy thất bại.");
-      const got: Record<string, CbCopy> = {};
-      for (const r of (data.results || []) as LocalizeMarketResult[]) got[r.code] = { headlines: r.headlines, descriptions: r.descriptions };
+      const perBlock = await Promise.all(basket.map(async b => {
+        const res = await fetch("/api/localize", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            appName: cbAppName() || abUrl,
+            headlines: b.headlines, descriptions: b.descriptions, ctas: [],
+            targets: langs.map(l => ({ code: l, name: LANG_MARKET[l] || l, language: l })),
+            sourceLanguage: abLang,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(`Khối "${b.keyword}": ${data.error || "Localize thất bại."}`);
+        return (data.results || []) as LocalizeMarketResult[];
+      }));
+      const got: Record<string, CbBlock[]> = {};
+      const missing: string[] = [];
+      for (const l of langs) {
+        const blocks = perBlock.map(rs => rs.find(r => r.code === l));
+        if (blocks.some(x => !x)) { missing.push(l); continue; }
+        got[l] = blocks.map(x => ({ headlines: x!.headlines, descriptions: x!.descriptions }));
+      }
       setCbLocCopy(prev => ({ ...prev, ...got }));
-      const missing = langs.filter(l => !got[l]);
+      setCbLocSig(JSON.stringify(sdBasket));
       if (missing.length) setCbCopyError(`⚠️ Chưa dịch được ad copy: ${missing.join(", ")}`);
     } catch (e) {
       setCbCopyError("❌ Localize ad copy: " + (e instanceof Error ? e.message : String(e)));
@@ -2244,10 +2248,13 @@ export default function Home() {
   };
 
   /** Every finished language set: the source set first, then each localized one. */
-  const cbSets = () => [
-    { lang: abLang, previews: abPrevRef.current.length ? abPrevRef.current : abPreviews, copy: cbCopy ? cbSource() : null },
-    ...abLocSets.map(s => ({ lang: s.lang, previews: s.previews, copy: cbLocCopy[s.lang] || null })),
-  ];
+  const cbSets = () => {
+    const fresh = cbLocSig === cbBasketSig();
+    return [
+      { lang: abLang, previews: abPrevRef.current.length ? abPrevRef.current : abPreviews, blocks: sdBasket.length ? sdBasket as CbBlock[] : null },
+      ...abLocSets.map(s => ({ lang: s.lang, previews: s.previews, blocks: fresh ? cbLocCopy[s.lang] || null : null })),
+    ];
+  };
 
   /**
    * Pushes every set to MKT System: one ad template per market first (cheap,
@@ -2275,8 +2282,8 @@ export default function Home() {
         const market = cbMarketOf(s.lang);
         const name = sdTplNameFor(market, gen);
         if (cbTplDoneRef.current[market]) { log.push(`✓ ${name} (đã tạo trước đó)`); continue; }
-        if (!s.copy || !s.copy.headlines.length) { log.push(`⚠️ ${market}: chưa có ad copy${s.lang === abLang ? "" : " — bấm Localize lại"}, bỏ qua template`); continue; }
-        const blocks = mkSplitBlocks([s.copy]);
+        if (!s.blocks?.length) { log.push(`⚠️ ${market}: chưa có khối ad copy${s.lang === abLang ? " — chọn keyword và ➕ thêm khối" : " — bấm Localize lại"}, bỏ qua template`); continue; }
+        const blocks = mkSplitBlocks(s.blocks);
         const errs = mkValidate(blocks);
         if (errs.length) { log.push(`⚠️ ${name}: ${errs.join("; ")}`); continue; }
         try {
@@ -2666,6 +2673,326 @@ export default function Home() {
     );
   };
   void renderCompResult; void compError; void compResult;
+
+  /** Ad Copy Studio. Embedded in Banner + Ad Copy it works on that page's app, market and language. */
+  const renderStudio = (embedded: boolean) => (
+          <div className="space-y-5">
+            {embedded ? (
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <div className="text-sm font-bold" style={{color: t.text}}>✍️ Ad Copy Studio · {cbMarketOf(abLang)} · {abLang}</div>
+                  <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
+                    Chọn keyword → tick tiêu đề / mô tả → ➕ thêm khối. Các khối được localize cùng ảnh và thành ad template khi đưa lên MKT ở Bước 3.
+                  </div>
+                </div>
+                <button onClick={() => { cbStudioUrlRef.current = ""; cbStartStudio(); }} disabled={sdLoading || !abUrl.trim()}
+                  className="text-xs px-3 py-1.5 rounded-lg border flex-shrink-0 disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
+                  {sdLoading ? "⏳ Đang tìm keyword..." : sdKeywords.length ? "↻ Tìm lại keyword" : "🔍 Tìm keyword"}
+                </button>
+              </div>
+            ) : (
+            <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
+                  🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
+                </label>
+                <div className="flex gap-2">
+                  <input value={sdUrl} onChange={e => setSdUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") sdFetchKeywords(); }}
+                    placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
+                    className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
+                  <button onClick={() => sdFetchKeywords()} disabled={!sdUrl.trim() || sdLoading}
+                    className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed">
+                    {sdLoading ? "⏳ Đang phân tích..." : "🔍 Phân tích"}
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
+                  <select value={sdCountry} onChange={e => { setSdCountry(e.target.value); const dl = COUNTRY_DEFAULT_LANG[e.target.value]; if (dl) setSdLang(dl); }}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                    {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
+                  <select value={sdLang} onChange={e => setSdLang(e.target.value)}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
+                    {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              {sdAppName && <div className="text-xs" style={{color: t.textMuted}}>📱 {sdAppName}</div>}
+            </div>
+            )}
+
+            {sdError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{sdError}</p>}
+
+            {embedded && sdLoading && !sdKeywords.length && (
+              <p className="text-xs" style={{color: t.textMuted}}>⏳ Đang tìm keyword cho app ở thị trường này...</p>
+            )}
+
+            {sdKeywords.length > 0 && (
+              <div className={embedded ? "space-y-4" : "grid lg:grid-cols-5 gap-5 items-start"}>
+                {/* Keywords, highest volume first */}
+                <div className={`${embedded ? "" : "lg:col-span-3 "}p-4 border rounded-2xl space-y-3`} style={cardStyle}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>
+                      🔑 {sdKeywords.length} keyword · volume cao nhất trước
+                    </span>
+                    <span className="text-[11px]" style={{color: t.textMuted}}>Bấm một keyword để viết copy</span>
+                  </div>
+                  <div className={`space-y-1.5 ${embedded ? "max-h-72" : "max-h-[32rem]"} overflow-y-auto pr-1`}>
+                    {sdKeywords.map(k => {
+                      const on = sdSelected === k.keyword;
+                      return (
+                        <button key={k.keyword} onClick={() => sdGenerateCopy(k.keyword)}
+                          className="w-full text-left px-3 py-2 rounded-xl border transition-colors"
+                          style={on
+                            ? {borderColor:"#7C3AED", backgroundColor:"#7C3AED18"}
+                            : {borderColor: t.border, backgroundColor: "transparent"}}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium truncate flex-1" style={{color: on ? "#A78BFA" : t.text}}>{k.keyword}</span>
+                            <span className="text-xs font-semibold flex-shrink-0" style={{color: t.textSub}}>{k.monthly_searches}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full"
+                              style={k.competition === "High" ? {backgroundColor:"#EF444422",color:"#EF4444"}
+                                : k.competition === "Medium" ? {backgroundColor:"#F59E0B22",color:"#F59E0B"}
+                                : {backgroundColor:"#10B98122",color:"#10B981"}}>
+                              {k.competition}
+                            </span>
+                            <span className="text-[10px]" style={{color: t.textMuted}}>${k.cpc_min}–${k.cpc_max}</span>
+                            <span className="text-[10px]" style={{color: t.textMuted}}>· {k.intent}</span>
+                            <span className="text-[10px] ml-auto" style={{color: t.textMuted}}>relevance {k.relevance}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button onClick={() => sdFetchKeywords(true)} disabled={sdMoreLoading}
+                    className="w-full text-xs px-3 py-2 rounded-lg border disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
+                    {sdMoreLoading ? "⏳ Đang tìm thêm..." : "＋ Xem thêm 20 keyword"}
+                  </button>
+                </div>
+
+                {/* Copy for the chosen keyword, plus localisation */}
+                <div className={embedded ? "space-y-4" : "lg:col-span-2 space-y-4"}>
+                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
+                    {!sdSelected ? (
+                      <p className="text-xs py-8 text-center" style={{color: t.textMuted}}>
+                        Chọn một keyword bên trái để tạo 5 tiêu đề + 5 mô tả cho đúng keyword đó.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>✍️ Ad copy cho</div>
+                            <div className="text-sm font-bold truncate" style={{color:"#A78BFA"}}>{sdSelected}</div>
+                          </div>
+                          <button onClick={() => sdGenerateCopy(sdSelected)} disabled={sdCopyLoading}
+                            className="text-xs px-2.5 py-1.5 rounded-lg border flex-shrink-0 disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
+                            {sdCopyLoading ? "⏳" : "↻ Viết lại"}
+                          </button>
+                        </div>
+
+                        {sdCopyLoading && <p className="text-xs" style={{color: t.textMuted}}>⏳ Đang viết 5 tiêu đề và 5 mô tả...</p>}
+
+                        {sdCopy && (
+                          <div className="space-y-3">
+                            {([["Tiêu đề", sdCopy.headlines, 30], ["Mô tả", sdCopy.descriptions, 90]] as [string,string[],number][]).map(([label, items, limit]) => (
+                              <div key={label} className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[11px] font-semibold" style={{color: t.textSub}}>{label} (tối đa {limit} ký tự)</span>
+                                  <button onClick={() => sdCopyText(items.join("\n"), label)} className="text-[11px]" style={{color:"#7C3AED"}}>
+                                    {sdCopied === label ? "✓ Đã chép" : "Chép hết"}
+                                  </button>
+                                </div>
+                                {items.map((item, i) => {
+                                  const sel = label === "Tiêu đề" ? sdSelH : label === "Mô tả" ? sdSelD : null;
+                                  const setSel = label === "Tiêu đề" ? setSdSelH : setSdSelD;
+                                  return (
+                                  <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
+                                    {/* Headlines and descriptions can go into an MKT ad template; CTAs cannot. */}
+                                    {sel && (
+                                      <button type="button" aria-label="Chọn" onClick={() => mkToggle(setSel, item)}
+                                        className="w-4 h-4 rounded border flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                                        style={{backgroundColor: sel.includes(item) ? "#7C3AED" : "transparent", borderColor: sel.includes(item) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
+                                        {sel.includes(item) ? "✓" : ""}
+                                      </button>
+                                    )}
+                                    <span className="flex-1 min-w-0 break-words" style={{color: t.text}}>{item}</span>
+                                    {/* Over the limit Google truncates mid-word, so flag it here rather than in the interface. */}
+                                    <span className="text-[10px] flex-shrink-0" style={item.length > limit ? {color:"#EF4444"} : {color: t.textMuted}}>{item.length}</span>
+                                    <button onClick={() => sdCopyText(item, `${label}-${i}`)} className="text-[10px] flex-shrink-0" style={{color: t.textMuted}}>
+                                      {sdCopied === `${label}-${i}` ? "✓" : "⧉"}
+                                    </button>
+                                  </div>
+                                  );
+                                })}
+                              </div>
+                            ))}
+                            <div className="flex items-center gap-2 pt-1">
+                              <button onClick={() => { setSdSelH([...sdCopy.headlines]); setSdSelD([...sdCopy.descriptions]); }}
+                                className="text-[11px] px-2.5 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>☑ Chọn hết tiêu đề + mô tả</button>
+                              <button onClick={sdAddToBasket} disabled={!sdSelH.length && !sdSelD.length}
+                                className="flex-1 text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                                style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                                {sdBasket.some(b => b.keyword === sdSelected)
+                                  ? `↻ Cập nhật Khối ${sdBasket.findIndex(b => b.keyword === sdSelected) + 1} (${sdSelH.length} tiêu đề · ${sdSelD.length} mô tả)`
+                                  : `➕ Thêm vào template — Khối ${sdBasket.length + 1} (${sdSelH.length} tiêu đề · ${sdSelD.length} mô tả)`}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Template basket: survives switching keyword, one block per keyword */}
+                  {sdBasket.length > 0 && (
+                    <div className="p-4 border rounded-2xl space-y-2" style={{...cardStyle, borderColor:"#7C3AED66"}}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-bold" style={{color: t.text}}>📝 Ad template MKT — {sdBasket.length} khối</div>
+                        <button onClick={() => { setSdBasket([]); sdResetGen(); }} className="text-[11px]" style={{color: t.textMuted}}>Xoá hết</button>
+                      </div>
+                      <div className="text-[11px]" style={{color: t.textMuted}}>Chọn keyword khác, tick content rồi bấm ➕ để thêm khối tiếp theo.</div>
+                      {sdBasket.map((b, i) => (
+                        <div key={b.keyword} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
+                          <span className="font-semibold flex-shrink-0" style={{color: "#A78BFA"}}>Khối {i + 1}</span>
+                          <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{b.keyword}</span>
+                          <span className="flex-shrink-0" style={{color: t.textMuted}}>{b.headlines.length} tiêu đề · {b.descriptions.length} mô tả</span>
+                          <button onClick={() => { setSdBasket(prev => prev.filter((_, j) => j !== i)); sdResetGen(); }} title="Bỏ khối này"
+                            className="flex-shrink-0 px-1" style={{color: t.textMuted}}>✕</button>
+                        </div>
+                      ))}
+                      {embedded ? (
+                        <div className="text-[11px] px-2.5 py-1.5 rounded-lg" style={{backgroundColor:"#7C3AED14", color:"#A78BFA"}}>
+                          Ad template của các khối này được tạo ở Bước 3, cùng lúc với creative, cho từng thị trường.
+                        </div>
+                      ) : (
+                      <button onClick={mkOpenTemplateModal}
+                        className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white"
+                        style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                        📝 Tạo ad template MKT ({sdBasket.length} khối)
+                      </button>
+                      )}
+                    </div>
+                  )}
+
+                  {!embedded && (sdCopy || sdBasket.length > 0) && (
+                    <div className="p-4 border rounded-2xl space-y-3" style={{...cardStyle, borderColor:"#10B98144"}}>
+                      <div>
+                        <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
+                        <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
+                          {sdBasket.length
+                            ? `Dịch ${sdBasket.length} khối đã chọn sang nhiều thị trường, giữ nguyên từng khối — mỗi thị trường tạo được 1 template.`
+                            : "Tick tiêu đề / mô tả rồi bấm ➕ Thêm vào template trước — localize dịch theo các khối đã chọn."}
+                        </div>
+                      </div>
+                      <div ref={sdLocRef} className="relative">
+                        <button type="button" onClick={() => { setSdLocOpen(o => !o); setSdLocSearch(""); }}
+                          className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
+                          style={{...inputStyle, borderColor: sdLocOpen ? "#10B981" : t.inputBorder}}>
+                          <span className="truncate" style={!sdLocMarkets.length ? {color: t.textMuted} : {}}>
+                            {sdLocMarkets.length ? `Đã chọn ${sdLocMarkets.length} thị trường` : "Chọn thị trường..."}
+                          </span>
+                          <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{sdLocOpen ? "▲" : "▼"}</span>
+                        </button>
+                        {sdLocOpen && (
+                          <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
+                            <div className="p-2 border-b" style={{borderColor: t.border}}>
+                              <input autoFocus value={sdLocSearch} onChange={e => setSdLocSearch(e.target.value)}
+                                placeholder="🔍 Gõ để tìm thị trường..."
+                                className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-emerald-500" style={inputStyle}/>
+                            </div>
+                            <div className="max-h-56 overflow-y-auto">
+                              {LOCALIZE_MARKETS
+                                .filter(m => !sdLocSearch.trim() || m.name.toLowerCase().includes(sdLocSearch.trim().toLowerCase()) || m.code.toLowerCase().includes(sdLocSearch.trim().toLowerCase()))
+                                .map(m => {
+                                  const on = sdLocMarkets.includes(m.code);
+                                  return (
+                                    <button key={m.code} type="button"
+                                      onClick={() => setSdLocMarkets(prev => on ? prev.filter(x => x !== m.code) : [...prev, m.code])}
+                                      className="w-full text-left px-3 py-2 text-sm flex items-center gap-2"
+                                      style={{backgroundColor: on ? "#10B98122" : "transparent", color: on ? "#10B981" : t.text}}>
+                                      <span className="w-4 flex-shrink-0">{on ? "✓" : ""}</span>
+                                      <span>{m.flag} {m.name}</span>
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                            <div className="flex items-center justify-between px-3 py-2 border-t" style={{borderColor: t.border}}>
+                              <button type="button" onClick={() => setSdLocMarkets([])} className="text-[11px]" style={{color: t.textMuted}}>Bỏ chọn tất cả</button>
+                              <button type="button" onClick={() => setSdLocOpen(false)} className="text-[11px] font-semibold" style={{color:"#10B981"}}>Xong</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={sdLocalizeBasket} disabled={!sdBasket.length || !sdLocMarkets.length || sdLocLoading}
+                        className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{background: sdBasket.length && sdLocMarkets.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
+                        {sdLocLoading ? "⏳ Đang dịch..." : !sdBasket.length ? "🌏 Thêm ít nhất 1 khối để localize" : `🌏 Localize ${sdBasket.length} khối · ${sdLocMarkets.length || ""} thị trường`}
+                      </button>
+
+                      {/* Localized blocks, one template per market */}
+                      {sdLocBlocks && sdLocBlocks.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px]" style={{color: t.textMuted}}>
+                              {Object.keys(sdLocTplDone).length}/{sdLocBlocks.length} thị trường đã có template
+                            </span>
+                            <button onClick={sdCreateAllLocTemplates} disabled={!!mkBusy || sdLocBlocks.every(m => sdLocTplDone[m.code])}
+                              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                              style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+                              {mkBusy === "loc-all" ? "⏳ Đang tạo..." : `📝 Tạo tất cả (${sdLocBlocks.filter(m => !sdLocTplDone[m.code]).length} template)`}
+                            </button>
+                          </div>
+                          {!mkModal && mkError && <p className="text-amber-400 text-[11px] bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
+                          {!mkModal && mkNote && <p className="text-[11px] bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
+                          {sdLocBlocks.map(m => {
+                            const errs = mkValidate(mkSplitBlocks(m.blocks));
+                            return (
+                              <div key={m.code} className="rounded-xl border p-3 space-y-2" style={{borderColor: sdLocTplDone[m.code] ? "#10B98166" : t.border, backgroundColor: t.tabBg}}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-sm font-semibold" style={{color: t.text}}>{m.flag} {m.name} <span className="text-[11px] font-normal" style={{color: t.textMuted}}>· {m.language}</span></span>
+                                  {sdLocTplDone[m.code] ? (
+                                    <span className="text-[11px] font-semibold" style={{color:"#10B981"}}>✓ Đã tạo template</span>
+                                  ) : (
+                                    <button onClick={() => sdOpenTemplate(m.blocks, m.code, m.code)} disabled={!!mkBusy}
+                                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg text-white disabled:opacity-40"
+                                      style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>📝 Tạo template {m.code}</button>
+                                  )}
+                                </div>
+                                {m.blocks.map((b, i) => (
+                                  <div key={i} className="rounded-lg px-2 py-1.5" style={{backgroundColor: t.card}}>
+                                    <div className="text-[10px] font-semibold mb-0.5" style={{color: "#A78BFA"}}>Khối {i + 1} · {m.keywords[i]}</div>
+                                    {b.headlines.map((h, k) => (
+                                      <div key={`h${k}`} className="text-xs px-1 break-words flex gap-2" style={{color: t.text}}>
+                                        <span className="flex-1">• {h}</span><span className="text-[10px]" style={{color: h.length > 30 ? "#EF4444" : t.textMuted}}>{h.length}</span>
+                                      </div>
+                                    ))}
+                                    {b.descriptions.map((d, k) => (
+                                      <div key={`d${k}`} className="text-xs px-1 break-words flex gap-2" style={{color: t.textSub}}>
+                                        <span className="flex-1">– {d}</span><span className="text-[10px]" style={{color: d.length > 90 ? "#EF4444" : t.textMuted}}>{d.length}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))}
+                                {errs.length > 0 && <div className="text-[10px]" style={{color:"#F59E0B"}}>⚠️ {errs.join(" · ")}</div>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+  );
 
   return (
     <div className="min-h-screen flex relative" style={{fontFamily:"Inter,-apple-system,sans-serif", backgroundColor: bgColor, color: t.text}}>
@@ -3480,7 +3807,7 @@ export default function Home() {
                 <div>
                   <div className="text-sm font-bold" style={{color: t.text}}>Bước 2 · Mascot, phạm vi gen & duyệt mẫu</div>
                   <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
-                    Bấm gen là AI viết luôn <b>ad copy</b> (5 tiêu đề + 5 mô tả) cho thị trường {COUNTRIES.find(c => c.code === abCountry)?.label || abCountry} · {abLang}, chạy song song với ảnh.
+                    Bấm gen là <b>Ad Copy Studio</b> tìm luôn keyword cho thị trường {COUNTRIES.find(c => c.code === abCountry)?.label || abCountry} · {abLang}, chạy song song với ảnh. Chọn keyword → tick → ➕ thêm khối ngay ở màn kết quả.
                   </div>
                 </div>
                 {/* Mascot — the consistency anchor across all sizes */}
@@ -3689,40 +4016,9 @@ export default function Home() {
                 )}
 
 
-                {/* Ad copy written for this market alongside the images. Ticked
-                    lines are what gets localized and becomes the ad template. */}
-                <div className="rounded-2xl border p-4 space-y-3" style={{...cardStyle, borderColor:"#7C3AED44"}}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-bold" style={{color: t.text}}>✍️ Ad copy · {cbMarketOf(abLang)} · {abLang}</div>
-                      <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>Dòng được tick sẽ được localize cùng ảnh và thành ad template trên MKT.</div>
-                    </div>
-                    <button onClick={cbGenerateCopy} disabled={cbCopyLoading}
-                      className="text-xs px-2.5 py-1.5 rounded-lg border flex-shrink-0 disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
-                      {cbCopyLoading ? "⏳ Đang viết..." : cbCopy ? "↻ Viết lại" : "✍️ Viết ad copy"}
-                    </button>
-                  </div>
-                  {cbCopyLoading && !cbCopy && <p className="text-xs" style={{color: t.textMuted}}>⏳ Đang viết 5 tiêu đề và 5 mô tả...</p>}
-                  {cbCopyError && <p className="text-amber-400 text-[11px] bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap">{cbCopyError}</p>}
-                  {cbCopy && ([["Tiêu đề", cbCopy.headlines, 30, cbSelH, setCbSelH], ["Mô tả", cbCopy.descriptions, 90, cbSelD, setCbSelD]] as const).map(([label, items, limit, sel, setSel]) => (
-                    <div key={label} className="space-y-1">
-                      <div className="text-[11px] font-semibold" style={{color: t.textSub}}>{label} (tối đa {limit} ký tự) · đã chọn {sel.length}</div>
-                      {items.map((item, i) => (
-                        <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
-                          <button type="button" aria-label="Chọn" onClick={() => mkToggle(setSel, item)}
-                            className="w-4 h-4 rounded border flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-                            style={{backgroundColor: sel.includes(item) ? "#7C3AED" : "transparent", borderColor: sel.includes(item) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
-                            {sel.includes(item) ? "✓" : ""}
-                          </button>
-                          <span className="flex-1 min-w-0 break-words" style={{color: t.text}}>{item}</span>
-                          <span className="text-[10px] flex-shrink-0" style={{color: item.length > limit ? "#EF4444" : t.textMuted}}>{item.length}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                  {cbCopy && mkValidate(mkSplitBlocks([cbSource()])).length > 0 && (
-                    <div className="text-[11px]" style={{color:"#F59E0B"}}>⚠️ {mkValidate(mkSplitBlocks([cbSource()])).join(" · ")}</div>
-                  )}
+                {/* Ad Copy Studio on this app and market: keywords → copy → blocks */}
+                <div className="rounded-2xl border p-4" style={{...cardStyle, borderColor:"#7C3AED44"}}>
+                  {renderStudio(true)}
                 </div>
 
                 <div className="flex gap-1 rounded-xl p-1 w-fit" style={{backgroundColor: t.tabBg}}>
@@ -3819,7 +4115,7 @@ export default function Home() {
                   <div>
                     <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
                     <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
-                      Vẽ lại chữ trên chính bộ ảnh này — <b>không tốn tiền gen ảnh</b> — và dịch luôn ad copy đã tick. Mỗi ngôn ngữ một file zip.
+                      Vẽ lại chữ trên chính bộ ảnh này — <b>không tốn tiền gen ảnh</b> — và dịch luôn các khối ad copy đã chọn. Mỗi ngôn ngữ một file zip.
                     </div>
                   </div>
                   <div ref={abLocRef} className="relative">
@@ -3897,6 +4193,8 @@ export default function Home() {
                     </span>
                   </div>
 
+                  {cbCopyError && <p className="text-amber-400 text-[11px] bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap">{cbCopyError}</p>}
+
                   {abLocSets.map(set => (
                     <div key={set.lang} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -3907,14 +4205,20 @@ export default function Home() {
                         <button onClick={() => abDownloadB64Zip(set.zip, `google-ads-${abBrief?.app_name || "banners"}-${set.lang}.zip`)}
                           className="bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg">⬇ Tải .zip</button>
                       </div>
-                      {cbLocCopy[set.lang] ? (
-                        <div className="rounded-lg px-2.5 py-1.5 text-xs space-y-0.5" style={{backgroundColor: t.card}}>
-                          <div className="text-[10px] font-semibold" style={{color:"#A78BFA"}}>✍️ Ad copy · {cbMarketOf(set.lang)}</div>
-                          {cbLocCopy[set.lang].headlines.map((h, i) => <div key={`h${i}`} style={{color: t.text}}>• {h}</div>)}
-                          {cbLocCopy[set.lang].descriptions.map((d, i) => <div key={`d${i}`} style={{color: t.textSub}}>– {d}</div>)}
+                      {cbLocCopy[set.lang] && cbLocSig === cbBasketSig() ? (
+                        <div className="rounded-lg px-2.5 py-1.5 text-xs space-y-1" style={{backgroundColor: t.card}}>
+                          {cbLocCopy[set.lang].map((blk, bi) => (
+                            <div key={bi}>
+                              <div className="text-[10px] font-semibold" style={{color:"#A78BFA"}}>✍️ Khối {bi + 1} · {sdBasket[bi]?.keyword} · {cbMarketOf(set.lang)}</div>
+                              {blk.headlines.map((h, i) => <div key={`h${i}`} style={{color: t.text}}>• {h}</div>)}
+                              {blk.descriptions.map((d, i) => <div key={`d${i}`} style={{color: t.textSub}}>– {d}</div>)}
+                            </div>
+                          ))}
                         </div>
-                      ) : cbCopy && (
-                        <div className="text-[11px]" style={{color: t.textMuted}}>{cbLocCopyBusy ? "⏳ Đang dịch ad copy..." : "Chưa có ad copy cho ngôn ngữ này — bấm Localize lại."}</div>
+                      ) : sdBasket.length > 0 && (
+                        <div className="text-[11px]" style={{color: t.textMuted}}>
+                          {cbLocCopyBusy ? "⏳ Đang dịch các khối ad copy..." : cbLocCopy[set.lang] ? "⚠️ Các khối đã đổi sau khi localize — bấm Localize lại để dịch theo khối mới." : "Chưa có ad copy cho ngôn ngữ này — bấm Localize lại."}
+                        </div>
                       )}
                       <div className="flex gap-2 overflow-x-auto pb-1">
                         {set.previews.map(p => (
@@ -3945,7 +4249,7 @@ export default function Home() {
                           <div key={x.lang} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
                             <span className="font-semibold w-16 flex-shrink-0" style={{color:"#A78BFA"}}>{cbMarketOf(x.lang)}</span>
                             <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{LANGUAGES.find(l => l.code === x.lang)?.label || x.lang}</span>
-                            <span className="flex-shrink-0" style={{color: t.textMuted}}>{x.previews.length} ảnh · {x.copy ? `${x.copy.headlines.length} tiêu đề, ${x.copy.descriptions.length} mô tả` : "chưa có ad copy"}</span>
+                            <span className="flex-shrink-0" style={{color: t.textMuted}}>{x.previews.length} ảnh · {x.blocks?.length ? `${x.blocks.length} khối ad copy` : x.lang === abLang ? "chưa có khối ad copy" : "chưa có ad copy — Localize lại"}</span>
                           </div>
                         ))}
                       </div>
@@ -4165,299 +4469,7 @@ export default function Home() {
         )}
 
         {/* AD COPY STUDIO — keyword research, copy for that keyword, localisation */}
-        {activePage === "studio" && (
-          <div className="space-y-5">
-            <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{color: t.textMuted}}>
-                  🔗 URL App Store / Play Store <span className="text-violet-400">*</span>
-                </label>
-                <div className="flex gap-2">
-                  <input value={sdUrl} onChange={e => setSdUrl(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") sdFetchKeywords(); }}
-                    placeholder="https://play.google.com/store/apps/details?id=... hoặc https://apps.apple.com/..."
-                    className="flex-1 min-w-0 text-sm rounded-xl px-3 py-2.5 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
-                  <button onClick={() => sdFetchKeywords()} disabled={!sdUrl.trim() || sdLoading}
-                    className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed">
-                    {sdLoading ? "⏳ Đang phân tích..." : "🔍 Phân tích"}
-                  </button>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Thị trường</label>
-                  <select value={sdCountry} onChange={e => { setSdCountry(e.target.value); const dl = COUNTRY_DEFAULT_LANG[e.target.value]; if (dl) setSdLang(dl); }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
-                    {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1.5" style={{color: t.textMuted}}>Ngôn ngữ ad copy</label>
-                  <select value={sdLang} onChange={e => setSdLang(e.target.value)}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm border focus:outline-none focus:border-violet-500" style={inputStyle}>
-                    {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-                  </select>
-                </div>
-              </div>
-              {sdAppName && <div className="text-xs" style={{color: t.textMuted}}>📱 {sdAppName}</div>}
-            </div>
-
-            {sdError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{sdError}</p>}
-
-            {sdKeywords.length > 0 && (
-              <div className="grid lg:grid-cols-5 gap-5 items-start">
-                {/* Keywords, highest volume first */}
-                <div className="lg:col-span-3 p-4 border rounded-2xl space-y-3" style={cardStyle}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>
-                      🔑 {sdKeywords.length} keyword · volume cao nhất trước
-                    </span>
-                    <span className="text-[11px]" style={{color: t.textMuted}}>Bấm một keyword để viết copy</span>
-                  </div>
-                  <div className="space-y-1.5 max-h-[32rem] overflow-y-auto pr-1">
-                    {sdKeywords.map(k => {
-                      const on = sdSelected === k.keyword;
-                      return (
-                        <button key={k.keyword} onClick={() => sdGenerateCopy(k.keyword)}
-                          className="w-full text-left px-3 py-2 rounded-xl border transition-colors"
-                          style={on
-                            ? {borderColor:"#7C3AED", backgroundColor:"#7C3AED18"}
-                            : {borderColor: t.border, backgroundColor: "transparent"}}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium truncate flex-1" style={{color: on ? "#A78BFA" : t.text}}>{k.keyword}</span>
-                            <span className="text-xs font-semibold flex-shrink-0" style={{color: t.textSub}}>{k.monthly_searches}</span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full"
-                              style={k.competition === "High" ? {backgroundColor:"#EF444422",color:"#EF4444"}
-                                : k.competition === "Medium" ? {backgroundColor:"#F59E0B22",color:"#F59E0B"}
-                                : {backgroundColor:"#10B98122",color:"#10B981"}}>
-                              {k.competition}
-                            </span>
-                            <span className="text-[10px]" style={{color: t.textMuted}}>${k.cpc_min}–${k.cpc_max}</span>
-                            <span className="text-[10px]" style={{color: t.textMuted}}>· {k.intent}</span>
-                            <span className="text-[10px] ml-auto" style={{color: t.textMuted}}>relevance {k.relevance}</span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <button onClick={() => sdFetchKeywords(true)} disabled={sdMoreLoading}
-                    className="w-full text-xs px-3 py-2 rounded-lg border disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
-                    {sdMoreLoading ? "⏳ Đang tìm thêm..." : "＋ Xem thêm 20 keyword"}
-                  </button>
-                </div>
-
-                {/* Copy for the chosen keyword, plus localisation */}
-                <div className="lg:col-span-2 space-y-4">
-                  <div className="p-4 border rounded-2xl space-y-3" style={cardStyle}>
-                    {!sdSelected ? (
-                      <p className="text-xs py-8 text-center" style={{color: t.textMuted}}>
-                        Chọn một keyword bên trái để tạo 5 tiêu đề + 5 mô tả cho đúng keyword đó.
-                      </p>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>✍️ Ad copy cho</div>
-                            <div className="text-sm font-bold truncate" style={{color:"#A78BFA"}}>{sdSelected}</div>
-                          </div>
-                          <button onClick={() => sdGenerateCopy(sdSelected)} disabled={sdCopyLoading}
-                            className="text-xs px-2.5 py-1.5 rounded-lg border flex-shrink-0 disabled:opacity-40" style={{borderColor: t.border, color: t.textMuted}}>
-                            {sdCopyLoading ? "⏳" : "↻ Viết lại"}
-                          </button>
-                        </div>
-
-                        {sdCopyLoading && <p className="text-xs" style={{color: t.textMuted}}>⏳ Đang viết 5 tiêu đề và 5 mô tả...</p>}
-
-                        {sdCopy && (
-                          <div className="space-y-3">
-                            {([["Tiêu đề", sdCopy.headlines, 30], ["Mô tả", sdCopy.descriptions, 90]] as [string,string[],number][]).map(([label, items, limit]) => (
-                              <div key={label} className="space-y-1">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[11px] font-semibold" style={{color: t.textSub}}>{label} (tối đa {limit} ký tự)</span>
-                                  <button onClick={() => sdCopyText(items.join("\n"), label)} className="text-[11px]" style={{color:"#7C3AED"}}>
-                                    {sdCopied === label ? "✓ Đã chép" : "Chép hết"}
-                                  </button>
-                                </div>
-                                {items.map((item, i) => {
-                                  const sel = label === "Tiêu đề" ? sdSelH : label === "Mô tả" ? sdSelD : null;
-                                  const setSel = label === "Tiêu đề" ? setSdSelH : setSdSelD;
-                                  return (
-                                  <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
-                                    {/* Headlines and descriptions can go into an MKT ad template; CTAs cannot. */}
-                                    {sel && (
-                                      <button type="button" aria-label="Chọn" onClick={() => mkToggle(setSel, item)}
-                                        className="w-4 h-4 rounded border flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-                                        style={{backgroundColor: sel.includes(item) ? "#7C3AED" : "transparent", borderColor: sel.includes(item) ? "#7C3AED" : t.inputBorder, color: "#fff"}}>
-                                        {sel.includes(item) ? "✓" : ""}
-                                      </button>
-                                    )}
-                                    <span className="flex-1 min-w-0 break-words" style={{color: t.text}}>{item}</span>
-                                    {/* Over the limit Google truncates mid-word, so flag it here rather than in the interface. */}
-                                    <span className="text-[10px] flex-shrink-0" style={item.length > limit ? {color:"#EF4444"} : {color: t.textMuted}}>{item.length}</span>
-                                    <button onClick={() => sdCopyText(item, `${label}-${i}`)} className="text-[10px] flex-shrink-0" style={{color: t.textMuted}}>
-                                      {sdCopied === `${label}-${i}` ? "✓" : "⧉"}
-                                    </button>
-                                  </div>
-                                  );
-                                })}
-                              </div>
-                            ))}
-                            <div className="flex items-center gap-2 pt-1">
-                              <button onClick={() => { setSdSelH([...sdCopy.headlines]); setSdSelD([...sdCopy.descriptions]); }}
-                                className="text-[11px] px-2.5 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.textMuted}}>☑ Chọn hết tiêu đề + mô tả</button>
-                              <button onClick={sdAddToBasket} disabled={!sdSelH.length && !sdSelD.length}
-                                className="flex-1 text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
-                                style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
-                                {sdBasket.some(b => b.keyword === sdSelected)
-                                  ? `↻ Cập nhật Khối ${sdBasket.findIndex(b => b.keyword === sdSelected) + 1} (${sdSelH.length} tiêu đề · ${sdSelD.length} mô tả)`
-                                  : `➕ Thêm vào template — Khối ${sdBasket.length + 1} (${sdSelH.length} tiêu đề · ${sdSelD.length} mô tả)`}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-
-                  {/* Template basket: survives switching keyword, one block per keyword */}
-                  {sdBasket.length > 0 && (
-                    <div className="p-4 border rounded-2xl space-y-2" style={{...cardStyle, borderColor:"#7C3AED66"}}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-bold" style={{color: t.text}}>📝 Ad template MKT — {sdBasket.length} khối</div>
-                        <button onClick={() => { setSdBasket([]); sdResetGen(); }} className="text-[11px]" style={{color: t.textMuted}}>Xoá hết</button>
-                      </div>
-                      <div className="text-[11px]" style={{color: t.textMuted}}>Chọn keyword khác, tick content rồi bấm ➕ để thêm khối tiếp theo.</div>
-                      {sdBasket.map((b, i) => (
-                        <div key={b.keyword} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
-                          <span className="font-semibold flex-shrink-0" style={{color: "#A78BFA"}}>Khối {i + 1}</span>
-                          <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{b.keyword}</span>
-                          <span className="flex-shrink-0" style={{color: t.textMuted}}>{b.headlines.length} tiêu đề · {b.descriptions.length} mô tả</span>
-                          <button onClick={() => { setSdBasket(prev => prev.filter((_, j) => j !== i)); sdResetGen(); }} title="Bỏ khối này"
-                            className="flex-shrink-0 px-1" style={{color: t.textMuted}}>✕</button>
-                        </div>
-                      ))}
-                      <button onClick={mkOpenTemplateModal}
-                        className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white"
-                        style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
-                        📝 Tạo ad template MKT ({sdBasket.length} khối)
-                      </button>
-                    </div>
-                  )}
-
-                  {(sdCopy || sdBasket.length > 0) && (
-                    <div className="p-4 border rounded-2xl space-y-3" style={{...cardStyle, borderColor:"#10B98144"}}>
-                      <div>
-                        <div className="text-sm font-bold" style={{color: t.text}}>🌏 Localize sang thị trường khác</div>
-                        <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
-                          {sdBasket.length
-                            ? `Dịch ${sdBasket.length} khối đã chọn sang nhiều thị trường, giữ nguyên từng khối — mỗi thị trường tạo được 1 template.`
-                            : "Tick tiêu đề / mô tả rồi bấm ➕ Thêm vào template trước — localize dịch theo các khối đã chọn."}
-                        </div>
-                      </div>
-                      <div ref={sdLocRef} className="relative">
-                        <button type="button" onClick={() => { setSdLocOpen(o => !o); setSdLocSearch(""); }}
-                          className="w-full rounded-xl px-3 py-2.5 text-sm border text-left flex items-center justify-between"
-                          style={{...inputStyle, borderColor: sdLocOpen ? "#10B981" : t.inputBorder}}>
-                          <span className="truncate" style={!sdLocMarkets.length ? {color: t.textMuted} : {}}>
-                            {sdLocMarkets.length ? `Đã chọn ${sdLocMarkets.length} thị trường` : "Chọn thị trường..."}
-                          </span>
-                          <span className="text-xs ml-2 flex-shrink-0" style={{color: t.textMuted}}>{sdLocOpen ? "▲" : "▼"}</span>
-                        </button>
-                        {sdLocOpen && (
-                          <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
-                            <div className="p-2 border-b" style={{borderColor: t.border}}>
-                              <input autoFocus value={sdLocSearch} onChange={e => setSdLocSearch(e.target.value)}
-                                placeholder="🔍 Gõ để tìm thị trường..."
-                                className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-emerald-500" style={inputStyle}/>
-                            </div>
-                            <div className="max-h-56 overflow-y-auto">
-                              {LOCALIZE_MARKETS
-                                .filter(m => !sdLocSearch.trim() || m.name.toLowerCase().includes(sdLocSearch.trim().toLowerCase()) || m.code.toLowerCase().includes(sdLocSearch.trim().toLowerCase()))
-                                .map(m => {
-                                  const on = sdLocMarkets.includes(m.code);
-                                  return (
-                                    <button key={m.code} type="button"
-                                      onClick={() => setSdLocMarkets(prev => on ? prev.filter(x => x !== m.code) : [...prev, m.code])}
-                                      className="w-full text-left px-3 py-2 text-sm flex items-center gap-2"
-                                      style={{backgroundColor: on ? "#10B98122" : "transparent", color: on ? "#10B981" : t.text}}>
-                                      <span className="w-4 flex-shrink-0">{on ? "✓" : ""}</span>
-                                      <span>{m.flag} {m.name}</span>
-                                    </button>
-                                  );
-                                })}
-                            </div>
-                            <div className="flex items-center justify-between px-3 py-2 border-t" style={{borderColor: t.border}}>
-                              <button type="button" onClick={() => setSdLocMarkets([])} className="text-[11px]" style={{color: t.textMuted}}>Bỏ chọn tất cả</button>
-                              <button type="button" onClick={() => setSdLocOpen(false)} className="text-[11px] font-semibold" style={{color:"#10B981"}}>Xong</button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <button onClick={sdLocalizeBasket} disabled={!sdBasket.length || !sdLocMarkets.length || sdLocLoading}
-                        className="w-full text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
-                        style={{background: sdBasket.length && sdLocMarkets.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
-                        {sdLocLoading ? "⏳ Đang dịch..." : !sdBasket.length ? "🌏 Thêm ít nhất 1 khối để localize" : `🌏 Localize ${sdBasket.length} khối · ${sdLocMarkets.length || ""} thị trường`}
-                      </button>
-
-                      {/* Localized blocks, one template per market */}
-                      {sdLocBlocks && sdLocBlocks.length > 0 && (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px]" style={{color: t.textMuted}}>
-                              {Object.keys(sdLocTplDone).length}/{sdLocBlocks.length} thị trường đã có template
-                            </span>
-                            <button onClick={sdCreateAllLocTemplates} disabled={!!mkBusy || sdLocBlocks.every(m => sdLocTplDone[m.code])}
-                              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed"
-                              style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
-                              {mkBusy === "loc-all" ? "⏳ Đang tạo..." : `📝 Tạo tất cả (${sdLocBlocks.filter(m => !sdLocTplDone[m.code]).length} template)`}
-                            </button>
-                          </div>
-                          {!mkModal && mkError && <p className="text-amber-400 text-[11px] bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
-                          {!mkModal && mkNote && <p className="text-[11px] bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
-                          {sdLocBlocks.map(m => {
-                            const errs = mkValidate(mkSplitBlocks(m.blocks));
-                            return (
-                              <div key={m.code} className="rounded-xl border p-3 space-y-2" style={{borderColor: sdLocTplDone[m.code] ? "#10B98166" : t.border, backgroundColor: t.tabBg}}>
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-sm font-semibold" style={{color: t.text}}>{m.flag} {m.name} <span className="text-[11px] font-normal" style={{color: t.textMuted}}>· {m.language}</span></span>
-                                  {sdLocTplDone[m.code] ? (
-                                    <span className="text-[11px] font-semibold" style={{color:"#10B981"}}>✓ Đã tạo template</span>
-                                  ) : (
-                                    <button onClick={() => sdOpenTemplate(m.blocks, m.code, m.code)} disabled={!!mkBusy}
-                                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg text-white disabled:opacity-40"
-                                      style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>📝 Tạo template {m.code}</button>
-                                  )}
-                                </div>
-                                {m.blocks.map((b, i) => (
-                                  <div key={i} className="rounded-lg px-2 py-1.5" style={{backgroundColor: t.card}}>
-                                    <div className="text-[10px] font-semibold mb-0.5" style={{color: "#A78BFA"}}>Khối {i + 1} · {m.keywords[i]}</div>
-                                    {b.headlines.map((h, k) => (
-                                      <div key={`h${k}`} className="text-xs px-1 break-words flex gap-2" style={{color: t.text}}>
-                                        <span className="flex-1">• {h}</span><span className="text-[10px]" style={{color: h.length > 30 ? "#EF4444" : t.textMuted}}>{h.length}</span>
-                                      </div>
-                                    ))}
-                                    {b.descriptions.map((d, k) => (
-                                      <div key={`d${k}`} className="text-xs px-1 break-words flex gap-2" style={{color: t.textSub}}>
-                                        <span className="flex-1">– {d}</span><span className="text-[10px]" style={{color: d.length > 90 ? "#EF4444" : t.textMuted}}>{d.length}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ))}
-                                {errs.length > 0 && <div className="text-[10px]" style={{color:"#F59E0B"}}>⚠️ {errs.join(" · ")}</div>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        {activePage === "studio" && renderStudio(false)}
 
         {/* COMPETITOR PAGE */}
         {activePage === "competitor" && (
