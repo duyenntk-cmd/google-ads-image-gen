@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 
@@ -31,7 +32,9 @@ interface LocalizeRequest {
   headlines: string[];
   descriptions: string[];
   ctas: string[];
-  markets: string[];
+  markets?: string[];
+  /** Free-form targets instead of the fixed market list: {code, name, language}. */
+  targets?: { code: string; name: string; language: string }[];
   sourceLanguage?: string;
 }
 
@@ -98,30 +101,36 @@ Return ONLY a valid JSON array, no markdown, no explanation:
 
   const parsed = JSON.parse(jsonMatch[0]) as { code: string; headlines: string[]; descriptions: string[]; ctas: string[] }[];
 
-  return parsed.map(item => {
+  // An item for a market that was not asked for is dropped rather than crashing the batch.
+  return parsed.filter(item => markets.some(m => m.code === item.code)).map(item => {
     const market = markets.find(m => m.code === item.code)!;
     return {
       code: item.code,
       name: market.name,
       language: market.language,
       flag: market.flag,
-      headlines: item.headlines.map(h => h.slice(0, 30)),
-      descriptions: item.descriptions.map(d => d.slice(0, 90)),
-      ctas: item.ctas.map(c => c.slice(0, 15)),
+      headlines: (item.headlines || []).map(h => h.slice(0, 30)),
+      descriptions: (item.descriptions || []).map(d => d.slice(0, 90)),
+      ctas: (item.ctas || []).map(c => c.slice(0, 15)),
     };
   });
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const body: LocalizeRequest = await req.json();
-    const { appName, headlines, descriptions, ctas, markets, sourceLanguage = "English" } = body;
+    const { appName, headlines, descriptions, ctas = [], markets = [], targets = [], sourceLanguage = "English" } = body;
 
-    if (!appName || !headlines?.length || !descriptions?.length || !ctas?.length || !markets?.length) {
+    // CTAs are optional: an ad-template block has headlines and descriptions only.
+    if (!appName || !headlines?.length || !descriptions?.length || (!markets.length && !targets.length)) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const targetMarkets = MARKETS.filter(m => markets.includes(m.code));
+    const targetMarkets = targets.length
+      ? targets.filter(t => t?.code && t?.language).map(t => ({ code: String(t.code), name: String(t.name || t.code), language: String(t.language), flag: "" }))
+      : MARKETS.filter(m => markets.includes(m.code));
     if (targetMarkets.length === 0) {
       return NextResponse.json({ error: "No valid markets selected" }, { status: 400 });
     }
