@@ -866,7 +866,12 @@ export default function Home() {
   const [abLocSearch, setAbLocSearch] = useState("");
   const abLocRef = useRef<HTMLDivElement>(null);
   const [abLocBusy, setAbLocBusy] = useState("");
-  const [abLocSets, setAbLocSets] = useState<{lang:string;previews:Preview[];zip:string}[]>([]);
+  /** copy: the translated strings, kept so the set can be redrawn when the artwork changes. */
+  type AbLocSet = { lang: string; copy: Partial<Brief>; previews: Preview[]; zip: string };
+  const [abLocSets, setAbLocSets] = useState<AbLocSet[]>([]);
+  /** Mirror of abLocSets, read when a generate finishes to redraw them on the new artwork. */
+  const abLocSetsRef = useRef<AbLocSet[]>([]);
+  useEffect(() => { abLocSetsRef.current = abLocSets; }, [abLocSets]);
 
   // Stored runs.
   const [abHistory, setAbHistory] = useState<AbRunMeta[]>([]);
@@ -1135,6 +1140,21 @@ export default function Home() {
       abPrevRef.current = merged;
       setAbPreviews(merged);
 
+      // Languages localized earlier (e.g. on the approval image) are redrawn on
+      // the new artwork, so every language has the same full set. Only the
+      // overlay is drawn again: no image generation, no translation.
+      const locSets = abLocSetsRef.current;
+      if (locSets.length) {
+        setAbStatus(`🌏 Vẽ lại ${locSets.length} bộ đã localize trên ${merged.length} ảnh mới...`);
+        const redrawn: AbLocSet[] = [];
+        for (const set of locSets) {
+          const previews = await abBuildSet(allBases, { ...theBrief, ...set.copy } as Brief, iconB64);
+          redrawn.push({ ...set, previews, zip: await abZipOf(previews) });
+        }
+        setAbLocSets(redrawn);
+        cbResetPush(locSets.map(x => x.lang));
+      }
+
       for (const p of merged) {
         const c = APP_CREATIVES.find((x) => x.key === p.key)!;
         const bytes = Uint8Array.from(atob(p.dataUrl.split(",")[1]), (ch) => ch.charCodeAt(0));
@@ -1251,7 +1271,7 @@ export default function Home() {
     // The ad copy goes into the same languages, in parallel with the redraw.
     const copyDone = cbLocalizeCopy(abLocLangs);
     cbResetPush(abLocLangs);
-    const sets: {lang:string;previews:Preview[];zip:string}[] = [];
+    const sets: AbLocSet[] = [];
     for (const lang of abLocLangs) {
       setAbLocBusy(`🌏 Đang localize sang ${lang}...`);
       try {
@@ -1267,7 +1287,7 @@ export default function Home() {
         if (!r.success) throw new Error(r.error || "localize thất bại");
         const localBrief = { ...abBrief, ...r.copy } as Brief;
         const previews = await abBuildSet(bases, localBrief, abIcon);
-        sets.push({ lang, previews, zip: await abZipOf(previews) });
+        sets.push({ lang, copy: r.copy, previews, zip: await abZipOf(previews) });
       } catch (e) {
         setAbError(`⚠️ ${lang}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -4249,7 +4269,7 @@ export default function Home() {
                           <div key={x.lang} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
                             <span className="font-semibold w-16 flex-shrink-0" style={{color:"#A78BFA"}}>{cbMarketOf(x.lang)}</span>
                             <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{LANGUAGES.find(l => l.code === x.lang)?.label || x.lang}</span>
-                            <span className="flex-shrink-0" style={{color: t.textMuted}}>{x.previews.length} ảnh · {x.blocks?.length ? `${x.blocks.length} khối ad copy` : x.lang === abLang ? "chưa có khối ad copy" : "chưa có ad copy — Localize lại"}</span>
+                            <span className="flex-shrink-0" style={{color: x.previews.length < sets[0].previews.length ? "#F59E0B" : t.textMuted}}>{x.previews.length < sets[0].previews.length && "⚠️ "}{x.previews.length} ảnh · {x.blocks?.length ? `${x.blocks.length} khối ad copy` : x.lang === abLang ? "chưa có khối ad copy" : "chưa có ad copy — Localize lại"}</span>
                           </div>
                         ))}
                       </div>
