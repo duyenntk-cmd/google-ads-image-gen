@@ -866,6 +866,8 @@ export default function Home() {
   const [abLocSearch, setAbLocSearch] = useState("");
   const abLocRef = useRef<HTMLDivElement>(null);
   const [abLocBusy, setAbLocBusy] = useState("");
+  /** Per-language note for "Localize lại": what to do differently this time. */
+  const [abLocNote, setAbLocNote] = useState<Record<string, string>>({});
   /** copy: the translated strings, kept so the set can be redrawn when the artwork changes. */
   type AbLocSet = { lang: string; copy: Partial<Brief>; previews: Preview[]; zip: string };
   const [abLocSets, setAbLocSets] = useState<AbLocSet[]>([]);
@@ -1263,16 +1265,21 @@ export default function Home() {
    * One more market from a finished set. Only the four printed strings change;
    * the artwork is reused, so this is a text call per market, not twenty images.
    */
-  const handleAbLocalize = async () => {
-    if (!abBrief || !abLocLangs.length) return;
+  /**
+   * @param only redo just these languages (the "↻ Localize lại" on a set).
+   * @param note what the operator wants done differently, passed to both translators.
+   */
+  const handleAbLocalize = async (only?: string[], note?: string) => {
+    const langs = only ?? abLocLangs;
+    if (!abBrief || !langs.length) return;
     const bases = abBasesRef.current;
     if (!Object.keys(bases).length) { setAbError("❌ Không còn ảnh gốc để vẽ lại. Gen lại bộ ảnh trước."); return; }
     setAbError("");
     // The ad copy goes into the same languages, in parallel with the redraw.
-    const copyDone = cbLocalizeCopy(abLocLangs);
-    cbResetPush(abLocLangs);
+    const copyDone = cbLocalizeCopy(langs, note);
+    cbResetPush(langs);
     const sets: AbLocSet[] = [];
-    for (const lang of abLocLangs) {
+    for (const lang of langs) {
       setAbLocBusy(`🌏 Đang localize sang ${lang}...`);
       try {
         const r = await abFetchJson("/api/banner-localize", {
@@ -1283,6 +1290,7 @@ export default function Home() {
           language: lang,
           country: LANG_MARKET[lang] || "",
           appName: abBrief.app_name,
+          instructions: note || "",
         }, 60000, `banner-localize:${lang}`);
         if (!r.success) throw new Error(r.error || "localize thất bại");
         const localBrief = { ...abBrief, ...r.copy } as Brief;
@@ -2169,7 +2177,7 @@ export default function Home() {
   /** Localized blocks per language (LANGUAGES code), in basket order. */
   const [cbLocCopy, setCbLocCopy] = useState<Record<string, CbBlock[]>>({});
   /** The basket the localized blocks were made from; a different basket makes them stale. */
-  const [cbLocSig, setCbLocSig] = useState("");
+  const [cbLocSig, setCbLocSig] = useState<Record<string, string>>({});
   const [cbLocCopyBusy, setCbLocCopyBusy] = useState(false);
   const [cbCopyError, setCbCopyError] = useState("");
   const [cbPushBusy, setCbPushBusy] = useState("");
@@ -2181,7 +2189,8 @@ export default function Home() {
   /** "<lang>:<slot>" ids already created as creatives. */
   const cbBulkedRef = useRef<Set<string>>(new Set());
   /** Market → template name already created. */
-  const cbTplDoneRef = useRef<Record<string, string>>({});
+  /** Market → template already on MKT, with the blocks it was sent with (a change is PATCHed). */
+  const cbTplDoneRef = useRef<Record<string, { name: string; id: string; sig: string }>>({});
   const cbIdemRef = useRef<{ body: string; key: string } | null>(null);
   /** App the Studio's keywords and basket belong to, so a new app starts clean. */
   const cbStudioUrlRef = useRef("");
@@ -2231,7 +2240,7 @@ export default function Home() {
    * localization. One request per block, so each language keeps exactly the
    * basket's block structure.
    */
-  const cbLocalizeCopy = async (langs: string[]) => {
+  const cbLocalizeCopy = async (langs: string[], note?: string) => {
     const basket = sdBasket.filter(b => b.headlines.length && b.descriptions.length);
     if (!langs.length || !basket.length) return;
     setCbLocCopyBusy(true); setCbCopyError("");
@@ -2244,6 +2253,7 @@ export default function Home() {
             headlines: b.headlines, descriptions: b.descriptions, ctas: [],
             targets: langs.map(l => ({ code: l, name: LANG_MARKET[l] || l, language: l })),
             sourceLanguage: abLang,
+            instructions: note || "",
           }),
         });
         const data = await res.json();
@@ -2258,7 +2268,8 @@ export default function Home() {
         got[l] = blocks.map(x => ({ headlines: x!.headlines, descriptions: x!.descriptions }));
       }
       setCbLocCopy(prev => ({ ...prev, ...got }));
-      setCbLocSig(JSON.stringify(sdBasket));
+      const sig = JSON.stringify(sdBasket);
+      setCbLocSig(prev => ({ ...prev, ...Object.fromEntries(Object.keys(got).map(l => [l, sig])) }));
       if (missing.length) setCbCopyError(`⚠️ Chưa dịch được ad copy: ${missing.join(", ")}`);
     } catch (e) {
       setCbCopyError("❌ Localize ad copy: " + (e instanceof Error ? e.message : String(e)));
@@ -2269,10 +2280,10 @@ export default function Home() {
 
   /** Every finished language set: the source set first, then each localized one. */
   const cbSets = () => {
-    const fresh = cbLocSig === cbBasketSig();
+    const sig = cbBasketSig();
     return [
       { lang: abLang, previews: abPrevRef.current.length ? abPrevRef.current : abPreviews, blocks: sdBasket.length ? sdBasket as CbBlock[] : null },
-      ...abLocSets.map(s => ({ lang: s.lang, previews: s.previews, blocks: fresh ? cbLocCopy[s.lang] || null : null })),
+      ...abLocSets.map(s => ({ lang: s.lang, previews: s.previews, blocks: cbLocSig[s.lang] === sig ? cbLocCopy[s.lang] || null : null })),
     ];
   };
 
@@ -2301,18 +2312,30 @@ export default function Home() {
       for (const s of sets) {
         const market = cbMarketOf(s.lang);
         const name = sdTplNameFor(market, gen);
-        if (cbTplDoneRef.current[market]) { log.push(`✓ ${name} (đã tạo trước đó)`); continue; }
+        const done = cbTplDoneRef.current[market];
         if (!s.blocks?.length) { log.push(`⚠️ ${market}: chưa có khối ad copy${s.lang === abLang ? " — chọn keyword và ➕ thêm khối" : " — bấm Localize lại"}, bỏ qua template`); continue; }
         const blocks = mkSplitBlocks(s.blocks);
         const errs = mkValidate(blocks);
         if (errs.length) { log.push(`⚠️ ${name}: ${errs.join("; ")}`); continue; }
+        const sig = JSON.stringify(blocks);
+        if (done && done.sig === sig) { log.push(`✓ ${done.name} (đã tạo trước đó)`); continue; }
         try {
-          await mkFetchJson("/api/mkt/ad-templates", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, adContents: blocks }),
-          });
-          cbTplDoneRef.current[market] = name;
-          log.push(`✅ Template ${name}`);
+          if (done) {
+            // Localized again (or blocks edited) after the push: update the template in place.
+            await mkFetchJson("/api/mkt/ad-templates", {
+              method: "PATCH", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: done.id, name: done.name, adContents: blocks }),
+            });
+            cbTplDoneRef.current[market] = { ...done, sig };
+            log.push(`✅ Cập nhật template ${done.name}`);
+          } else {
+            const d = await mkFetchJson("/api/mkt/ad-templates", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name, adContents: blocks }),
+            });
+            cbTplDoneRef.current[market] = { name, id: String(d.template?.id || ""), sig };
+            log.push(`✅ Template ${name}`);
+          }
         } catch (e) {
           log.push(`❌ Template ${name}: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -4203,7 +4226,7 @@ export default function Home() {
                     </div>
                   )}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={handleAbLocalize} disabled={!abLocLangs.length || abLocBusy !== ""}
+                    <button onClick={() => handleAbLocalize()} disabled={!abLocLangs.length || abLocBusy !== ""}
                       className="text-sm font-semibold px-4 py-2 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
                       style={{background: abLocLangs.length ? "linear-gradient(135deg,#059669,#10B981)" : "#9CA3AF"}}>
                       {abLocBusy || `🌏 Localize ${abLocLangs.length || ""} thị trường`}
@@ -4225,7 +4248,7 @@ export default function Home() {
                         <button onClick={() => abDownloadB64Zip(set.zip, `google-ads-${abBrief?.app_name || "banners"}-${set.lang}.zip`)}
                           className="bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg">⬇ Tải .zip</button>
                       </div>
-                      {cbLocCopy[set.lang] && cbLocSig === cbBasketSig() ? (
+                      {cbLocCopy[set.lang] && cbLocSig[set.lang] === cbBasketSig() ? (
                         <div className="rounded-lg px-2.5 py-1.5 text-xs space-y-1" style={{backgroundColor: t.card}}>
                           {cbLocCopy[set.lang].map((blk, bi) => (
                             <div key={bi}>
@@ -4246,6 +4269,20 @@ export default function Home() {
                             className="rounded-lg shadow cursor-zoom-in flex-shrink-0"
                             style={{height: 96, width: "auto"}}/>
                         ))}
+                      </div>
+                      {/* Not right? Redo this one language — text only, the artwork is reused. */}
+                      <div className="flex gap-2 items-start">
+                        <textarea value={abLocNote[set.lang] || ""} rows={1}
+                          onChange={e => setAbLocNote(prev => ({ ...prev, [set.lang]: e.target.value }))}
+                          placeholder="Chưa đạt? Ghi yêu cầu khi dịch lại (tuỳ chọn): VD không dùng tiếng Anh, giọng trẻ trung hơn, đổi 'X' thành 'Y'…"
+                          className="flex-1 min-w-0 text-[11px] rounded-lg px-2 py-1.5 border focus:outline-none focus:border-emerald-500 resize-y"
+                          style={{ ...inputStyle, minHeight: 32 }}/>
+                        <button onClick={() => handleAbLocalize([set.lang], (abLocNote[set.lang] || "").trim())}
+                          disabled={abLocBusy !== "" || cbLocCopyBusy}
+                          className="flex-shrink-0 text-[11px] font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40"
+                          style={{background: "linear-gradient(135deg,#059669,#10B981)"}}>
+                          {abLocBusy.includes(set.lang) ? "⏳ Đang dịch lại..." : "↻ Localize lại"}
+                        </button>
                       </div>
                     </div>
                   ))}

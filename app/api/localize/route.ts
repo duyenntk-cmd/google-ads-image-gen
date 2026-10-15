@@ -36,6 +36,8 @@ interface LocalizeRequest {
   /** Free-form targets instead of the fixed market list: {code, name, language}. */
   targets?: { code: string; name: string; language: string }[];
   sourceLanguage?: string;
+  /** Free-text guidance from the operator, e.g. when redoing a translation. */
+  instructions?: string;
 }
 
 interface MarketResult {
@@ -55,7 +57,8 @@ async function translateBatch(
   descriptions: string[],
   ctas: string[],
   sourceLanguage: string,
-  retryNote = ""
+  retryNote = "",
+  instructions = ""
 ): Promise<MarketResult[]> {
   const marketsJson = markets.map(m => ({ code: m.code, name: m.name, language: m.language }));
 
@@ -80,7 +83,9 @@ Rules:
 7. Preserve the marketing intent and emotional appeal
 8. Write EVERY line ENTIRELY in the market's target language. Do NOT mix in English or the source language — no Taglish, Hinglish, Singlish or similar code-mixing, even if local ads often do. Translate English loanwords such as "download", "free", "tutor", "course", "beginner", "expert", "users", "app" into the target language. Only the app/brand name "${appName}" and the word "AI" may stay as they are. (If the target language is English, write natural English.)
 9. Use the language's native script (e.g. Devanagari for Hindi, Thai script for Thai), never a romanized transliteration.${retryNote ? `
-10. ${retryNote}` : ""}
+10. ${retryNote}` : ""}${instructions ? `
+
+Additional instructions from the marketer (follow them, within the rules above): ${instructions}` : ""}
 
 Return ONLY a valid JSON array, no markdown, no explanation:
 [
@@ -153,6 +158,7 @@ export async function POST(req: NextRequest) {
   try {
     const body: LocalizeRequest = await req.json();
     const { appName, headlines, descriptions, ctas = [], markets = [], targets = [], sourceLanguage = "English" } = body;
+    const instructions = String(body.instructions || "").slice(0, 500);
 
     // CTAs are optional: an ad-template block has headlines and descriptions only.
     if (!appName || !headlines?.length || !descriptions?.length || (!markets.length && !targets.length)) {
@@ -171,7 +177,7 @@ export async function POST(req: NextRequest) {
     const results: MarketResult[] = [];
     for (let i = 0; i < targetMarkets.length; i += BATCH_SIZE) {
       const batch = targetMarkets.slice(i, i + BATCH_SIZE);
-      const batchResults = await translateBatch(batch, appName, headlines, descriptions, ctas, sourceLanguage);
+      const batchResults = await translateBatch(batch, appName, headlines, descriptions, ctas, sourceLanguage, "", instructions);
       results.push(...batchResults);
     }
 
@@ -187,6 +193,7 @@ export async function POST(req: NextRequest) {
         targetMarkets.filter(m => wrong.some(w => w.code === m.code)),
         appName, headlines, descriptions, ctas, sourceLanguage,
         "A previous attempt left lines in English or in Latin letters. Every headline and description must be written in the target language's own script.",
+        instructions,
       ).catch(() => [] as MarketResult[]);
       for (const r of again) {
         const i = results.findIndex(x => x.code === r.code);

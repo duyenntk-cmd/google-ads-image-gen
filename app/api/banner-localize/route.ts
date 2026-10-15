@@ -22,7 +22,8 @@ export async function POST(req: NextRequest) {
   const unauth = await requireSession();
   if (unauth) return unauth;
   try {
-    const { copy, language, country, appName } = await req.json();
+    const { copy, language, country, appName, instructions } = await req.json();
+    const note = String(instructions || "").slice(0, 500);
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ success: false, error: "Thiếu OPENAI_API_KEY." }, { status: 500 });
     }
@@ -47,7 +48,8 @@ export async function POST(req: NextRequest) {
             `- Tôn trọng giới hạn ký tự, đây là giới hạn CỨNG vì chữ vẽ lên ảnh: ${LIMITS}.\n` +
             `- Giữ nguyên tên app "${appName || ""}" nếu nó xuất hiện — thương hiệu không dịch.\n` +
             `- Viết TOÀN BỘ bằng ${language}, đúng chữ viết của ngôn ngữ đó (VD tiếng Hindi dùng chữ Devanagari). KHÔNG trộn tiếng Anh (không Taglish, Hinglish…) và KHÔNG phiên âm sang chữ Latin. Chỉ tên app và chữ "AI" được giữ nguyên.\n` +
-            `- Trả về DUY NHẤT JSON với đúng các key: headline, subheadline, cta_text, tagline.`,
+            `- Trả về DUY NHẤT JSON với đúng các key: headline, subheadline, cta_text, tagline.` +
+            (note ? `\n\nYêu cầu thêm của marketer (làm theo, trong giới hạn các quy tắc trên): ${note}` : ""),
         },
         { role: "user", content: JSON.stringify(copy) },
       ],
