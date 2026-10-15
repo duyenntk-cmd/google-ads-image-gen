@@ -54,7 +54,8 @@ async function translateBatch(
   headlines: string[],
   descriptions: string[],
   ctas: string[],
-  sourceLanguage: string
+  sourceLanguage: string,
+  retryNote = ""
 ): Promise<MarketResult[]> {
   const marketsJson = markets.map(m => ({ code: m.code, name: m.name, language: m.language }));
 
@@ -77,6 +78,9 @@ Rules:
 5. Keep the tone natural and localized (not just literal translation)
 6. For Arabic, use right-to-left friendly copy
 7. Preserve the marketing intent and emotional appeal
+8. Write EVERY line ENTIRELY in the market's target language. Do NOT mix in English or the source language — no Taglish, Hinglish, Singlish or similar code-mixing, even if local ads often do. Translate English loanwords such as "download", "free", "tutor", "course", "beginner", "expert", "users", "app" into the target language. Only the app/brand name "${appName}" and the word "AI" may stay as they are. (If the target language is English, write natural English.)
+9. Use the language's native script (e.g. Devanagari for Hindi, Thai script for Thai), never a romanized transliteration.${retryNote ? `
+10. ${retryNote}` : ""}
 
 Return ONLY a valid JSON array, no markdown, no explanation:
 [
@@ -116,6 +120,33 @@ Return ONLY a valid JSON array, no markdown, no explanation:
   });
 }
 
+/**
+ * True when a line is not really in the expected script: no native character
+ * at all, or more Latin letters than native ones ("AI से Free English Course").
+ * The app name and "AI" are allowed to stay Latin and are not counted.
+ */
+function mostlyLatin(line: string, script: RegExp, appName: string): boolean {
+  let rest = line.replace(/\bAI\b/g, "");
+  for (const word of appName.split(/\s+/).filter(w => w.length > 1)) rest = rest.split(word).join("");
+  const native = Array.from(rest).filter(ch => script.test(ch)).length;
+  const latin = (rest.match(/[A-Za-z]/g) || []).length;
+  return native === 0 || latin > native * 0.5;
+}
+
+/** The script a language is written in, for languages that have their own. */
+function scriptOf(language: string): RegExp | null {
+  const l = language.toLowerCase();
+  if (l.includes("hindi")) return /[\u0900-\u097F]/;
+  if (l.includes("bengali") || l.includes("bangla")) return /[\u0980-\u09FF]/;
+  if (l.includes("thai")) return /[\u0E00-\u0E7F]/;
+  if (l.includes("arabic")) return /[\u0600-\u06FF]/;
+  if (l.includes("japanese")) return /[\u3040-\u30FF\u4E00-\u9FFF]/;
+  if (l.includes("korean")) return /[\uAC00-\uD7AF]/;
+  if (l.includes("chinese")) return /[\u4E00-\u9FFF]/;
+  if (l.includes("russian")) return /[\u0400-\u04FF]/;
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   const unauth = await requireSession();
   if (unauth) return unauth;
@@ -142,6 +173,25 @@ export async function POST(req: NextRequest) {
       const batch = targetMarkets.slice(i, i + BATCH_SIZE);
       const batchResults = await translateBatch(batch, appName, headlines, descriptions, ctas, sourceLanguage);
       results.push(...batchResults);
+    }
+
+    // Languages with their own script can be checked: a line without a single
+    // character of that script came back in English (or romanized). Those
+    // markets are translated once more with the problem spelled out.
+    const wrong = results.filter(r => {
+      const script = scriptOf(r.language);
+      return script && [...r.headlines, ...r.descriptions].some(line => mostlyLatin(line, script, appName));
+    });
+    if (wrong.length) {
+      const again = await translateBatch(
+        targetMarkets.filter(m => wrong.some(w => w.code === m.code)),
+        appName, headlines, descriptions, ctas, sourceLanguage,
+        "A previous attempt left lines in English or in Latin letters. Every headline and description must be written in the target language's own script.",
+      ).catch(() => [] as MarketResult[]);
+      for (const r of again) {
+        const i = results.findIndex(x => x.code === r.code);
+        if (i >= 0) results[i] = r;
+      }
     }
 
     return NextResponse.json({ success: true, results });

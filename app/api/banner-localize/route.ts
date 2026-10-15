@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
             `- Giữ đúng thông điệp và mức độ khẩn trương của bản gốc.\n` +
             `- Tôn trọng giới hạn ký tự, đây là giới hạn CỨNG vì chữ vẽ lên ảnh: ${LIMITS}.\n` +
             `- Giữ nguyên tên app "${appName || ""}" nếu nó xuất hiện — thương hiệu không dịch.\n` +
+            `- Viết TOÀN BỘ bằng ${language}, đúng chữ viết của ngôn ngữ đó (VD tiếng Hindi dùng chữ Devanagari). KHÔNG trộn tiếng Anh (không Taglish, Hinglish…) và KHÔNG phiên âm sang chữ Latin. Chỉ tên app và chữ "AI" được giữ nguyên.\n` +
             `- Trả về DUY NHẤT JSON với đúng các key: headline, subheadline, cta_text, tagline.`,
         },
         { role: "user", content: JSON.stringify(copy) },
