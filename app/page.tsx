@@ -6,6 +6,7 @@ import { extractFramesFromVideo, ExtractedFrame } from "@/lib/videoUtils";
 import { AD_SIZES } from "@/lib/adSizes";
 import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
+import CampDoctor from "@/components/CampDoctor";
 import { abSaveRun, abListRuns, abLoadArt, abDeleteRun, AbRunMeta } from "@/lib/abHistory";
 
 interface Brief {
@@ -802,7 +803,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio"|"mkt">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio"|"mkt"|"campdoctor">("home");
 
   // ── AI Banner ──
   type AbStep = "input" | "generating" | "preview";
@@ -3068,6 +3069,7 @@ export default function Home() {
             ["aibanner", "🚀", "Banner + Ad Copy"],
             ["studio",   "🎯", "Ad Copy Studio"],
             ["launch",   "🚀", "Launch Camp"],
+            ["campdoctor", "📊", "Phân tích Camp"],
             ["mkt",      "🔌", "MKT System"],
           ] as const).map(([page, icon, label]) => (
             <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } if (page==="launch") { checkAdsConnection(); } }}
@@ -3144,7 +3146,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "🚀 Banner + Ad Copy" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "🚀 Banner + Ad Copy" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="campdoctor" ? "📊 Phân tích Camp" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -4527,6 +4529,8 @@ export default function Home() {
 
         {/* AD COPY STUDIO — keyword research, copy for that keyword, localisation */}
         {activePage === "studio" && renderStudio(false)}
+
+        {activePage === "campdoctor" && <CampDoctor t={t} onMakeCreatives={() => setActivePage("aibanner")} />}
 
         {/* COMPETITOR PAGE */}
         {activePage === "competitor" && (
