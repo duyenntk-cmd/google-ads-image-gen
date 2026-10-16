@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 
 export async function GET() {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   const clientId = process.env.GOOGLE_CLIENT_ID!;
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL!;
   const redirectUri = `${baseUrl}/api/auth/callback`;

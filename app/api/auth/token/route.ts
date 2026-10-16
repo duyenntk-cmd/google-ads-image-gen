@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 
 export async function GET(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   // Return current access token or refresh it
   const accessToken = req.cookies.get("yt_access")?.value;
   if (accessToken) return NextResponse.json({ access_token: accessToken });
@@ -34,6 +37,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function DELETE() {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   const response = NextResponse.json({ ok: true });
   response.cookies.delete("yt_access");
   response.cookies.delete("yt_refresh");
