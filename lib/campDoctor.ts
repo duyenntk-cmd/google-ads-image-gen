@@ -73,6 +73,12 @@ export const RULES = {
   minCost: 5,
   minBudgetShare: 0.1,
   minConversions: 30,
+  /**
+   * "Limited by budget" is Google's forecast. Below this share of the budget
+   * actually spent (typically a mid-day export), a budget raise waits for the
+   * day to finish.
+   */
+  minBudgetUsedToRaise: 0.5,
   /** CTR below this with enough impressions → creative fatigue. */
   lowCtr: 0.01,
   lowCtrImpressions: 2000,
@@ -236,6 +242,13 @@ export function analyze(row: CampRow, rules = RULES): CampAnalysis {
   const ratio = row.estRoas !== null && row.tRoas ? row.estRoas / row.tRoas : null;
   const cost = row.cost ?? 0, budget = row.budget ?? 0;
   const enoughData = cost >= Math.max(rules.minCost, budget * rules.minBudgetShare) || (row.conversions ?? 0) >= rules.minConversions;
+  const used = budget ? cost / budget : 0;
+  /** Budget raise, or a wait when the budget is not actually being spent yet. */
+  const raise = (step: number, vs: string, why: string): Suggestion => used < rules.minBudgetUsedToRaise
+    ? { kind: "keep", severity: "good", title: "Đạt target — chờ hết ngày rồi mới tăng budget",
+        detail: `${vs}. Google báo limited by budget nhưng mới tiêu ${Math.round(used * 100)}% budget ($${money(cost)}/$${budget}) — nếu là dữ liệu giữa ngày, xem lại khi đủ ngày; tiêu ≥ ${Math.round(rules.minBudgetUsedToRaise * 100)}% thì tăng ${Math.round(step * 100)}%.` }
+    : { kind: "budget_up", severity: "good", title: `Tăng budget ${Math.round(step * 100)}%`, from: budget, to: Math.round(budget * (1 + step)), unit: "$",
+        detail: `${vs}, ${why}` };
 
   if (policyMost) out.push({ kind: "assets", severity: "bad", title: "Phần lớn asset bị giới hạn bởi policy",
     detail: "Camp gần như không phân phối được. Vào Assets xem asset bị từ chối / giới hạn, gỡ và thay bằng asset mới (tạo ở trang Banner + Ad Copy)." });
@@ -257,16 +270,14 @@ export function analyze(row: CampRow, rules = RULES): CampAnalysis {
     const vs = `est ROAS ${fmtPct(est)} so với target ${fmtPct(t)} (${fmtPct(ratio)} target)`;
     if (ratio >= rules.scaleAt) {
       if (budgetLimited) {
-        out.push({ kind: "budget_up", severity: "good", title: "Tăng budget 20%", from: budget, to: Math.round(budget * (1 + rules.maxStep)), unit: "$",
-          detail: `${vs}, đang bị giới hạn budget → scale.` });
+        out.push(raise(rules.maxStep, vs, "đang bị giới hạn budget → scale."));
       } else {
         const to = Math.max(0.1, t * (1 - 0.1));
         out.push({ kind: "troas_down", severity: "good", title: "Hạ tROAS 10% để lấy thêm volume", from: pct(t), to: pct(to), unit: "%",
           detail: `${vs}${bidConstrained ? ", bidding strategy constrained" : ", không hết budget"} → hạ target để thắng thêm đấu giá.` });
       }
     } else if (ratio >= 1) {
-      if (budgetLimited) out.push({ kind: "budget_up", severity: "good", title: "Tăng budget 10%", from: budget, to: Math.round(budget * 1.1), unit: "$",
-        detail: `${vs}, đạt target và đang bị giới hạn budget → tăng nhẹ.` });
+      if (budgetLimited) out.push(raise(0.1, vs, "đạt target và đang bị giới hạn budget → tăng nhẹ."));
       else out.push({ kind: "keep", severity: "good", title: "Đạt target — giữ nguyên", detail: `${vs}.` });
     } else if (ratio >= rules.tightenBelow) {
       out.push({ kind: "keep", severity: "warn", title: "Gần target — theo dõi, chưa tăng budget",
