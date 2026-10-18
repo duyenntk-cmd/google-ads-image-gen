@@ -1,6 +1,6 @@
 ---
 name: google-ads-studio
-description: Bộ công cụ Google Ads cho app mobile tại https://google-ads-image-gen.vercel.app — gồm Gen Banner (cắt ảnh từ video ads), AI Banner (gen 20 creative App campaign từ URL store, localize, lưu lịch sử), Ad Copy Studio (keyword + 5 tiêu đề/5 mô tả + localize), Launch Camp (tạo campaign Google Ads), YouTube Upload (up hàng loạt video unlisted lấy link chạy ads). Dùng skill này khi người dùng hỏi cách dùng tool, gặp lỗi khi dùng, muốn biết một tính năng nằm ở đâu, muốn sửa/phát triển code của repo duyenntk-cmd/google-ads-image-gen, hỏi về chi phí mỗi lượt gen, hỏi kích thước ảnh Google App campaign, hoặc nói "gen banner", "gen ảnh quảng cáo", "tạo creative", "viết ad copy", "tìm keyword", "localize quảng cáo", "up video unlisted", "tạo campaign".
+description: Bộ công cụ Google Ads cho app mobile tại https://google-ads-image-gen.vercel.app — gồm Gen Banner (cắt ảnh từ video ads), AI Banner (gen 20 creative App campaign từ URL store, localize, lưu lịch sử), Ad Copy Studio (keyword + 5 tiêu đề/5 mô tả + localize), Launch Camp (tạo campaign Google Ads), YouTube Upload (up hàng loạt video unlisted lấy link chạy ads), Phân tích Camp (đọc report GG Ads + est ROAS D0 của system, gợi ý tăng/giảm budget, chỉnh tROAS, thay asset trên từng campaign). Dùng skill này khi người dùng hỏi cách dùng tool, gặp lỗi khi dùng, muốn biết một tính năng nằm ở đâu, muốn sửa/phát triển code của repo duyenntk-cmd/google-ads-image-gen, hỏi về chi phí mỗi lượt gen, hỏi kích thước ảnh Google App campaign, hỏi nên tăng budget bao nhiêu / khi nào chỉnh tROAS / camp có đạt ROAS D0 không, hoặc nói "phân tích camp", "gen banner", "gen ảnh quảng cáo", "tạo creative", "viết ad copy", "tìm keyword", "localize quảng cáo", "up video unlisted", "tạo campaign".
 ---
 
 # Google Ads Studio
@@ -21,9 +21,29 @@ không đưa khoá vào commit message hay PR.
 | 🚀 Launch Camp | Tạo App campaign thật trên tài khoản Google Ads | Google Ads API |
 | ▶️ YouTube Upload | Up hàng loạt video Unlisted, lấy link chạy ads | YouTube Data API |
 | 🔌 MKT System | Đẩy ad template + creative sang MKT System bằng mã kết nối | API MKT System |
+| 📊 Phân tích Camp | Report GG Ads + est ROAS (system) → gợi ý action trên từng camp | luật trong `lib/campDoctor.ts` |
 
 Chi tiết từng công cụ: `references/tools.md`.
 Kiến trúc, API route, biến môi trường, quy ước code: `references/architecture.md`.
+Khung quyết định budget / tROAS cho App campaign: `references/camp-analysis.md`.
+
+## Phân tích Camp — khung quyết định (tóm tắt)
+
+**Target ROAS D0 = 100%**, so với `est_roas` của data system (không so với tROAS của camp).
+Camp đang learning thì không chỉnh. Mỗi lần chỉnh tối đa khoảng 20%.
+
+| Tiêu hết budget và ROAS ≥ target | Tăng budget |
+|---|---|
+| Vừa đạt, mới ổn định | +10–15% |
+| Tốt, hết budget liên tục 3–7 ngày | +15–20% |
+| ≥ 120% target, ổn định | +20–30% |
+| Dao động, mới vài ngày tốt | 0–10% / giữ |
+| Dưới target | Không tăng; tối ưu trước |
+
+- Tiêu ít hơn budget mà ROAS tốt → **kiểm tra tROAS có quá cao** (hạ từng bước), không phải tăng budget.
+- Tiêu hết budget mà ROAS thấp → không scale, kiểm tra chất lượng user.
+- ROAS tốt nhưng ít conversion → kiểm tra tracking / event tối ưu.
+- Tăng budget mà volume không tăng → kiểm tra giới hạn đấu giá, tROAS, quy mô thị trường.
 
 ## MKT System — hai điều phải nhớ
 

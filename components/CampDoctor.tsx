@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import {
-  analyzeAll, joinReports, parseAdsSheet, parseDelimited, parseSystemSheet,
-  type CampAnalysis, type Severity, type SystemRow,
+  analyzeAll, joinReports, normName, parseAdsSheet, parseDelimited, parseReportDate, parseSystemSheet, RULES,
+  type CampAnalysis, type DayPoint, type Severity, type SystemRow,
 } from "@/lib/campDoctor";
 
 export interface CampTheme {
@@ -18,6 +18,10 @@ const SEV: Record<Severity, { color: string; bg: string; label: string; dot: str
 };
 
 const STORE_KEY = "camp_doctor_urls";
+/** Per-campaign daily snapshots, so "3–7 ngày liên tiếp" and "dao động" can be judged. */
+const HISTORY_KEY = "camp_doctor_history";
+type History = Record<string, DayPoint[]>;
+const loadHistory = (): History => { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "{}"); } catch { return {}; } };
 type Source = { url: string; rows: unknown[][] | null; label: string };
 
 const fmt$ = (n: number | null | undefined) => (n === null || n === undefined ? "—" : `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`);
@@ -35,6 +39,10 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
   const [results, setResults] = useState<CampAnalysis[] | null>(null);
   const [unmatched, setUnmatched] = useState<SystemRow[]>([]);
   const [filter, setFilter] = useState<Severity | "all">("all");
+  /** Target ROAS D0, in percent. */
+  const [targetPct, setTargetPct] = useState(100);
+  const [reportDate, setReportDate] = useState("");
+  const [historyDays, setHistoryDays] = useState(0);
   const [copied, setCopied] = useState("");
 
   // Last links used, restored after mount (localStorage is not there during server render).
@@ -44,6 +52,7 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
         const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
         if (saved.sys) setSys(s => ({ ...s, url: saved.sys }));
         if (saved.ads) setAds(s => ({ ...s, url: saved.ads }));
+        if (saved.target) setTargetPct(saved.target);
       } catch { /* storage blocked */ }
     }, 0);
     return () => clearTimeout(id);
@@ -65,7 +74,7 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
   const run = async () => {
     setBusy(true); setError("");
     try {
-      try { localStorage.setItem(STORE_KEY, JSON.stringify({ sys: sys.url, ads: ads.url })); } catch {}
+      try { localStorage.setItem(STORE_KEY, JSON.stringify({ sys: sys.url, ads: ads.url, target: targetPct })); } catch {}
       // A pasted link wins over an uploaded file, so a fresh link is always re-read.
       const [s, a] = await Promise.all([
         sys.url.trim() ? readSheet(sys.url.trim()) : Promise.resolve(sys.rows ? { rows: sys.rows, label: sys.label } : null),
@@ -76,7 +85,19 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
       setSys(x => ({ ...x, label: s.label })); setAds(x => ({ ...x, label: a.label }));
       const sysRows = parseSystemSheet(s.rows), adsRows = parseAdsSheet(a.rows);
       const joined = joinReports(adsRows, sysRows);
-      setResults(analyzeAll(joined));
+      const date = parseReportDate(a.rows) || new Date().toISOString().slice(0, 10);
+      const history = loadHistory();
+      setResults(analyzeAll(joined, { ...RULES, targetD0: targetPct / 100 }, history, date));
+      setReportDate(date);
+      // Keep this day for next time (replacing an earlier read of the same day), 14 days max.
+      for (const r of joined) {
+        const key = normName(r.name);
+        const point: DayPoint = { date, estRoas: r.estRoas, cost: r.cost, budget: r.budget, conversions: r.conversions,
+          limited: /limited by budget|budget constrained/i.test(r.statusReasons) };
+        history[key] = [...(history[key] || []).filter(d => d.date !== date), point].sort((x, y) => x.date.localeCompare(y.date)).slice(-14);
+      }
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch { /* storage full or blocked */ }
+      setHistoryDays(new Set(Object.values(history).flat().map(d => d.date)).size);
       const adsNames = new Set(joined.map(j => j.name.replace(/\s+/g, " ").trim().toLowerCase()));
       setUnmatched(sysRows.filter(r => !adsNames.has(r.name.replace(/\s+/g, " ").trim().toLowerCase())));
     } catch (e) {
@@ -140,6 +161,17 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
         <div className="text-[11px]" style={{ color: t.textMuted }}>
           Đọc bằng link: file phải được share quyền xem cho service account của web (nếu chưa, lỗi sẽ hiện đúng email cần share).
         </div>
+        <div className="flex items-center gap-3 flex-wrap text-xs" style={{ color: t.text }}>
+          <label className="flex items-center gap-2">
+            <span className="font-semibold">Target ROAS D0</span>
+            <input type="number" min={1} max={1000} value={targetPct} onChange={e => setTargetPct(Number(e.target.value) || 100)}
+              className="w-20 text-xs rounded-lg px-2 py-1.5 border focus:outline-none focus:border-violet-500" style={inputStyle} />
+            <span>%</span>
+          </label>
+          <span className="text-[11px]" style={{ color: t.textMuted }}>
+            Mỗi lần phân tích, số liệu của ngày report được lưu lại trên trình duyệt này — phân tích đều mỗi ngày để luật &ldquo;3–7 ngày liên tiếp&rdquo; và &ldquo;dao động&rdquo; có dữ liệu.
+          </span>
+        </div>
         {error && <p className="text-red-400 text-xs bg-red-400/10 border border-red-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{error}</p>}
         <button onClick={run} disabled={busy}
           className="w-full py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-40"
@@ -176,7 +208,9 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
               </button>
             );
           })}
-          <span className="ml-auto" style={{ color: t.textMuted }}>{summary.actions} action được gợi ý</span>
+          <span className="ml-auto" style={{ color: t.textMuted }}>
+            {reportDate && `Report ngày ${reportDate} · lịch sử ${historyDays} ngày · `}{summary.actions} action được gợi ý
+          </span>
         </div>
       )}
 
@@ -207,8 +241,8 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
 
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
               {[
-                ["Est ROAS", fmtPct(r.estRoas), a.ratio !== null ? (a.ratio >= 1 ? "#10B981" : a.ratio >= 0.8 ? "#F59E0B" : "#EF4444") : t.text],
-                ["Target ROAS", fmtPct(r.tRoas), t.text],
+                ["Est ROAS D0 / target", `${fmtPct(r.estRoas)} / ${targetPct}%`, a.ratio !== null ? (a.ratio >= 1 ? "#10B981" : a.ratio >= 0.8 ? "#F59E0B" : "#EF4444") : t.text],
+                ["tROAS camp", fmtPct(r.tRoas), t.text],
                 ["GG ROAS", fmtPct(r.gRoas), t.textSub],
                 ["Budget / ngày", fmt$(r.budget), t.text],
                 ["Cost", `${fmt$(r.cost)}${used !== null ? ` · ${Math.round(used * 100)}%` : ""}`, t.text],

@@ -51,6 +51,16 @@ export interface Suggestion {
   severity: Severity;
 }
 
+/** One day of a campaign, kept by the page across analyses. */
+export interface DayPoint {
+  date: string;              // YYYY-MM-DD, the report's day
+  estRoas: number | null;
+  cost: number | null;
+  budget: number | null;
+  conversions: number | null;
+  limited: boolean;          // "limited by budget" that day
+}
+
 export interface CampAnalysis {
   row: CampRow;
   /** est ROAS / target ROAS */
@@ -61,6 +71,16 @@ export interface CampAnalysis {
 
 /** Tunable thresholds. */
 export const RULES = {
+  /** Business target for the system's est ROAS (D0): 100%. */
+  targetD0: 1.0,
+  /** Share of budget spent that counts as "tiêu hết budget". */
+  fullSpend: 0.9,
+  /** Days in a row of full spend + ROAS ≥ target before scaling harder. */
+  stableDays: 3,
+  /** ROAS over recent days varying more than this (coefficient of variation) is "dao động". */
+  volatileCv: 0.3,
+  /** Fewer conversions than this with good ROAS → check tracking / optimisation event. */
+  lowVolumeConversions: 10,
   /** Biggest single change Google recommends for budget / target. */
   maxStep: 0.2,
   /** est ROAS ≥ target × this → scale. */
@@ -231,7 +251,12 @@ const pct = (n: number) => Math.round(n * 100);
 const money = (n: number) => Math.round(n * 100) / 100;
 const fmtPct = (n: number) => `${pct(n)}%`;
 
-export function analyze(row: CampRow, rules = RULES): CampAnalysis {
+/**
+ * @param history earlier days of this campaign (not the report's day), oldest
+ *   first. Rules that need "3–7 days in a row" or "dao động" use it; without it
+ *   the campaign is treated as new.
+ */
+export function analyze(row: CampRow, rules = RULES, history: DayPoint[] = [], reportDate = ""): CampAnalysis {
   const out: Suggestion[] = [];
   const reasons = row.statusReasons.toLowerCase();
   const learning = reasons.includes("learning");
@@ -239,16 +264,30 @@ export function analyze(row: CampRow, rules = RULES): CampAnalysis {
   const policySome = reasons.includes("some ads limited by policy");
   const budgetLimited = reasons.includes("limited by budget") || reasons.includes("budget constrained");
   const bidConstrained = reasons.includes("bidding strategy constrained");
-  const ratio = row.estRoas !== null && row.tRoas ? row.estRoas / row.tRoas : null;
+  const target = rules.targetD0;
+  // Health and scaling are judged on the system's est ROAS (D0) against the
+  // business target; the campaign's own tROAS is what gets adjusted.
+  const ratio = row.estRoas !== null && target ? row.estRoas / target : null;
   const cost = row.cost ?? 0, budget = row.budget ?? 0;
   const enoughData = cost >= Math.max(rules.minCost, budget * rules.minBudgetShare) || (row.conversions ?? 0) >= rules.minConversions;
   const used = budget ? cost / budget : 0;
-  /** Budget raise, or a wait when the budget is not actually being spent yet. */
-  const raise = (step: number, vs: string, why: string): Suggestion => used < rules.minBudgetUsedToRaise
-    ? { kind: "keep", severity: "good", title: "Đạt target — chờ hết ngày rồi mới tăng budget",
-        detail: `${vs}. Google báo limited by budget nhưng mới tiêu ${Math.round(used * 100)}% budget ($${money(cost)}/$${budget}) — nếu là dữ liệu giữa ngày, xem lại khi đủ ngày; tiêu ≥ ${Math.round(rules.minBudgetUsedToRaise * 100)}% thì tăng ${Math.round(step * 100)}%.` }
-    : { kind: "budget_up", severity: "good", title: `Tăng budget ${Math.round(step * 100)}%`, from: budget, to: Math.round(budget * (1 + step)), unit: "$",
-        detail: `${vs}, ${why}` };
+  const spentFull = used >= rules.fullSpend;
+
+  // Recent days including this one, newest last.
+  const today: DayPoint = { date: reportDate, estRoas: row.estRoas, cost: row.cost, budget: row.budget, conversions: row.conversions, limited: budgetLimited };
+  const days = [...history.filter(d => d.date !== reportDate), today].slice(-7);
+  const judged = days.filter(d => d.estRoas !== null && (d.cost ?? 0) >= rules.minCost);
+  const isFull = (d: DayPoint) => d.budget ? (d.cost ?? 0) / d.budget >= rules.fullSpend || (d.limited && (d.cost ?? 0) / d.budget >= rules.minBudgetUsedToRaise) : false;
+  let streak = 0;
+  for (let i = days.length - 1; i >= 0; i--) {
+    const d = days[i];
+    if (d.estRoas !== null && d.estRoas >= target && isFull(d)) streak++; else break;
+  }
+  const roasList = judged.map(d => d.estRoas!);
+  const mean = roasList.reduce((x, y) => x + y, 0) / (roasList.length || 1);
+  const cv = roasList.length >= 2 ? Math.sqrt(roasList.reduce((x, y) => x + (y - mean) ** 2, 0) / roasList.length) / (mean || 1) : 0;
+  const volatile = roasList.length >= 2 && (cv > rules.volatileCv || roasList.some(v => v < target));
+  const prev = days.length >= 2 ? days[days.length - 2] : null;
 
   if (policyMost) out.push({ kind: "assets", severity: "bad", title: "Phần lớn asset bị giới hạn bởi policy",
     detail: "Camp gần như không phân phối được. Vào Assets xem asset bị từ chối / giới hạn, gỡ và thay bằng asset mới (tạo ở trang Banner + Ad Copy)." });
@@ -264,33 +303,57 @@ export function analyze(row: CampRow, rules = RULES): CampAnalysis {
   } else if (!enoughData) {
     out.push({ kind: "no_data", severity: "info", title: "Chưa đủ dữ liệu để kết luận",
       detail: `Mới tiêu $${money(cost)} / budget $${budget}, ${row.conversions ?? 0} conversion. Theo dõi thêm trước khi chỉnh.` });
-  } else if (ratio !== null && row.tRoas) {
-    const t = row.tRoas;
+  } else if (ratio !== null) {
+    const t = row.tRoas ?? target;
     const est = row.estRoas!;
-    const vs = `est ROAS ${fmtPct(est)} so với target ${fmtPct(t)} (${fmtPct(ratio)} target)`;
-    if (ratio >= rules.scaleAt) {
-      if (budgetLimited) {
-        out.push(raise(rules.maxStep, vs, "đang bị giới hạn budget → scale."));
+    const vs = `est ROAS D0 ${fmtPct(est)} / target ${fmtPct(target)}`;
+    const spendNote = `đã tiêu ${Math.round(used * 100)}% budget ($${money(cost)}/$${budget})`;
+    const hist = days.length > 1 ? ` · ${streak} ngày liên tiếp đạt target + hết budget, ${judged.length} ngày có dữ liệu` : " · chưa có lịch sử ngày trước";
+    const up = (step: number, hi: number, title: string, why: string): Suggestion => ({
+      kind: "budget_up", severity: "good", title: `${title}: tăng budget ${Math.round(step * 100)}–${Math.round(hi * 100)}%`,
+      from: budget, to: Math.round(budget * (1 + step)), unit: "$", detail: `${vs}, ${spendNote}${hist}. ${why}` });
+
+    if (ratio >= 1) {
+      if (budgetLimited || spentFull) {
+        if (used < rules.minBudgetUsedToRaise) {
+          out.push({ kind: "keep", severity: "good", title: "Đạt target — chờ hết ngày rồi mới tăng budget",
+            detail: `${vs}. Google báo limited by budget nhưng mới ${spendNote} — nếu là dữ liệu giữa ngày, xem lại khi đủ ngày.` });
+        } else if (volatile) {
+          out.push({ kind: "keep", severity: "good", title: "ROAS dao động: giữ nguyên (hoặc +tối đa 10%)",
+            detail: `${vs}${hist}; ROAS các ngày gần đây dao động (CV ${Math.round(cv * 100)}%${roasList.some(v => v < target) ? ", có ngày dưới target" : ""}). Chờ thêm dữ liệu trước khi scale.` });
+        } else if (ratio >= rules.scaleAt && streak >= rules.stableDays) {
+          out.push(up(0.2, 0.3, "ROAS vượt target rõ rệt, volume ổn định", "Có thể tăng mạnh hơn (tới 30%) nếu chấp nhận biến động."));
+        } else if (streak >= rules.stableDays) {
+          out.push(up(0.15, 0.2, "ROAS tốt, tiêu hết budget nhiều ngày", "Scale từng bước."));
+        } else {
+          out.push(up(0.1, 0.15, "ROAS vừa đạt target", `Tăng thận trọng${streak < rules.stableDays ? `; đủ ${rules.stableDays} ngày ổn định thì tăng 15–20%` : ""}.`));
+        }
       } else {
-        const to = Math.max(0.1, t * (1 - 0.1));
-        out.push({ kind: "troas_down", severity: "good", title: "Hạ tROAS 10% để lấy thêm volume", from: pct(t), to: pct(to), unit: "%",
-          detail: `${vs}${bidConstrained ? ", bidding strategy constrained" : ", không hết budget"} → hạ target để thắng thêm đấu giá.` });
+        // Good ROAS but the budget is not being spent: the target holds it back.
+        out.push({ kind: "troas_down", severity: "good", title: "Tiêu ít hơn budget, ROAS tốt → kiểm tra tROAS có quá cao", from: pct(t), to: pct(t * 0.9), unit: "%",
+          detail: `${vs}, ${spendNote}${bidConstrained ? ", bidding strategy constrained" : ""}. Hạ tROAS từng bước để mở rộng phân phối (khác với tăng budget). Dùng Bid Simulator của Google để ước tính trước.${used < rules.minBudgetUsedToRaise ? " Nếu đây là dữ liệu giữa ngày, xem lại cuối ngày." : ""}` });
       }
-    } else if (ratio >= 1) {
-      if (budgetLimited) out.push(raise(0.1, vs, "đạt target và đang bị giới hạn budget → tăng nhẹ."));
-      else out.push({ kind: "keep", severity: "good", title: "Đạt target — giữ nguyên", detail: `${vs}.` });
+      if ((row.conversions ?? 0) < rules.lowVolumeConversions) {
+        out.push({ kind: "check", severity: "info", title: "ROAS tốt nhưng volume conversion thấp",
+          detail: `Chỉ ${row.conversions ?? 0} conversion. Kiểm tra tracking, event tối ưu và dữ liệu học máy trước khi scale.` });
+      }
     } else if (ratio >= rules.tightenBelow) {
-      out.push({ kind: "keep", severity: "warn", title: "Gần target — theo dõi, chưa tăng budget",
-        detail: `${vs}. Xem thêm 1–2 ngày; nếu vẫn dưới target thì siết tROAS.` });
+      out.push({ kind: "keep", severity: "warn", title: "Dưới target — không tăng budget, tối ưu trước khi scale",
+        detail: `${vs}${spentFull ? ", tiêu hết budget nhưng ROAS chưa đạt → kiểm tra chất lượng user và hiệu quả" : ""}. Xem thêm 1–2 ngày; nếu vẫn dưới target thì siết tROAS.` });
     } else if (ratio >= rules.cutBelow) {
-      const to = t * 1.1;
-      out.push({ kind: "troas_up", severity: "warn", title: "Nâng tROAS 10% (siết hiệu quả)", from: pct(t), to: pct(to), unit: "%",
-        detail: `${vs} → nâng target để Google chọn traffic chất lượng hơn${budgetLimited ? "; không tăng budget" : ""}.` });
+      out.push({ kind: "troas_up", severity: "warn", title: "Nâng tROAS 10% (siết hiệu quả)", from: pct(t), to: pct(t * 1.1), unit: "%",
+        detail: `${vs} → không scale; nâng target để Google chọn user chất lượng hơn${spentFull || budgetLimited ? ". Tiêu hết budget nhưng ROAS thấp → kiểm tra chất lượng user" : ""}.` });
     } else {
       out.push({ kind: "budget_down", severity: "bad", title: "Giảm budget 20%", from: budget, to: Math.max(1, Math.round(budget * (1 - rules.maxStep))), unit: "$",
         detail: `${vs} — lỗ nặng. Giảm budget để cắt lỗ.` });
       out.push({ kind: "troas_up", severity: "bad", title: "Nâng tROAS 15%", from: pct(t), to: pct(t * 1.15), unit: "%",
         detail: "Siết target cùng lúc. Nếu 3 ngày liên tiếp vẫn < 50% target thì cân nhắc tạm dừng camp." });
+    }
+
+    // Budget went up since the last day seen, but spend did not follow.
+    if (prev && prev.budget && budget > prev.budget && (prev.cost ?? 0) > 0 && cost <= (prev.cost ?? 0) * 1.05) {
+      out.push({ kind: "check", severity: "warn", title: "Đã tăng budget nhưng volume không tăng",
+        detail: `Budget $${prev.budget} → $${budget} nhưng cost $${money(prev.cost ?? 0)} → $${money(cost)}. Kiểm tra giới hạn đấu giá, tROAS và quy mô thị trường.` });
     }
   }
 
@@ -310,10 +373,24 @@ export function analyze(row: CampRow, rules = RULES): CampAnalysis {
   return { row, ratio, health, suggestions: out };
 }
 
+/** The day a Google Ads report covers, from its "October 16, 2026 - October 16, 2026" line (end date). */
+export function parseReportDate(rows: unknown[][]): string {
+  for (const r of rows.slice(0, 5)) {
+    for (const c of r) {
+      const m = String(c ?? "").match(/([A-Z][a-z]+ \d{1,2}, \d{4})\s*-\s*([A-Z][a-z]+ \d{1,2}, \d{4})/);
+      if (m) {
+        const d = new Date(`${m[2]} 12:00:00 UTC`);
+        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      }
+    }
+  }
+  return "";
+}
+
 /** Bad first, then warn, then good, then info; bigger spend first within a group. */
-export function analyzeAll(rows: CampRow[], rules = RULES): CampAnalysis[] {
+export function analyzeAll(rows: CampRow[], rules = RULES, history: Record<string, DayPoint[]> = {}, reportDate = ""): CampAnalysis[] {
   const rank: Record<Severity, number> = { bad: 0, warn: 1, good: 2, info: 3 };
-  return rows.map(r => analyze(r, rules)).sort((a, b) => rank[a.health] - rank[b.health] || (b.row.cost ?? 0) - (a.row.cost ?? 0));
+  return rows.map(r => analyze(r, rules, history[normName(r.name)] || [], reportDate)).sort((a, b) => rank[a.health] - rank[b.health] || (b.row.cost ?? 0) - (a.row.cost ?? 0));
 }
 
 /** Minimal CSV/TSV reader for exported sheets (quotes, commas or tabs). */
