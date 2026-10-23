@@ -660,29 +660,54 @@ const LANGUAGES = [
   { code: "Bengali",            label: "🇧🇩 বাংলা" },
   { code: "Filipino",           label: "🇵🇭 Filipino" },
   { code: "Malay",              label: "🇲🇾 Bahasa Melayu" },
+  { code: "Chinese Traditional", label: "🇹🇼 中文繁體" },
+  { code: "Italian",            label: "🇮🇹 Italiano" },
+  { code: "Turkish",            label: "🇹🇷 Türkçe" },
+  { code: "Polish",             label: "🇵🇱 Polski" },
+  { code: "Dutch",              label: "🇳🇱 Nederlands" },
+  { code: "Swedish",            label: "🇸🇪 Svenska" },
+  { code: "Norwegian",          label: "🇳🇴 Norsk" },
+  { code: "Danish",             label: "🇩🇰 Dansk" },
+  { code: "Finnish",            label: "🇫🇮 Suomi" },
+  { code: "Greek",              label: "🇬🇷 Ελληνικά" },
+  { code: "Ukrainian",          label: "🇺🇦 Українська" },
+  { code: "Czech",              label: "🇨🇿 Čeština" },
+  { code: "Romanian",           label: "🇷🇴 Română" },
+  { code: "Hungarian",          label: "🇭🇺 Magyar" },
+  { code: "Hebrew",             label: "🇮🇱 עברית" },
+  { code: "Urdu",               label: "🇵🇰 اردو" },
+  { code: "Burmese",            label: "🇲🇲 မြန်မာ" },
+  { code: "Khmer",              label: "🇰🇭 ខ្មែរ" },
+  { code: "Lao",                label: "🇱🇦 ລາວ" },
+  { code: "Nepali",             label: "🇳🇵 नेपाली" },
+  { code: "Sinhala",            label: "🇱🇰 සිංහල" },
+  { code: "Amharic",            label: "🇪🇹 አማርኛ" },
 ];
 
 const COUNTRY_DEFAULT_LANG: Record<string, string> = {
   Vietnam: "Vietnamese", Indonesia: "Indonesian", Thailand: "Thai",
   Philippines: "Filipino", Malaysia: "Malay", Singapore: "English",
-  Myanmar: "English", Cambodia: "English",
+  Myanmar: "Burmese", Cambodia: "Khmer",
   Japan: "Japanese", "South Korea": "Korean", China: "Chinese Simplified",
-  Taiwan: "Chinese Simplified", "Hong Kong": "Chinese Simplified",
-  India: "Hindi", Pakistan: "English", Bangladesh: "Bengali", "Sri Lanka": "English",
-  "Saudi Arabia": "Arabic", UAE: "Arabic", Egypt: "Arabic", Turkey: "English",
-  Israel: "English", Iraq: "Arabic",
+  Taiwan: "Chinese Traditional", "Hong Kong": "Chinese Traditional",
+  India: "Hindi", Pakistan: "Urdu", Bangladesh: "Bengali", "Sri Lanka": "Sinhala",
+  "Saudi Arabia": "Arabic", UAE: "Arabic", Egypt: "Arabic", Turkey: "Turkish",
+  Israel: "Hebrew", Iraq: "Arabic",
   USA: "English", Canada: "English", Mexico: "Spanish",
   Brazil: "Portuguese", Argentina: "Spanish", Colombia: "Spanish",
   Chile: "Spanish", Peru: "Spanish",
   Germany: "German", France: "French", "United Kingdom": "English",
-  Italy: "English", Spain: "Spanish", Netherlands: "English",
-  Poland: "English", Sweden: "English", Norway: "English",
-  Denmark: "English", Finland: "English", Belgium: "French",
+  Italy: "Italian", Spain: "Spanish", Netherlands: "Dutch",
+  Poland: "Polish", Sweden: "Swedish", Norway: "Norwegian",
+  Denmark: "Danish", Finland: "Finnish", Belgium: "French",
   Switzerland: "German", Austria: "German", Portugal: "Portuguese",
-  Greece: "English", Ukraine: "English", Russia: "Russian",
+  Greece: "Greek", Ukraine: "Ukrainian", Russia: "Russian",
   Australia: "English", "New Zealand": "English",
   Nigeria: "English", "South Africa": "English", Kenya: "English",
-  Ethiopia: "English", Ghana: "English",
+  Ethiopia: "Amharic", Ghana: "English",
+  "Czech Republic": "Czech", Romania: "Romanian", Hungary: "Hungarian", Kazakhstan: "Russian",
+  Morocco: "Arabic", Algeria: "Arabic", Qatar: "Arabic", Kuwait: "Arabic", Jordan: "Arabic",
+  Nepal: "Nepali", Laos: "Lao", Venezuela: "Spanish", Ecuador: "Spanish",
 };
 
 /** First market that speaks each language — context for the localiser. */
@@ -701,6 +726,8 @@ const COUNTRY_ISO: Record<string,string> = {
   Finland: "FI", Belgium: "BE", Switzerland: "CH", Austria: "AT", Portugal: "PT", Greece: "GR",
   Ukraine: "UA", Russia: "RU", Australia: "AU", "New Zealand": "NZ", Nigeria: "NG",
   "South Africa": "ZA", Kenya: "KE", Ethiopia: "ET", Ghana: "GH",
+  Morocco: "MA", Algeria: "DZ", Laos: "LA", Nepal: "NP", Qatar: "QA", Kuwait: "KW", Jordan: "JO",
+  Kazakhstan: "KZ", "Czech Republic": "CZ", Romania: "RO", Hungary: "HU", Venezuela: "VE", Ecuador: "EC",
 };
 const COUNTRIES = [
   { code: "Global",           label: "🌍 Global (Universal)" },
@@ -769,7 +796,36 @@ const COUNTRIES = [
   { code: "Kenya",            label: "🇰🇪 Kenya" },
   { code: "Ethiopia",         label: "🇪🇹 Ethiopia" },
   { code: "Ghana",            label: "🇬🇭 Ghana" },
+  { code: "Morocco",          label: "🇲🇦 Morocco" },
+  { code: "Algeria",          label: "🇩🇿 Algeria" },
+  // More markets
+  { code: "Laos",             label: "🇱🇦 Laos" },
+  { code: "Nepal",            label: "🇳🇵 Nepal" },
+  { code: "Qatar",            label: "🇶🇦 Qatar" },
+  { code: "Kuwait",           label: "🇰🇼 Kuwait" },
+  { code: "Jordan",           label: "🇯🇴 Jordan" },
+  { code: "Kazakhstan",       label: "🇰🇿 Kazakhstan" },
+  { code: "Czech Republic",   label: "🇨🇿 Czech Republic" },
+  { code: "Romania",          label: "🇷🇴 Romania" },
+  { code: "Hungary",          label: "🇭🇺 Hungary" },
+  { code: "Venezuela",        label: "🇻🇪 Venezuela" },
+  { code: "Ecuador",          label: "🇪🇨 Ecuador" },
 ];
+
+/**
+ * A localization target is a MARKET (a COUNTRIES code): each market gets its
+ * own set, zip and ad template even when it shares a language with another
+ * (US / UK / Australia, Mexico / Spain). Its language is that market's.
+ * Language codes still resolve, for sets made before markets were used.
+ */
+const locIsMarket = (key: string) => COUNTRIES.some(c => c.code === key);
+const locLang = (key: string) => (locIsMarket(key) ? COUNTRY_DEFAULT_LANG[key] || "English" : key);
+const locCountry = (key: string) => (locIsMarket(key) ? key : LANG_MARKET[key] || "");
+const locLabel = (key: string) => {
+  const c = COUNTRIES.find(x => x.code === key);
+  const lang = LANGUAGES.find(l => l.code === locLang(key))?.label.replace(/^\S+\s/, "") || locLang(key);
+  return c ? `${c.label} · ${lang}` : LANGUAGES.find(l => l.code === key)?.label || key;
+};
 
 export default function Home() {
   const { data: session } = useSession();
@@ -1288,8 +1344,8 @@ export default function Home() {
             headline: abBrief.headline, subheadline: abBrief.subheadline,
             cta_text: abBrief.cta_text, tagline: abBrief.tagline || "",
           },
-          language: lang,
-          country: LANG_MARKET[lang] || "",
+          language: locLang(lang),
+          country: locCountry(lang),
           appName: abBrief.app_name,
           instructions: note || "",
         }, 60000, `banner-localize:${lang}`);
@@ -2210,7 +2266,7 @@ export default function Home() {
   /** Market tag of a language's set: the chosen country for the source language, else the language's home market. */
   const cbMarketOf = (lang: string) => lang === abLang
     ? (COUNTRY_ISO[abCountry] || "GLOBAL")
-    : (COUNTRY_ISO[LANG_MARKET[lang] || ""] || lang.slice(0, 2).toUpperCase());
+    : (COUNTRY_ISO[locCountry(lang)] || lang.slice(0, 2).toUpperCase());
 
   const cbBasketSig = () => JSON.stringify(sdBasket);
   const cbAppName = () => {
@@ -2252,7 +2308,7 @@ export default function Home() {
           body: JSON.stringify({
             appName: cbAppName() || abUrl,
             headlines: b.headlines, descriptions: b.descriptions, ctas: [],
-            targets: langs.map(l => ({ code: l, name: LANG_MARKET[l] || l, language: l })),
+            targets: langs.map(l => ({ code: l, name: locCountry(l) || l, language: locLang(l) })),
             sourceLanguage: abLang,
             instructions: note || "",
           }),
@@ -4178,31 +4234,34 @@ export default function Home() {
                       <div className="absolute z-50 mt-1 w-full rounded-xl border shadow-xl overflow-hidden" style={{backgroundColor: t.card, borderColor: t.border}}>
                         <div className="p-2 border-b" style={{borderColor: t.border}}>
                           <input autoFocus value={abLocSearch} onChange={e => setAbLocSearch(e.target.value)}
-                            placeholder="🔍 Gõ để tìm: Deutsch, German, Nhật..."
+                            placeholder="🔍 Gõ để tìm: Germany, Đức, Deutsch, Japan, 日本..."
                             className="w-full text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:border-emerald-500"
                             style={inputStyle}/>
                         </div>
                         <div className="max-h-56 overflow-y-auto">
                           {(() => {
                             const q = abLocSearch.trim().toLowerCase();
-                            // Match the label, the English name and the market it
-                            // maps to, so "Germany", "German" and "Deutsch" all find it.
-                            const list = LANGUAGES.filter(l => l.code !== abLang).filter(l =>
-                              !q || l.label.toLowerCase().includes(q) || l.code.toLowerCase().includes(q) ||
-                              (LANG_MARKET[l.code] || "").toLowerCase().includes(q));
-                            if (!list.length) return <div className="px-4 py-3 text-xs" style={{color: t.textMuted}}>Không tìm thấy ngôn ngữ nào.</div>;
-                            return list.map(l => {
-                              const on = abLocLangs.includes(l.code);
+                            // One row per market. Search matches the market, its
+                            // language's English name and its native label, so
+                            // "Germany", "German" and "Deutsch" all find it.
+                            const list = COUNTRIES.filter(c => c.code !== "Global" && c.code !== abCountry).filter(c => {
+                              if (!q) return true;
+                              const lang = locLang(c.code);
+                              const langLabel = LANGUAGES.find(l => l.code === lang)?.label || "";
+                              return [c.label, c.code, lang, langLabel, COUNTRY_ISO[c.code] || ""].some(x => x.toLowerCase().includes(q));
+                            });
+                            if (!list.length) return <div className="px-4 py-3 text-xs" style={{color: t.textMuted}}>Không tìm thấy thị trường nào.</div>;
+                            return list.map(c => {
+                              const on = abLocLangs.includes(c.code);
+                              const langLabel = LANGUAGES.find(l => l.code === locLang(c.code))?.label.replace(/^\S+\s/, "") || locLang(c.code);
                               return (
-                                <button key={l.code} type="button"
-                                  onClick={() => setAbLocLangs(prev => on ? prev.filter(x => x !== l.code) : [...prev, l.code])}
+                                <button key={c.code} type="button"
+                                  onClick={() => setAbLocLangs(prev => on ? prev.filter(x => x !== c.code) : [...prev, c.code])}
                                   className="w-full text-left px-3 py-2 text-sm flex items-center gap-2"
                                   style={{backgroundColor: on ? "#10B98122" : "transparent", color: on ? "#10B981" : t.text}}>
                                   <span className="w-4 flex-shrink-0">{on ? "✓" : ""}</span>
-                                  <span className="truncate">{l.label}</span>
-                                  {LANG_MARKET[l.code] && (
-                                    <span className="ml-auto text-[11px] flex-shrink-0" style={{color: t.textMuted}}>{LANG_MARKET[l.code]}</span>
-                                  )}
+                                  <span className="truncate">{c.label}</span>
+                                  <span className="ml-auto text-[11px] flex-shrink-0" style={{color: t.textMuted}}>{langLabel}</span>
                                 </button>
                               );
                             });
@@ -4221,7 +4280,7 @@ export default function Home() {
                       {abLocLangs.map(code => (
                         <span key={code} className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5"
                           style={{borderColor:"#10B981", backgroundColor:"#10B98122", color:"#10B981"}}>
-                          {LANGUAGES.find(l => l.code === code)?.label || code}
+                          {locLabel(code)}
                           <button onClick={() => setAbLocLangs(prev => prev.filter(x => x !== code))} title="Bỏ">×</button>
                         </span>
                       ))}
@@ -4244,7 +4303,7 @@ export default function Home() {
                     <div key={set.lang} className="rounded-xl border p-3 space-y-2" style={{borderColor: t.border, backgroundColor: t.tabBg}}>
                       <div className="flex items-center justify-between gap-2 flex-wrap">
                         <div className="text-sm font-semibold" style={{color: t.text}}>
-                          {LANGUAGES.find(l => l.code === set.lang)?.label || set.lang}
+                          {locLabel(set.lang)}
                           <span className="text-[11px] font-normal ml-2" style={{color: t.textMuted}}>{set.previews.length} banner</span>
                         </div>
                         <button onClick={() => abDownloadB64Zip(set.zip, `google-ads-${abBrief?.app_name || "banners"}-${set.lang}.zip`)}
@@ -4307,7 +4366,7 @@ export default function Home() {
                         {sets.map(x => (
                           <div key={x.lang} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs" style={{backgroundColor: t.tabBg}}>
                             <span className="font-semibold w-16 flex-shrink-0" style={{color:"#A78BFA"}}>{cbMarketOf(x.lang)}</span>
-                            <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{LANGUAGES.find(l => l.code === x.lang)?.label || x.lang}</span>
+                            <span className="flex-1 min-w-0 truncate" style={{color: t.text}}>{x.lang === abLang ? (LANGUAGES.find(l => l.code === x.lang)?.label || x.lang) : locLabel(x.lang)}</span>
                             <span className="flex-shrink-0" style={{color: x.previews.length < sets[0].previews.length ? "#F59E0B" : t.textMuted}}>{x.previews.length < sets[0].previews.length && "⚠️ "}{x.previews.length} ảnh · {x.blocks?.length ? `${x.blocks.length} khối ad copy` : x.lang === abLang ? "chưa có khối ad copy" : "chưa có ad copy — Localize lại"}</span>
                           </div>
                         ))}

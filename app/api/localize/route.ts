@@ -148,7 +148,16 @@ function scriptOf(language: string): RegExp | null {
   if (l.includes("japanese")) return /[\u3040-\u30FF\u4E00-\u9FFF]/;
   if (l.includes("korean")) return /[\uAC00-\uD7AF]/;
   if (l.includes("chinese")) return /[\u4E00-\u9FFF]/;
-  if (l.includes("russian")) return /[\u0400-\u04FF]/;
+  if (l.includes("russian") || l.includes("ukrainian")) return /[\u0400-\u04FF]/;
+  if (l.includes("nepali")) return /[\u0900-\u097F]/;
+  if (l.includes("urdu") || l.includes("persian")) return /[\u0600-\u06FF]/;
+  if (l.includes("hebrew")) return /[\u0590-\u05FF]/;
+  if (l.includes("greek")) return /[\u0370-\u03FF]/;
+  if (l.includes("burmese")) return /[\u1000-\u109F]/;
+  if (l.includes("khmer")) return /[\u1780-\u17FF]/;
+  if (l.includes("lao")) return /[\u0E80-\u0EFF]/;
+  if (l.includes("sinhala")) return /[\u0D80-\u0DFF]/;
+  if (l.includes("amharic")) return /[\u1200-\u137F]/;
   return null;
 }
 
