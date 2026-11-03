@@ -1756,7 +1756,10 @@ export default function Home() {
    */
   interface MktTemplate { id: string; name: string; adContents?: {headlines:string[];descriptions:string[]}[] }
   const [mkCode, setMkCode] = useState("");
-  const [mkConn, setMkConn] = useState<{email:string;expiresAt:number}|null>(null);
+  const [mkConn, setMkConn] = useState<{email:string;expiresAt:number;systemUrl?:string}|null>(null);
+  // Tag main of the batch just uploaded, for the "open in MKT System" link.
+  const [mkBatchTag, setMkBatchTag] = useState("");
+  const [mkTagCopied, setMkTagCopied] = useState(false);
   const [mkBusy, setMkBusy] = useState("");
   const [mkError, setMkError] = useState("");
   const [mkNote, setMkNote] = useState("");
@@ -1814,7 +1817,7 @@ export default function Home() {
   const mkRefreshConn = async () => {
     try {
       const d = await fetch("/api/mkt/connect").then(r => r.json());
-      setMkConn(d.connected ? { email: d.email, expiresAt: d.expiresAt } : null);
+      setMkConn(d.connected ? { email: d.email, expiresAt: d.expiresAt, systemUrl: d.systemUrl } : null);
     } catch { setMkConn(null); }
   };
   useEffect(() => { void mkRefreshConn(); }, []);
@@ -1827,7 +1830,7 @@ export default function Home() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: mkCode.trim() }),
       });
-      setMkConn({ email: d.email, expiresAt: d.expiresAt });
+      setMkConn({ email: d.email, expiresAt: d.expiresAt, systemUrl: d.systemUrl });
       setMkCode("");
       await mkLoadTemplates();
       const build = mkTplNameBuilderRef.current;
@@ -2065,6 +2068,7 @@ export default function Home() {
       });
       mkcIdemRef.current = null; mkcPreparedRef.current = {};
       setAbMkSel([]);
+      setMkBatchTag(mkcMeta.tags.split(",").map(x => x.trim()).filter(Boolean)[0] || "");
       setMkNote(`✅ Đã đưa ${d.creatives?.length || 0} creative vào thư viện MKT System.` +
         (d.errors?.length ? `\n⚠️ Bỏ qua:\n${d.errors.join("\n")}` : ""));
     } catch (e) {
@@ -2495,9 +2499,11 @@ export default function Home() {
           body: JSON.stringify({ mode: "bulk", items, idempotencyKey: cbIdemRef.current.key }),
         });
         ready.forEach(j => cbBulkedRef.current.add(j.id));
+        setMkBatchTag(`${date} Gen${gen}`);
         cbIdemRef.current = null;
         log.push(`✅ ${d.creatives?.length ?? ready.length} creative (tag "${date} Gen${gen}" + ${Array.from(new Set(ready.map(j => cbMarketOf(j.s.lang)))).join("/")})`);
       } else if (!failed.length) {
+        setMkBatchTag(`${date} Gen${gen}`);
         log.push("✓ Creative đã có đủ trên MKT từ lần trước");
       }
       if (failed.length) log.push(`❌ ${failed.length} ảnh upload lỗi — bấm lại để thử tiếp:\n${failed.join("\n")}`);
@@ -2828,6 +2834,32 @@ export default function Home() {
   void renderCompResult; void compError; void compResult;
 
   /** Ad Copy Studio. Embedded in Banner + Ad Copy it works on that page's app, market and language. */
+  /** "Open in MKT System" for the batch just uploaded, plus its tag main to filter by. */
+  const mkSystemLinkEl = (tag: string) => {
+    const base = mkConn?.systemUrl || "";
+    if (!base && !tag) return null;
+    const href = base.includes("{tag}") ? base.replace("{tag}", encodeURIComponent(tag)) : base;
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        {href && (
+          <a href={href} target="_blank" rel="noopener noreferrer"
+            className="font-semibold px-3 py-1.5 rounded-lg text-white"
+            style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
+            🔗 Mở MKT System
+          </a>
+        )}
+        {tag && (
+          <button type="button"
+            onClick={() => { void navigator.clipboard.writeText(tag).then(() => { setMkTagCopied(true); setTimeout(() => setMkTagCopied(false), 1500); }); }}
+            className="px-3 py-1.5 rounded-lg border" style={{borderColor: t.border, color: t.text}}>
+            {mkTagCopied ? "✓ Đã chép" : <>📋 Chép tag <b>{tag}</b></>}
+          </button>
+        )}
+        {tag && !base.includes("{tag}") && <span style={{color: t.textMuted}}>Lọc theo tag này trong Creative Library để xem đúng bộ gen.</span>}
+      </div>
+    );
+  };
+
   const renderStudio = (embedded: boolean) => (
           <div className="space-y-5">
             {embedded ? (
@@ -4469,6 +4501,7 @@ export default function Home() {
                           {cbPushLog.map((l, i) => <div key={i}>{l}</div>)}
                         </div>
                       )}
+                      {!cbPushBusy && cbPushLog.some(l => l.startsWith("✅") || l.startsWith("✓ Creative")) && mkSystemLinkEl(mkBatchTag)}
                     </div>
                   );
                 })()}
@@ -4514,6 +4547,7 @@ export default function Home() {
               )}
               {mkError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
               {mkNote && <p className="text-xs bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
+              {mkNote.includes("creative vào thư viện") && mkSystemLinkEl("")}
             </div>
 
             {mkConn && (
@@ -5219,6 +5253,7 @@ export default function Home() {
 
             {mkError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
             {mkNote && <p className="text-xs bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
+            {mkModal === "creative" && mkNote.startsWith("✅") && mkSystemLinkEl(mkBatchTag)}
 
             {mkConn && (
               <div className="flex gap-3">

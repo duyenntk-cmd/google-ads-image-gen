@@ -69,6 +69,10 @@ trước khi gửi. Đừng bỏ lớp kiểm tra này.
   → **Ambiguous**. App tìm template trùng tên trước khi tạo, và cập nhật template có sẵn thay vì tạo thêm.
 - Creative và Ad Template trong một lần đẩy dùng **chung một số Gen**. Số Gen = Gen cao nhất trong ngày
   trên MKT (đếm mọi cách viết) + 1.
+- **Link mở MKT System:** sau khi upload xong (modal creative, bước 3), app hiện nút **🔗 Mở MKT System**
+  và **📋 Chép tag `<ngày> Gen<N>`** để lọc đúng bộ gen trong Creative Library. Link lấy từ env
+  `MKT_SYSTEM_URL` trên Vercel (có thể chứa `{tag}`, vd `https://<web MKT>/creative-library?tag={tag}`,
+  để mở thẳng danh sách đã lọc). Không đặt env thì app đoán từ host API trong mã kết nối (bỏ `api.`).
 
 ## Ba điều hay bị hỏi nhất
 
