@@ -2009,7 +2009,8 @@ export default function Home() {
     // Same Gen as the batch's ad templates, or Google++ cannot map them (falls
     // back to the run of the day when MKT System is not connected).
     const gen = (mkConn ? await mkBatchGen() : null) ?? await abGenOfToday();
-    const tags = [mkToday(), `Gen${gen}`, COUNTRY_ISO[abCountry] || "GLOBAL"];
+    // One tag main "<day> Gen<n>" + the market as tag localize.
+    const tags = [`${mkToday()} Gen${gen}`, COUNTRY_ISO[abCountry] || "GLOBAL"];
     setMkcMeta(prev => ({ ...prev, tags: tags.join(", ") }));
     setMkcStatus({}); mkcPreparedRef.current = {}; mkcIdemRef.current = null;
     setMkError(""); setMkNote("");
@@ -2115,8 +2116,8 @@ export default function Home() {
    * name and creative tags:
    *   Ad Template <tag main…> <tag localize>   → "Ad Template 20261005 Gen1 US"
    *   Campaign Template <tag localize>         → "Campaign Template US"
-   * Creatives carry the same tags: main = day + Gen (shared by the batch),
-   * localize = market. Google++ compares names ignoring case, spaces, "_" and
+   * Creatives carry the same tags: main = "<day> Gen<n>" as ONE tag (shared by
+   * the batch), localize = market — so the ad template name reads the same. Google++ compares names ignoring case, spaces, "_" and
    * "[ ]", so "Ad_Template_20261005_Gen1_US" is the same name; two such
    * templates make the mapping "Ambiguous", hence the lookup before creating.
    *
@@ -2264,7 +2265,7 @@ export default function Home() {
    * finds keywords while the approval image renders, and the blocks picked
    * there (one per keyword) are the ad copy. Step 3 localizes those blocks
    * into the same languages as the images and pushes everything to MKT System
-   * in one go: every set's banners as creatives (tags: day, Gen, market) and
+   * in one go: every set's banners as creatives (tags: "<day> Gen<n>", market) and
    * one ad template per market with all its blocks, named
    * "Ad Template <day> Gen<n> <market>" (Google++ naming). Creatives and templates of one push
    * share the Gen, so they can be matched up on MKT.
@@ -2469,7 +2470,7 @@ export default function Home() {
                 dataUrl: j.p.dataUrl,
                 thumbnailDataUrl: await mkThumb(j.p.dataUrl),
                 isPublic: false,
-                tags: [date, `Gen${gen}`, market],
+                tags: [`${date} Gen${gen}`, market],
               } }),
             });
             cbPreparedRef.current[j.id] = d.prepared;
@@ -2495,7 +2496,7 @@ export default function Home() {
         });
         ready.forEach(j => cbBulkedRef.current.add(j.id));
         cbIdemRef.current = null;
-        log.push(`✅ ${d.creatives?.length ?? ready.length} creative (tag ${date}, Gen${gen}, ${Array.from(new Set(ready.map(j => cbMarketOf(j.s.lang)))).join("/")})`);
+        log.push(`✅ ${d.creatives?.length ?? ready.length} creative (tag "${date} Gen${gen}" + ${Array.from(new Set(ready.map(j => cbMarketOf(j.s.lang)))).join("/")})`);
       } else if (!failed.length) {
         log.push("✓ Creative đã có đủ trên MKT từ lần trước");
       }
@@ -4411,7 +4412,7 @@ export default function Home() {
                         <div className="text-sm font-bold" style={{color: t.text}}>🚀 Bước 3 · Đưa lên MKT System</div>
                         <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
                           {nImgs} ảnh thành creative (tag ngày · Gen · thị trường) và {sets.length} ad template
-                          {" "}<b>Ad Template {mkToday()} Gen{cbGenRef.current ?? "N"} THỊTRƯỜNG</b> — đúng quy ước Google++: tag main = <b>{mkToday()}</b> + <b>Gen{cbGenRef.current ?? "N"}</b>, tag localize = thị trường.
+                          {" "}<b>Ad Template {mkToday()} Gen{cbGenRef.current ?? "N"} THỊTRƯỜNG</b> — đúng quy ước Google++: tag main = <b>{mkToday()} Gen{cbGenRef.current ?? "N"}</b> (1 tag), tag localize = thị trường.
                         </div>
                       </div>
                       <div className="space-y-1">
