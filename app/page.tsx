@@ -821,6 +821,8 @@ const COUNTRIES = [
 const locIsMarket = (key: string) => COUNTRIES.some(c => c.code === key);
 const locLang = (key: string) => (locIsMarket(key) ? COUNTRY_DEFAULT_LANG[key] || "English" : key);
 const locCountry = (key: string) => (locIsMarket(key) ? key : LANG_MARKET[key] || "");
+/** Google++ name comparison: case, spaces, "_" and "[ ]" do not count. */
+const normTplName = (s: string) => s.toLowerCase().replace(/[\s_[\]]/g, "");
 const locLabel = (key: string) => {
   const c = COUNTRIES.find(x => x.code === key);
   const lang = LANGUAGES.find(l => l.code === locLang(key))?.label.replace(/^\S+\s/, "") || locLang(key);
@@ -1853,6 +1855,8 @@ export default function Home() {
     if (errs.length) { setMkError("❌ " + errs.join("\n")); return; }
     setMkBusy("template"); setMkError(""); setMkNote("");
     try {
+      const same = await mkFindSameName(mkTplName.trim());
+      if (same) throw new Error(`Đã có template "${same.name}" — Google++ coi là trùng tên (bỏ qua hoa/thường, dấu cách, "_") và sẽ báo Ambiguous. Đổi số Gen hoặc tên khác.`);
       await mkFetchJson("/api/mkt/ad-templates", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: mkTplName.trim(), adContents: mkParseBlocks() }),
@@ -2002,7 +2006,10 @@ export default function Home() {
     const base = (abBrief?.app_name || "banner").trim().replace(/\s+/g, "-");
     setMkcNames(Object.fromEntries(abMkSel.map(k => [k, `${base}-${k}`])));
     // Day, gen and market go in as tags; prefilled so they can be checked or edited.
-    const tags = [mkToday(), `Gen${await abGenOfToday()}`, COUNTRY_ISO[abCountry] || "GLOBAL"];
+    // Same Gen as the batch's ad templates, or Google++ cannot map them (falls
+    // back to the run of the day when MKT System is not connected).
+    const gen = (mkConn ? await mkBatchGen() : null) ?? await abGenOfToday();
+    const tags = [mkToday(), `Gen${gen}`, COUNTRY_ISO[abCountry] || "GLOBAL"];
     setMkcMeta(prev => ({ ...prev, tags: tags.join(", ") }));
     setMkcStatus({}); mkcPreparedRef.current = {}; mkcIdemRef.current = null;
     setMkError(""); setMkNote("");
@@ -2095,7 +2102,7 @@ export default function Home() {
 
   const mkOpenTemplateFor = (entries: {headlines:string[];descriptions:string[]}[], name: string, origin: string | null) => {
     if (!entries.length) return;
-    if (!name.match(/^Ad_Template_\d{8}_Gen\d+_/)) mkTplNameBuilderRef.current = null;
+    if (!/^adtemplate\d{8}gen\d+/.test(normTplName(name))) mkTplNameBuilderRef.current = null;
     setMkBlocks(mkSplitBlocks(entries).map(b => ({ headlines: b.headlines.join("\n"), descriptions: b.descriptions.join("\n") })));
     setMkTplName(name.slice(0, 80));
     mkTplOriginRef.current = origin;
@@ -2104,11 +2111,18 @@ export default function Home() {
   };
 
   /**
-   * Template names: "Ad_Template_20261005_Gen1_US" — day, which batch of that day, market.
-   * One basket is one batch: its source template and every localized market
-   * share the Gen number and differ by market. The number is the day's highest
-   * Gen already on MKT System plus one, so two machines do not collide and
-   * names stay unique, as MKT System requires.
+   * Names follow Google++ on MKT System, which maps templates to campaigns by
+   * name and creative tags:
+   *   Ad Template <tag main…> <tag localize>   → "Ad Template 20261005 Gen1 US"
+   *   Campaign Template <tag localize>         → "Campaign Template US"
+   * Creatives carry the same tags: main = day + Gen (shared by the batch),
+   * localize = market. Google++ compares names ignoring case, spaces, "_" and
+   * "[ ]", so "Ad_Template_20261005_Gen1_US" is the same name; two such
+   * templates make the mapping "Ambiguous", hence the lookup before creating.
+   *
+   * One basket / one push is one batch: its creatives and every market's
+   * template share the Gen. The number is the day's highest Gen already on MKT
+   * System plus one, so two machines do not collide.
    */
   const sdGenRef = useRef<{ date: string; n: number } | null>(null);
   const sdResetGen = () => { sdGenRef.current = null; };
@@ -2119,8 +2133,9 @@ export default function Home() {
       const d = await mkFetchJson(`/api/mkt/ad-templates?search=${date}&page=1&pageSize=100`);
       let max = 0;
       for (const tpl of (d.items || []) as MktTemplate[]) {
-        // The bare "20261005_Gen1_US" form is the earlier naming; counted so Gen numbers never repeat.
-        const m = /^(?:Ad_Template_)?(\d{8})_Gen(\d+)_/i.exec(tpl.name || "");
+        // Any spelling counts ("Ad Template 20261005 Gen1 US", "Ad_Template_…", the
+        // bare "20261005_Gen1_US"), so a Gen number is never handed out twice.
+        const m = /^(?:adtemplate)?(\d{8})gen(\d+)/.exec(normTplName(tpl.name || ""));
         if (m && m[1] === date) max = Math.max(max, Number(m[2]));
       }
       return max + 1;
@@ -2128,16 +2143,38 @@ export default function Home() {
       return null;
     }
   };
+  /**
+   * The Gen of the batch in progress, shared by creatives and templates so
+   * Google++ can match them: the push's, else the basket's, else a new one.
+   */
+  const mkBatchGen = async (): Promise<number | null> => {
+    const date = mkToday();
+    if (cbGenRef.current !== null) return cbGenRef.current;
+    if (sdGenRef.current?.date === date) return sdGenRef.current.n;
+    const n = await mkFetchNextGen();
+    if (n !== null) sdGenRef.current = { date, n };
+    return n;
+  };
+  /** A Google template that Google++ would treat as the same name, if one exists. */
+  const mkFindSameName = async (name: string): Promise<MktTemplate | null> => {
+    const key = normTplName(name);
+    const search = name.match(/\d{8}/)?.[0] || name.replace(/[_[\]]/g, " ").trim();
+    try {
+      const d = await mkFetchJson(`/api/mkt/ad-templates?search=${encodeURIComponent(search)}&page=1&pageSize=100`);
+      return ((d.items || []) as MktTemplate[]).find(t => normTplName(t.name || "") === key) || null;
+    } catch { return null; }
+  };
   const sdEnsureGen = async (): Promise<number> => {
     const date = mkToday();
     if (sdGenRef.current?.date === date) return sdGenRef.current.n;
+    if (cbGenRef.current !== null) return cbGenRef.current;
     const n = await mkFetchNextGen();
     // Not connected yet: a guess, not cached, so it is redone after connecting.
     if (n === null) return 1;
     sdGenRef.current = { date, n };
     return n;
   };
-  const sdTplNameFor = (market: string, n: number) => `Ad_Template_${mkToday()}_Gen${n}_${market}`;
+  const sdTplNameFor = (market: string, n: number) => `Ad Template ${mkToday()} Gen${n} ${market}`;
   /** Rebuilds the open modal's name once the real Gen number is known (e.g. after connecting). */
   const mkTplNameBuilderRef = useRef<((n: number) => string) | null>(null);
 
@@ -2204,6 +2241,8 @@ export default function Home() {
       const errs = mkValidate(blocks);
       if (errs.length) { failed.push(`${m.flag} ${m.code}: ${errs.join("; ")}`); continue; }
       try {
+        const same = await mkFindSameName(sdTplNameFor(m.code, gen));
+        if (same) throw new Error(`đã có "${same.name}" (trùng tên theo Google++)`);
         await mkFetchJson("/api/mkt/ad-templates", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: sdTplNameFor(m.code, gen), adContents: blocks }),
@@ -2227,7 +2266,7 @@ export default function Home() {
    * into the same languages as the images and pushes everything to MKT System
    * in one go: every set's banners as creatives (tags: day, Gen, market) and
    * one ad template per market with all its blocks, named
-   * Ad_Template_<day>_Gen<n>_<market>. Creatives and templates of one push
+   * "Ad Template <day> Gen<n> <market>" (Google++ naming). Creatives and templates of one push
    * share the Gen, so they can be matched up on MKT.
    */
   type CbBlock = { headlines: string[]; descriptions: string[] };
@@ -2239,6 +2278,7 @@ export default function Home() {
   const [cbCopyError, setCbCopyError] = useState("");
   const [cbPushBusy, setCbPushBusy] = useState("");
   const [cbPushLog, setCbPushLog] = useState<string[]>([]);
+  const [cbCopiedTpl, setCbCopiedTpl] = useState("");
   /** Gen of this set on MKT, fixed at the first push so a retry keeps the same names. */
   const cbGenRef = useRef<number | null>(null);
   /** "<lang>:<slot>" → bulk fields of a file already on S3. */
@@ -2358,7 +2398,7 @@ export default function Home() {
     try {
       if (cbGenRef.current === null) {
         setCbPushBusy("🔢 Đang lấy số Gen trên MKT...");
-        const n = await mkFetchNextGen();
+        const n = await mkBatchGen();
         if (n === null) throw new Error("Không đọc được danh sách template trên MKT để đánh số Gen.");
         cbGenRef.current = n;
       }
@@ -2386,12 +2426,24 @@ export default function Home() {
             cbTplDoneRef.current[market] = { ...done, sig };
             log.push(`✅ Cập nhật template ${done.name}`);
           } else {
-            const d = await mkFetchJson("/api/mkt/ad-templates", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name, adContents: blocks }),
-            });
-            cbTplDoneRef.current[market] = { name, id: String(d.template?.id || ""), sig };
-            log.push(`✅ Template ${name}`);
+            // Another template Google++ would read as the same name makes the
+            // mapping Ambiguous: update that one instead of adding a second.
+            const same = await mkFindSameName(name);
+            if (same) {
+              await mkFetchJson("/api/mkt/ad-templates", {
+                method: "PATCH", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: same.id, name: same.name, adContents: blocks }),
+              });
+              cbTplDoneRef.current[market] = { name: same.name, id: same.id, sig };
+              log.push(`✅ Cập nhật template có sẵn ${same.name}`);
+            } else {
+              const d = await mkFetchJson("/api/mkt/ad-templates", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, adContents: blocks }),
+              });
+              cbTplDoneRef.current[market] = { name, id: String(d.template?.id || ""), sig };
+              log.push(`✅ Template ${name}`);
+            }
           }
         } catch (e) {
           log.push(`❌ Template ${name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -4359,7 +4411,7 @@ export default function Home() {
                         <div className="text-sm font-bold" style={{color: t.text}}>🚀 Bước 3 · Đưa lên MKT System</div>
                         <div className="text-[11px] mt-0.5" style={{color: t.textMuted}}>
                           {nImgs} ảnh thành creative (tag ngày · Gen · thị trường) và {sets.length} ad template
-                          {" "}<b>Ad_Template_{mkToday()}_Gen{cbGenRef.current ?? "N"}_THỊTRƯỜNG</b>. Creative và template cùng một số Gen.
+                          {" "}<b>Ad Template {mkToday()} Gen{cbGenRef.current ?? "N"} THỊTRƯỜNG</b> — đúng quy ước Google++: tag main = <b>{mkToday()}</b> + <b>Gen{cbGenRef.current ?? "N"}</b>, tag localize = thị trường.
                         </div>
                       </div>
                       <div className="space-y-1">
@@ -4370,6 +4422,25 @@ export default function Home() {
                             <span className="flex-shrink-0" style={{color: x.previews.length < sets[0].previews.length ? "#F59E0B" : t.textMuted}}>{x.previews.length < sets[0].previews.length && "⚠️ "}{x.previews.length} ảnh · {x.blocks?.length ? `${x.blocks.length} khối ad copy` : x.lang === abLang ? "chưa có khối ad copy" : "chưa có ad copy — Localize lại"}</span>
                           </div>
                         ))}
+                      </div>
+                      {/* Google++ also needs one Campaign Template per localize tag. The
+                          MKT System API used here has no endpoint to create those, so
+                          the names are listed for the marketer to have ready. */}
+                      <div className="rounded-lg px-3 py-2 text-[11px] space-y-1" style={{backgroundColor: "#7C3AED0F", color: t.textSub}}>
+                        <div className="font-semibold" style={{color: t.text}}>Google++ cần sẵn trên MKT (channel Google), mỗi thị trường 1 Campaign Template:</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {Array.from(new Set(sets.map(x => cbMarketOf(x.lang)))).map(m => {
+                            const n = `Campaign Template ${m}`;
+                            return (
+                              <button key={m} onClick={() => { navigator.clipboard.writeText(n); setCbCopiedTpl(n); setTimeout(() => setCbCopiedTpl(""), 1500); }}
+                                className="px-2 py-0.5 rounded-md border font-mono" title="Chép tên"
+                                style={{borderColor: t.border, backgroundColor: t.card, color: t.text}}>
+                                {cbCopiedTpl === n ? "✓ Đã chép" : n}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div>Template theo quốc gia dùng lại được cho mọi đợt. Ad Template thì web tạo khi đẩy. Mỗi tên chỉ được có <b>đúng 1</b> template (trùng tên → Google++ báo Ambiguous).</div>
                       </div>
                       {!mkConn ? (
                         <div className="space-y-1.5">
@@ -5113,7 +5184,7 @@ export default function Home() {
                     placeholder="Không trùng template Google khác"
                     className="w-full text-sm rounded-lg px-3 py-2 border focus:outline-none focus:border-violet-500" style={inputStyle}/>
                   <div className="text-[10px] mt-1" style={{color: t.textMuted}}>
-                    Định dạng: <b>Ad_Template_NgàyThángNăm_GenN_THỊTRƯỜNG</b>, ví dụ Ad_Template_20261005_Gen1_US. Cùng một bộ khối thì chung số Gen, khác thị trường. Trên MKT gõ &ldquo;20261005_Gen1&rdquo; hoặc &ldquo;_US&rdquo; để lọc.
+                    Quy ước Google++: <b>Ad Template &lt;ngày&gt; Gen&lt;N&gt; &lt;THỊ TRƯỜNG&gt;</b>, ví dụ Ad Template 20261005 Gen1 US — tag thị trường luôn ở cuối, ngày và Gen phải trùng tag main của creative. Cùng một bộ khối thì chung số Gen, khác thị trường.
                   </div>
                 </div>
                 {mkBlocks.map((b, i) => (

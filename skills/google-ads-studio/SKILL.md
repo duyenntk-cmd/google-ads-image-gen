@@ -56,6 +56,19 @@ Backend MKT System **cho lưu ad template không tạo campaign được** (kh�
 hoặc không có description). App tự kiểm tra theo luật lúc-tạo-campaign cho TỪNG khối
 trước khi gửi. Đừng bỏ lớp kiểm tra này.
 
+## Đặt tên cho Google++ (MKT System tự map template theo tên + tag)
+
+- **Tag creative:** tag main = `<ngày YYYYMMDD>` + `Gen<N>` (chung cả đợt), tag localize = mã
+  thị trường viết hoa (`US`, `VN`, `GLOBAL`). Mỗi tag localize = 1 campaign. Tag phân biệt hoa/thường.
+- **Ad Template:** `Ad Template <ngày> Gen<N> <THỊ TRƯỜNG>` (vd `Ad Template 20261005 Gen1 US`).
+  Tag thị trường luôn ở cuối; ngày và Gen phải **trùng** tag main của creative.
+- **Campaign Template:** `Campaign Template <THỊ TRƯỜNG>`. Tạo tay một lần trên MKT, dùng lại cho mọi đợt.
+  API tích hợp không có endpoint tạo loại này.
+- Google++ so tên **bỏ qua hoa/thường, dấu cách, `_`, `[ ]`**. Hai template trùng tên theo cách so này
+  → **Ambiguous**. App tìm template trùng tên trước khi tạo, và cập nhật template có sẵn thay vì tạo thêm.
+- Creative và Ad Template trong một lần đẩy dùng **chung một số Gen**. Số Gen = Gen cao nhất trong ngày
+  trên MKT (đếm mọi cách viết) + 1.
+
 ## Ba điều hay bị hỏi nhất
 
 **Kích thước ảnh App campaign.** App campaign KHÔNG nhận kích thước cố định, nó nhận
