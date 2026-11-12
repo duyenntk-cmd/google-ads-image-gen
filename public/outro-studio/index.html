@@ -113,6 +113,18 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .prog{height:5px;background:var(--sunk);border-radius:3px;overflow:hidden;grid-column:1/-1}
 .prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
 .export .act{gap:6px;justify-content:flex-end}
+.mkt{border-top:1px solid var(--line);padding-top:12px}
+.mkt h3{margin:0;font-family:var(--f-display);font-weight:600;font-size:15px}
+.mktfields{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+@media (max-width:560px){.mktfields{grid-template-columns:minmax(0,1fr)}}
+.mktfields .f>label{font-size:12px;color:var(--muted)}
+.tagin{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:var(--sunk);border:1px solid var(--line);border-radius:7px;padding:5px 7px;min-height:36px;cursor:text}
+.tagin:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+.tagin #mktChips{display:contents}
+.tagin input{border:0;background:transparent;padding:2px;flex:1 1 120px;min-width:80px;outline:none}
+.tagchip{display:inline-flex;align-items:center;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:1px 4px 1px 9px;font-size:12px;font-weight:600}
+.tagchip button{border:0;background:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0 3px}
+.chip.mk{color:var(--accent)}
 .segbox{border-top:1px solid var(--line);margin-top:6px;padding-top:12px}
 .segbox h3{margin:0;font-family:var(--f-display);font-weight:600;font-size:15px}
 .srcbar{position:relative;height:10px;border-radius:5px;background:var(--sunk);border:1px solid var(--line);overflow:hidden}
@@ -357,6 +369,18 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
           <select id="par" style="width:auto"><option value="1">1 video</option><option value="2">2 video</option><option value="3">3 video</option><option value="4">4 video</option></select></label>
         <div class="row"><button class="btn primary" id="exportBtn" disabled>Xuất video</button><button class="btn" id="cancelBtn" hidden>Dừng</button><span class="hint" id="exportMsg"></span></div>
         <div class="row" id="zipRow" hidden><button class="btn primary" id="zipBtn">Tải tất cả (.zip)</button><span class="hint" id="zipMsg"></span></div>
+        <div class="sub mkt" id="mktBox" hidden>
+          <h3>Push lên MKT system</h3>
+          <div class="fields mktfields">
+            <div class="f"><label for="mktTagIn">Tag</label>
+              <div class="tagin" id="mktTagBox"><span id="mktChips"></span><input type="text" id="mktTagIn" list="mktTagList" autocomplete="off" placeholder="Gõ tag rồi Enter"></div>
+              <datalist id="mktTagList"></datalist></div>
+            <label class="f">Angle code<input type="text" id="mktAngle" autocomplete="off" placeholder="Ví dụ: A01"></label>
+          </div>
+          <div class="row"><button class="btn primary" id="mktPush" type="button">Push tất cả lên MKT system</button>
+            <a class="btn" id="mktOpen" target="_blank" rel="noopener" hidden>Mở MKT system ↗</a>
+            <span class="hint" id="mktMsg" aria-live="polite"></span></div>
+        </div>
         <div id="exportList"></div>
         <div class="sub hist" id="histBox" hidden>
           <div class="row" style="justify-content:space-between"><div><h3>Video đã xuất gần đây</h3><p class="hint">Lưu trong trình duyệt này, tải lại được kể cả sau khi đóng hoặc tải lại trang. Giữ tối đa 40 file mới nhất. <span id="histCount"></span></p></div>
@@ -410,6 +434,7 @@ const DEFAULTS={
         center:"0.5,0.5",radius:"0.3,0.18",cspeed:0.2,startAngle:-90,clockwise:"1",
         xRange:"0.2,0.8",zigs:3,points:"[[0.15,0.1,0],[0.85,0.3,2],[0.5,0.85,4]]",interp:"smooth",loop:false},
   rival:{on:true},
+  mkt:{tags:[],angle:"",recent:[]},
   outro:{mode:"make",appUrl:"",fit:"blur",imgDur:3,appName:"Mitu AI",tagline:"Biến ảnh thành video AI",cta:"Tải ngay",
          dur:3,bg1:"#1a1033",bg2:"#ff4f8b",textColor:"#ffffff",accent:"#ffffff",ctaText:"#ff4f8b",badges:"both",xf:0}
 };
@@ -1531,11 +1556,12 @@ function updateZip(){
   zb.disabled=!done.length;const mb=done.reduce((a,d)=>a+d.blob.size,0)/1048576;$("zipMsg").textContent=`${done.length} video · ${mb.toFixed(1)} MB`;
   zb.onclick=()=>saveZip(done);
 }
+const _updateZip=updateZip;updateZip=function(){_updateZip();if(typeof renderMkt==="function")renderMkt();};
 async function runExport(list,rows){
   if(exporting||!list.length)return;
   exporting={v:false};updateExport();$("cancelBtn").hidden=false;
   const W=+S.resize.size,H=Math.round(W*16/9);
-  list.forEach((it,i)=>{results.delete(it.id);resetRow(rows[i]);});updateZip();
+  list.forEach((it,i)=>{results.delete(it.id);if(typeof mkt!=="undefined")mkt.done.delete(it.id);resetRow(rows[i]);});updateZip();
   const prog=new Array(list.length).fill(0);const t0=performance.now();let ok=0;
   const showTotal=()=>{const p=prog.reduce((a,b)=>a+b,0)/list.length;document.title=`(${Math.round(p*100)}%) Outro Studio`;};
   let next=0;
@@ -1592,7 +1618,7 @@ function addRedo(it,r){
 }
 $("exportBtn").onclick=()=>{
   const list=items.filter(it=>it.status!=="error");if(!list.length)return;
-  const box=$("exportList");box.innerHTML="";results.clear();
+  const box=$("exportList");box.innerHTML="";results.clear();mkt.done.clear();
   const rows=list.map(it=>{const r=makeRow(it);box.appendChild(r);return r;});
   runExport(list,rows);
 };
@@ -1899,6 +1925,76 @@ function route(){const v=(location.hash||"").replace("#","");const view=["logo",
   if(view==="studio")refresh();window.scrollTo(0,0);}
 window.addEventListener("hashchange",route);route();
 libLoad();histLoad();
+
+/* ---------------- push lên MKT system ----------------
+   Giao diện: tag + angle code dùng chung cho cả lô, 1 nút push tất cả, xong thì mở MKT system ở tab mới.
+   Phần gửi thật nằm ở mktUpload(); server cho biết đã cấu hình chưa qua GET /api/outro/mkt. */
+let mkt={configured:false,openUrl:null,checked:false,busy:false,done:new Map(),failed:0,lastErr:""}; // done: it.id -> {link}
+async function mktCheck(){
+  if(mkt.checked)return;mkt.checked=true;
+  try{const r=await fetch("/api/outro/mkt");const d=await r.json();mkt.configured=!!d.configured;mkt.openUrl=d.openUrl||null;}catch(e){}
+  renderMkt();
+}
+function renderChips(){
+  const box=$("mktChips");box.innerHTML="";
+  S.mkt.tags.forEach((t,i)=>{const c=document.createElement("span");c.className="tagchip";c.textContent=t;
+    const x=document.createElement("button");x.type="button";x.textContent="×";x.setAttribute("aria-label","Bỏ tag "+t);
+    x.onclick=()=>{S.mkt.tags.splice(i,1);persist();renderChips();};c.appendChild(x);box.appendChild(c);});
+  $("mktTagList").innerHTML=S.mkt.recent.filter(t=>!S.mkt.tags.includes(t)).map(t=>`<option value="${esc(t)}">`).join("");
+}
+function addTag(raw){
+  for(const t of String(raw).split(",").map(x=>x.trim()).filter(Boolean)){
+    if(!S.mkt.tags.includes(t))S.mkt.tags.push(t);
+    S.mkt.recent=[t,...S.mkt.recent.filter(x=>x!==t)].slice(0,30);}
+  persist();renderChips();
+}
+$("mktTagBox").onclick=e=>{if(e.target.id==="mktTagBox")$("mktTagIn").focus();};
+$("mktTagIn").addEventListener("keydown",e=>{const el=e.target;
+  if((e.key==="Enter"||e.key===",")&&el.value.trim()){e.preventDefault();addTag(el.value);el.value="";}
+  else if(e.key==="Backspace"&&!el.value&&S.mkt.tags.length){S.mkt.tags.pop();persist();renderChips();}});
+$("mktTagIn").addEventListener("change",e=>{if(e.target.value.trim()){addTag(e.target.value);e.target.value="";}}); // chọn từ gợi ý
+$("mktTagIn").addEventListener("blur",e=>{if(e.target.value.trim()){addTag(e.target.value);e.target.value="";}});
+$("mktAngle").value=S.mkt.angle||"";
+$("mktAngle").addEventListener("input",e=>{S.mkt.angle=e.target.value.trim();persist();});
+renderChips();
+function mktRowChip(id,cls,txt){
+  const r=document.querySelector(`#exportList .item[data-id="${id}"]`);if(!r)return;
+  let c=r.querySelector(".mktst");if(!c){c=document.createElement("span");c.className="chip mktst";r.querySelector(".act").prepend(c);}
+  c.className="chip mktst "+cls;c.textContent=txt;
+}
+function renderMkt(){
+  const done=[...results.entries()];
+  $("mktBox").hidden=!done.length||!!exporting;
+  if($("mktBox").hidden)return;
+  mktCheck();
+  const btn=$("mktPush"),left=done.filter(([id])=>!mkt.done.has(id));
+  btn.disabled=mkt.busy||!mkt.configured||!left.length;
+  btn.textContent=mkt.busy?"Đang push…":left.length<done.length&&left.length?`Push ${left.length} video còn lại`:`Push tất cả lên MKT system (${done.length} video)`;
+  const open=$("mktOpen");const link=mkt.openUrl||[...mkt.done.values()].map(d=>d.link).find(Boolean);
+  open.hidden=!(mkt.done.size&&link);if(link)open.href=link;
+  if(!mkt.busy)$("mktMsg").textContent=!mkt.configured?(mkt.checked?"Chưa kết nối MKT system: đang chờ cấu hình API. Tag và angle code bạn nhập vẫn được lưu cho lần sau.":"Đang kiểm tra kết nối…")
+    :mkt.failed?`Push lỗi ${mkt.failed} video${mkt.lastErr?` (${mkt.lastErr})`:""}. ${mkt.done.size?`Đã push ${mkt.done.size}/${done.length}. `:""}Bấm nút để push lại các video lỗi.`
+    :mkt.done.size?`Đã push xong ${done.length} video.`:"";
+}
+// gửi 1 video lên MKT system; nối API thật ở đây khi có tài liệu
+async function mktUpload(rec,meta,onProgress){
+  throw new Error("Chưa kết nối MKT system");
+}
+$("mktPush").onclick=async()=>{
+  if(mkt.busy||!mkt.configured)return;
+  const pending=$("mktTagIn").value.trim();if(pending){addTag(pending);$("mktTagIn").value="";}
+  const meta={tags:[...S.mkt.tags],angleCode:S.mkt.angle||""};
+  const list=[...results.entries()].filter(([id])=>!mkt.done.has(id));
+  mkt.busy=true;mkt.failed=0;mkt.lastErr="";renderMkt();let ok=0;
+  for(const [id,rec] of list){
+    mktRowChip(id,"warn","MKT: đang push");
+    try{const res=await mktUpload(rec,meta,p=>mktRowChip(id,"warn",`MKT: ${Math.round(p*100)}%`));
+      mkt.done.set(id,{link:res&&res.link});ok++;mktRowChip(id,"ok","MKT: đã push");}
+    catch(e){console.error(e);mkt.failed++;mkt.lastErr=String(e&&e.message||e).slice(0,120);mktRowChip(id,"bad","MKT: lỗi");}
+    $("mktMsg").textContent=`Đang push ${ok}/${list.length}…`;
+  }
+  mkt.busy=false;renderMkt();
+};
 
 syncTimeline();updateExport();
 document.fonts.ready.then(()=>previewAt(1.6));
