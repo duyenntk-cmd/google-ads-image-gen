@@ -871,6 +871,11 @@ export default function Home() {
               <span>{icon}</span>{label}
             </button>
           ))}
+          <a href="/outro-studio"
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
+            style={{color: t.textMuted, borderLeft:"2px solid transparent", paddingLeft:10}}>
+            <span>🎬</span>Outro Studio
+          </a>
           <div className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 mt-2" style={{color: t.textMuted}}>Upload</div>
     {([
       ["youtube", "▶️", "YouTube Upload"],
