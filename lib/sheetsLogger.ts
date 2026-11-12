@@ -1,9 +1,9 @@
 import { createSign } from "crypto";
 
-const SPREADSHEET_ID = "17KwfmFYVT9DuJIC4o5aRGzGRwKkkipGBXIEl011FONs";
+export const SPREADSHEET_ID = "17KwfmFYVT9DuJIC4o5aRGzGRwKkkipGBXIEl011FONs";
 const SHEET_NAME = "Sheet1";
 
-async function getAccessToken(): Promise<string> {
+export async function getAccessToken(): Promise<string> {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
 

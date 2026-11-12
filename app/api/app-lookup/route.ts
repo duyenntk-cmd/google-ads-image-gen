@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { packageId } = await req.json();
     if (!packageId) return NextResponse.json({ name: null });
