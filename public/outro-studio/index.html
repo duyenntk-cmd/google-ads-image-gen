@@ -46,7 +46,7 @@ header.top p{margin:0;color:var(--muted);max-width:60ch}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);min-width:0}
 label.f .v{font-family:var(--f-mono);color:var(--fg);font-size:11.5px}
 label.f .lh{display:flex;justify-content:space-between;gap:6px}
-input[type=text],input[type=number],select,textarea{font:inherit;color:var(--fg);background:var(--sunk);border:1px solid var(--line);border-radius:7px;padding:7px 9px;width:100%;min-width:0}
+input[type=text],input[type=password],input[type=number],select,textarea{font:inherit;color:var(--fg);background:var(--sunk);border:1px solid var(--line);border-radius:7px;padding:7px 9px;width:100%;min-width:0}
 textarea{font-family:var(--f-mono);font-size:12px;min-height:58px;resize:vertical}
 input[type=color]{width:100%;height:34px;border:1px solid var(--line);border-radius:7px;background:var(--sunk);padding:2px}
 input[type=range]{width:100%;accent-color:var(--accent)}
@@ -115,6 +115,8 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .export .act{gap:6px;justify-content:flex-end}
 .mkt{border-top:1px solid var(--line);padding-top:12px}
 .mkt h3{margin:0;font-family:var(--f-display);font-weight:600;font-size:15px}
+.mktconn{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.mktconn .chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mktfields{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
 @media (max-width:560px){.mktfields{grid-template-columns:minmax(0,1fr)}}
 .mktfields .f>label{font-size:12px;color:var(--muted)}
@@ -371,6 +373,16 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
         <div class="row" id="zipRow" hidden><button class="btn primary" id="zipBtn">Tải tất cả (.zip)</button><span class="hint" id="zipMsg"></span></div>
         <div class="sub mkt" id="mktBox" hidden>
           <h3>Push lên MKT system</h3>
+          <p class="hint">Video vào thư viện creative của MKT System kèm tag và angle code, giống upload creative trên trang Banner + Ad Copy.</p>
+          <div class="mktconn" id="mktConnBox">
+            <div class="row" id="mktConnOk" hidden><span class="chip ok" id="mktWho"></span><span class="hint" id="mktExp"></span>
+              <button class="btn sm ghost" id="mktOff" type="button">Ngắt kết nối</button></div>
+            <div id="mktConnForm" hidden>
+              <div class="row"><input type="password" id="mktCode" autocomplete="off" spellcheck="false" placeholder="Dán mã mktmcp_... lấy ở trang Profile của MKT System" aria-label="Mã kết nối MKT System" style="flex:1 1 260px;min-width:0">
+                <button class="btn" id="mktConnect" type="button">Kết nối</button></div>
+              <p class="hint">Lấy mã ở trang Profile của MKT System (nút <b>Kết nối Claude</b>). Mã có hiệu lực tối đa 24 giờ tính từ lúc bạn đăng nhập MKT System, không gia hạn được. Mã được giữ ở server, trình duyệt không đọc lại được. Đã kết nối ở trang Banner + Ad Copy thì ở đây cũng dùng được.</p>
+            </div>
+          </div>
           <div class="fields mktfields">
             <div class="f"><label for="mktTagIn">Tag</label>
               <div class="tagin" id="mktTagBox"><span id="mktChips"></span><input type="text" id="mktTagIn" list="mktTagList" autocomplete="off" placeholder="Gõ tag rồi Enter"></div>
@@ -1561,7 +1573,7 @@ async function runExport(list,rows){
   if(exporting||!list.length)return;
   exporting={v:false};updateExport();$("cancelBtn").hidden=false;
   const W=+S.resize.size,H=Math.round(W*16/9);
-  list.forEach((it,i)=>{results.delete(it.id);if(typeof mkt!=="undefined")mkt.done.delete(it.id);resetRow(rows[i]);});updateZip();
+  list.forEach((it,i)=>{results.delete(it.id);mktForget(it.id);resetRow(rows[i]);});updateZip();
   const prog=new Array(list.length).fill(0);const t0=performance.now();let ok=0;
   const showTotal=()=>{const p=prog.reduce((a,b)=>a+b,0)/list.length;document.title=`(${Math.round(p*100)}%) Outro Studio`;};
   let next=0;
@@ -1618,7 +1630,7 @@ function addRedo(it,r){
 }
 $("exportBtn").onclick=()=>{
   const list=items.filter(it=>it.status!=="error");if(!list.length)return;
-  const box=$("exportList");box.innerHTML="";results.clear();mkt.done.clear();
+  const box=$("exportList");box.innerHTML="";results.clear();mkt.done.clear();mkt.prepared.clear();
   const rows=list.map(it=>{const r=makeRow(it);box.appendChild(r);return r;});
   runExport(list,rows);
 };
@@ -1927,14 +1939,55 @@ window.addEventListener("hashchange",route);route();
 libLoad();histLoad();
 
 /* ---------------- push lên MKT system ----------------
-   Giao diện: tag + angle code dùng chung cho cả lô, 1 nút push tất cả, xong thì mở MKT system ở tab mới.
-   Phần gửi thật nằm ở mktUpload(); server cho biết đã cấu hình chưa qua GET /api/outro/mkt. */
-let mkt={configured:false,openUrl:null,checked:false,busy:false,done:new Map(),failed:0,lastErr:""}; // done: it.id -> {link}
+   Giống upload creative ở trang Banner + Ad Copy: dùng chung mã kết nối (cookie mkt_connect, giữ ở server),
+   video lên S3 của MKT System bằng multipart, rồi 1 lệnh bulk tạo creative trong thư viện.
+   Video lớn hơn giới hạn 4,5MB mỗi request của Vercel nên trình duyệt PUT từng phần thẳng lên S3 qua presigned URL;
+   server chỉ ký các bước init/presign/complete bằng mã kết nối (/api/outro/mkt/upload). */
+let mkt={conn:null,checked:false,busy:false,done:new Map(),prepared:new Map(),failed:0,lastErr:"",note:"",idem:null,link:""};
+// done: it.id -> true (đã có trong thư viện MKT); prepared: it.id -> video đã lên S3, chờ lệnh tạo creative
+function mktForget(id){mkt.done.delete(id);mkt.prepared.delete(id);}
+const mktConnected=()=>!!(mkt.conn&&mkt.conn.expiresAt>Date.now());
+async function mktJson(url,opts){
+  let r;try{r=await fetch(url,opts);}catch(e){throw new Error("Mất mạng, không gọi được server.");}
+  const d=await r.json().catch(()=>null);
+  if(!d){if(r.redirected||/\/login/.test(r.url))throw new Error("Phiên đăng nhập web đã hết. Tải lại trang rồi đăng nhập.");throw new Error(`Server lỗi HTTP ${r.status}`);}
+  if(!r.ok||d.success===false){
+    if(d.reconnect){mkt.conn=null;renderConn();throw new Error(d.error==="not_connected"?"Chưa kết nối MKT System hoặc mã đã hết hạn. Dán mã mới.":d.error);}
+    throw new Error(d.error||`HTTP ${r.status}`);}
+  return d;
+}
+const mktApi=body=>mktJson("/api/outro/mkt/upload",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 async function mktCheck(){
   if(mkt.checked)return;mkt.checked=true;
-  try{const r=await fetch("/api/outro/mkt");const d=await r.json();mkt.configured=!!d.configured;mkt.openUrl=d.openUrl||null;}catch(e){}
-  renderMkt();
+  try{const d=await mktJson("/api/outro/mkt");mkt.conn=d.connected?{email:d.email,expiresAt:d.expiresAt,systemUrl:d.systemUrl||""}:null;}
+  catch(e){mkt.conn=null;}
+  renderConn();renderMkt();
 }
+function renderConn(){
+  const ok=mktConnected();
+  $("mktConnOk").hidden=!ok;$("mktConnForm").hidden=ok||!mkt.checked;
+  if(!ok)return;
+  const c=mkt.conn,d=new Date(c.expiresAt),p=x=>String(x).padStart(2,"0");
+  $("mktWho").textContent="✓ "+(c.email||"Đã kết nối");$("mktWho").title=c.email||"";
+  $("mktExp").textContent=`Mã hết hạn ${p(d.getHours())}:${p(d.getMinutes())} ${p(d.getDate())}/${p(d.getMonth()+1)} (còn ${Math.max(0,Math.round((c.expiresAt-Date.now())/3600000))} giờ)`;
+}
+async function mktConnect(){
+  const code=$("mktCode").value.trim();if(!code||mkt.busy)return;
+  const b=$("mktConnect");b.disabled=true;b.textContent="Đang kết nối…";mkt.note="";
+  try{const d=await mktJson("/api/outro/mkt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
+    mkt.conn={email:d.email,expiresAt:d.expiresAt,systemUrl:d.systemUrl||""};$("mktCode").value="";}
+  catch(e){mkt.note="Không kết nối được: "+(e&&e.message||e);}
+  finally{b.disabled=false;b.textContent="Kết nối";}
+  renderConn();renderMkt();
+}
+$("mktConnect").onclick=mktConnect;
+$("mktCode").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();mktConnect();}});
+$("mktOff").onclick=async()=>{
+  if(mkt.busy)return;
+  try{await fetch("/api/outro/mkt",{method:"DELETE"});}catch(e){}
+  mkt.conn=null;mkt.note="Đã xoá mã khỏi web này. Mã vẫn còn hiệu lực trên MKT System tới khi hết hạn, vì MKT System không thu hồi được mã.";
+  renderConn();renderMkt();
+};
 function renderChips(){
   const box=$("mktChips");box.innerHTML="";
   S.mkt.tags.forEach((t,i)=>{const c=document.createElement("span");c.className="tagchip";c.textContent=t;
@@ -1962,36 +2015,95 @@ function mktRowChip(id,cls,txt){
   let c=r.querySelector(".mktst");if(!c){c=document.createElement("span");c.className="chip mktst";r.querySelector(".act").prepend(c);}
   c.className="chip mktst "+cls;c.textContent=txt;
 }
+// link "Mở MKT System": MKT_SYSTEM_URL nếu có (được chứa {tag} để mở sẵn danh sách lọc theo tag), không thì đoán từ host API
+function mktLink(tag){const base=mkt.conn&&mkt.conn.systemUrl||"";
+  return base.includes("{tag}")?base.replace("{tag}",encodeURIComponent(tag||"")):base;}
 function renderMkt(){
   const done=[...results.entries()];
   $("mktBox").hidden=!done.length||!!exporting;
   if($("mktBox").hidden)return;
   mktCheck();
+  const ok=mktConnected();
   const btn=$("mktPush"),left=done.filter(([id])=>!mkt.done.has(id));
-  btn.disabled=mkt.busy||!mkt.configured||!left.length;
-  btn.textContent=mkt.busy?"Đang push…":left.length<done.length&&left.length?`Push ${left.length} video còn lại`:`Push tất cả lên MKT system (${done.length} video)`;
-  const open=$("mktOpen");const link=mkt.openUrl||[...mkt.done.values()].map(d=>d.link).find(Boolean);
-  open.hidden=!(mkt.done.size&&link);if(link)open.href=link;
-  if(!mkt.busy)$("mktMsg").textContent=!mkt.configured?(mkt.checked?"Chưa kết nối MKT system: đang chờ cấu hình API. Tag và angle code bạn nhập vẫn được lưu cho lần sau.":"Đang kiểm tra kết nối…")
+  btn.disabled=mkt.busy||!ok||!left.length;
+  btn.textContent=mkt.busy?"Đang push…":!left.length?"Đã push hết lên MKT system":left.length<done.length?`Push ${left.length} video còn lại`:`Push tất cả lên MKT system (${done.length} video)`;
+  const open=$("mktOpen");open.hidden=!(mkt.done.size&&mkt.link);if(mkt.link)open.href=mkt.link;
+  if(mkt.busy)return;
+  $("mktMsg").textContent=mkt.note||(!mkt.checked?"Đang kiểm tra kết nối…"
+    :!ok?"Dán mã kết nối MKT System ở trên để push. Tag và angle code bạn nhập vẫn được lưu cho lần sau."
     :mkt.failed?`Push lỗi ${mkt.failed} video${mkt.lastErr?` (${mkt.lastErr})`:""}. ${mkt.done.size?`Đã push ${mkt.done.size}/${done.length}. `:""}Bấm nút để push lại các video lỗi.`
-    :mkt.done.size?`Đã push xong ${done.length} video.`:"";
+    :mkt.done.size?`Đã đưa ${mkt.done.size} video vào thư viện creative của MKT System.`:"");
 }
-// gửi 1 video lên MKT system; nối API thật ở đây khi có tài liệu
-async function mktUpload(rec,meta,onProgress){
-  throw new Error("Chưa kết nối MKT system");
+// đọc độ dài và chụp 1 khung làm thumbnail từ chính video đã xuất
+async function mktProbe(blob){
+  const u=URL.createObjectURL(blob),v=makeVideo(u);
+  try{await loaded(v);const duration=isFinite(v.duration)?v.duration:0;let thumb=null;
+    try{thumb=await grabThumb(v,Math.min(1,duration/2),360);}catch(e){}
+    return {duration,thumb};}
+  catch(e){return {duration:0,thumb:null};}
+  finally{v.removeAttribute("src");v.load();URL.revokeObjectURL(u);}
+}
+// đưa 1 video lên S3 của MKT System; trả về các trường của creative (chưa tạo creative)
+async function mktUpload(rec,onProgress){
+  const type=(rec.blob.type||"").split(";")[0].trim();
+  if(!/^video\/(mp4|quicktime)$/.test(type))throw new Error("MKT System chỉ nhận MP4/MOV, video này là WebM. Xuất lại bằng Chrome hoặc Edge bản mới.");
+  const name=rec.fname.replace(/\.[^.]+$/,""),fileName=name+(type==="video/quicktime"?".mov":".mp4"),size=rec.blob.size;
+  const probe=await mktProbe(rec.blob);
+  const {uploadId,key,partSize}=await mktApi({action:"init",fileName,contentType:type,size});
+  try{
+    const n=Math.max(1,Math.ceil(size/partSize)),nums=Array.from({length:n},(_,i)=>i+1),parts=[];let sent=0;
+    for(let i=0;i<n;i+=3){ // xin presigned URL theo từng đợt 3 phần để URL không hết hạn khi mạng chậm
+      const {parts:urls}=await mktApi({action:"presign",uploadId,key,partNumbers:nums.slice(i,i+3)});
+      await Promise.all(urls.map(async({partNumber,presignedUrl})=>{
+        const chunk=rec.blob.slice((partNumber-1)*partSize,partNumber*partSize);
+        let res=null;
+        for(let t=0;;t++){
+          try{res=await fetch(presignedUrl,{method:"PUT",body:chunk});} // không gửi Authorization: presigned URL đã mang quyền
+          catch(e){if(t<2){await sleep(1500*(t+1));continue;}
+            throw new Error("Trình duyệt không gửi được video lên kho S3 của MKT System: kho chưa cho phép web này (CORS) hoặc mạng chập chờn.");}
+          if(res.ok||res.status<500||t>=2)break;await sleep(1500*(t+1));
+        }
+        if(!res.ok)throw new Error(`Upload phần ${partNumber} lỗi HTTP ${res.status}`);
+        const etag=res.headers.get("ETag");
+        if(!etag)throw new Error("Kho S3 của MKT System không cho web này đọc ETag (CORS chưa mở header ETag).");
+        parts.push({PartNumber:partNumber,ETag:etag.replace(/"/g,"")});sent+=chunk.size;onProgress(sent/size);
+      }));
+    }
+    const {url}=await mktApi({action:"complete",uploadId,key,parts});
+    let thumbnail=null; // thiếu thumbnail thì creative vẫn vào thư viện, chỉ không có ảnh xem trước
+    if(probe.thumb)try{thumbnail=(await mktApi({action:"thumb",name:`thumb-${name}.jpg`,dataUrl:probe.thumb})).url;}catch(e){}
+    return {url,name,size,...(thumbnail&&{thumbnail}),...(probe.duration>0&&{duration:probe.duration})};
+  }catch(e){
+    mktApi({action:"abort",uploadId,key}).catch(()=>{}); // không để phần dở dang nằm lại trong kho
+    throw e;
+  }
 }
 $("mktPush").onclick=async()=>{
-  if(mkt.busy||!mkt.configured)return;
+  if(mkt.busy||!mktConnected())return;
   const pending=$("mktTagIn").value.trim();if(pending){addTag(pending);$("mktTagIn").value="";}
-  const meta={tags:[...S.mkt.tags],angleCode:S.mkt.angle||""};
-  const list=[...results.entries()].filter(([id])=>!mkt.done.has(id));
-  mkt.busy=true;mkt.failed=0;mkt.lastErr="";renderMkt();let ok=0;
+  const meta={tags:[...S.mkt.tags],angleCodes:S.mkt.angle?[S.mkt.angle]:[]};
+  const list=[...results.entries()].filter(([id])=>!mkt.done.has(id));if(!list.length)return;
+  mkt.busy=true;mkt.failed=0;mkt.lastErr="";mkt.note="";renderMkt();
+  const fail=(id,e)=>{console.error(e);mkt.failed++;mkt.lastErr=String(e&&e.message||e).slice(0,160);mktRowChip(id,"bad","MKT: lỗi");};
+  let k=0;
   for(const [id,rec] of list){
-    mktRowChip(id,"warn","MKT: đang push");
-    try{const res=await mktUpload(rec,meta,p=>mktRowChip(id,"warn",`MKT: ${Math.round(p*100)}%`));
-      mkt.done.set(id,{link:res&&res.link});ok++;mktRowChip(id,"ok","MKT: đã push");}
-    catch(e){console.error(e);mkt.failed++;mkt.lastErr=String(e&&e.message||e).slice(0,120);mktRowChip(id,"bad","MKT: lỗi");}
-    $("mktMsg").textContent=`Đang push ${ok}/${list.length}…`;
+    k++;if(mkt.prepared.has(id))continue; // đã lên S3 ở lần bấm trước, chỉ còn thiếu bước tạo creative
+    if(!mktConnected()){fail(id,new Error("Mã kết nối đã hết hạn. Dán mã mới."));continue;}
+    $("mktMsg").textContent=`Đang upload video ${k}/${list.length} lên MKT System…`;mktRowChip(id,"warn","MKT: 0%");
+    try{mkt.prepared.set(id,await mktUpload(rec,p=>mktRowChip(id,"warn",`MKT: ${Math.round(p*100)}%`)));mktRowChip(id,"warn","MKT: đã lên S3");}
+    catch(e){fail(id,e);}
+  }
+  const ready=list.filter(([id])=>mkt.prepared.has(id));
+  if(ready.length){
+    $("mktMsg").textContent=`Đang tạo ${ready.length} creative trong thư viện MKT System…`;
+    // tag và angle code lấy ở bước này, nên sửa sau khi video đã lên S3 vẫn được tính
+    const items=ready.map(([id])=>({...mkt.prepared.get(id),...meta})),body=JSON.stringify(items);
+    // bấm lại sau lỗi mạng thì gửi cùng key, MKT System trả lại kết quả cũ thay vì tạo trùng
+    if(!mkt.idem||mkt.idem.body!==body)mkt.idem={body,key:crypto.randomUUID()};
+    try{await mktApi({action:"create",items,idempotencyKey:mkt.idem.key});mkt.idem=null;
+      for(const [id] of ready){mkt.prepared.delete(id);mkt.done.set(id,true);mktRowChip(id,"ok","MKT: đã push");}
+      mkt.link=mktLink(meta.tags[0]);}
+    catch(e){for(const [id] of ready)fail(id,e);}
   }
   mkt.busy=false;renderMkt();
 };
