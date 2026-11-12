@@ -73,6 +73,7 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
 
   const run = async () => {
     setBusy(true); setError("");
+    const t0 = Date.now();
     try {
       try { localStorage.setItem(STORE_KEY, JSON.stringify({ sys: sys.url, ads: ads.url, target: targetPct })); } catch {}
       // A pasted link wins over an uploaded file, so a fresh link is always re-read.
@@ -87,7 +88,13 @@ export default function CampDoctor({ t, onMakeCreatives }: { t: CampTheme; onMak
       const joined = joinReports(adsRows, sysRows);
       const date = parseReportDate(a.rows) || new Date().toISOString().slice(0, 10);
       const history = loadHistory();
-      setResults(analyzeAll(joined, { ...RULES, targetD0: targetPct / 100 }, history, date));
+      const analysed = analyzeAll(joined, { ...RULES, targetD0: targetPct / 100 }, history, date);
+      setResults(analysed);
+      // Usage log (fire and forget): how many camps were reviewed, how many need action.
+      const n = (h: string) => analysed.filter(r => r.health === h).length;
+      void fetch("/api/usage-log", { method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+        body: JSON.stringify({ tool: "Phân tích Camp", action: "Phân tích camp", durationSec: (Date.now() - t0) / 1000,
+          note: `${analysed.length} camp · ngày ${date} · cần xử lý ${n("bad")} · theo dõi ${n("warn")} · tốt ${n("good")} · chưa kết luận ${n("info")}` }) }).catch(() => {});
       setReportDate(date);
       // Keep this day for next time (replacing an earlier read of the same day), 14 days max.
       for (const r of joined) {

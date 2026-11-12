@@ -14,6 +14,8 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `GOOGLE_ADS_DEVELOPER_TOKEN` | Google Ads API |
 | `GOOGLE_ADS_MCC_CUSTOMER_ID` | tài khoản MCC |
 | `NEXTAUTH_URL` | URL gốc, dùng dựng redirect URI |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | đọc/ghi Google Sheets: user, log đăng nhập, log sử dụng (`UsageLog`), đọc report Phân tích Camp |
+| `MKT_SYSTEM_URL` | (tuỳ chọn) link web MKT System cho nút "Mở MKT System"; được chứa `{tag}` |
 
 ## API route
 
@@ -28,6 +30,7 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `/api/mascot` | tìm mascot trong screenshot, hoặc tạo mới |
 | `/api/keywords`, `/api/adcopy`, `/api/localize` | Ad Copy Studio |
 | `/api/google-ads/*`, `/api/auth/google-ads/callback` | Launch Camp |
+| `/api/usage-log` | ghi 1 dòng log sử dụng vào tab `UsageLog` (email lấy từ phiên đăng nhập) |
 
 Mọi route đều gọi `requireSession()` ở dòng đầu. Ngoại lệ duy nhất là callback OAuth,
 vì Google phải redirect vào được — nó nằm dưới `/api/auth/` nên được proxy bỏ qua.

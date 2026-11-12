@@ -1037,10 +1037,19 @@ export default function Home() {
    *   rewritten brief stays local, so fixing one frame does not silently
    *   redefine the other nineteen.
    */
+  /** One row in the usage log (Google Sheet). Fire and forget: logging never blocks or breaks a tool. */
+  const logUsage = (ev: { tool: string; action: string; app?: string; markets?: string; images?: number; templates?: number; startedAt?: number; result?: "ok"|"partial"|"error"; note?: string }) => {
+    const { startedAt, ...rest } = ev;
+    const body = JSON.stringify({ ...rest, durationSec: startedAt ? (Date.now() - startedAt) / 1000 : 0 });
+    void fetch("/api/usage-log", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+  };
+
   const handleAbGenerate = async (
     mode: "one"|"core"|"full" = abMode, reuse = false, onlyKeys?: string[], revisionOverride?: string,
   ) => {
     if (!abUrl.trim()) return;
+    const t0 = Date.now();
+    const genAction = onlyKeys?.length ? "Gen lại ảnh" : mode === "one" ? "Gen ảnh duyệt" : "Gen bộ ảnh";
     const partial = Boolean(onlyKeys?.length);
     const scoped = revisionOverride !== undefined;
     const revText = (scoped ? revisionOverride! : abRevision).trim();
@@ -1252,8 +1261,11 @@ export default function Home() {
       setAbError(errors.length ? "⚠️ Một số size lỗi:\n" + errors.join("\n") : "");
       setAbStatus(`Xong: ${merged.length} banner.`);
       setAbStep("preview");
+      logUsage({ tool: "Banner + Ad Copy", action: genAction, app: theBrief.app_name || cbAppName(), markets: COUNTRY_ISO[abCountry] || "GLOBAL",
+        images: out.length, startedAt: t0, result: errors.length ? "partial" : "ok", note: errors.length ? `${errors.length} size lỗi` : "" });
     } catch (e) {
       setAbError("❌ " + (e instanceof Error ? e.message : String(e)));
+      logUsage({ tool: "Banner + Ad Copy", action: genAction, app: cbAppName(), markets: COUNTRY_ISO[abCountry] || "GLOBAL", startedAt: t0, result: "error", note: (e instanceof Error ? e.message : String(e)) });
       // Dropping back to the form would throw away a finished set of 20 just
       // because one retry failed.
       if (!partial) setAbStep("input");
@@ -1334,6 +1346,7 @@ export default function Home() {
     const bases = abBasesRef.current;
     if (!Object.keys(bases).length) { setAbError("❌ Không còn ảnh gốc để vẽ lại. Gen lại bộ ảnh trước."); return; }
     setAbError("");
+    const t0 = Date.now();
     // The ad copy goes into the same languages, in parallel with the redraw.
     const copyDone = cbLocalizeCopy(langs, note);
     cbResetPush(langs);
@@ -1361,6 +1374,9 @@ export default function Home() {
     }
     await copyDone;
     setAbLocBusy("");
+    logUsage({ tool: "Banner + Ad Copy", action: note ? "Localize lại" : "Localize", app: abBrief.app_name,
+      markets: langs.map(l => COUNTRY_ISO[locCountry(l)] || l).join(", "), images: sets.reduce((n, x) => n + x.previews.length, 0),
+      startedAt: t0, result: sets.length === langs.length ? "ok" : sets.length ? "partial" : "error", note: note || "" });
     // Replace a market already produced rather than listing it twice.
     setAbLocSets((prev) => [...prev.filter((s) => !sets.some((n) => n.lang === s.lang)), ...sets]);
   };
@@ -1718,6 +1734,7 @@ export default function Home() {
     setSdSelected(keyword);
     setSdCopyLoading(true);
     setSdCopy(null); setSdError(""); setSdSelH([]); setSdSelD([]);
+    const t0 = Date.now();
     try {
       const res = await fetch("/api/adcopy", {
         method: "POST",
@@ -1735,8 +1752,10 @@ export default function Home() {
         descriptions: data.result.descriptions || [],
         ctas: data.result.ctas || [],
       });
+      logUsage({ tool: "Ad Copy Studio", action: "Gen ad copy", app: sdAppName || sdUrl, markets: COUNTRY_ISO[sdCountry] || (sdCountry === "Global" ? "GLOBAL" : sdCountry), startedAt: t0, note: keyword });
     } catch (e) {
       setSdError("❌ " + (e instanceof Error ? e.message : String(e)));
+      logUsage({ tool: "Ad Copy Studio", action: "Gen ad copy", app: sdAppName || sdUrl, markets: COUNTRY_ISO[sdCountry] || (sdCountry === "Global" ? "GLOBAL" : sdCountry), startedAt: t0, result: "error", note: (e instanceof Error ? e.message : String(e)) });
     } finally {
       setSdCopyLoading(false);
     }
@@ -1865,6 +1884,7 @@ export default function Home() {
         body: JSON.stringify({ name: mkTplName.trim(), adContents: mkParseBlocks() }),
       });
       setMkNote(`✅ Đã tạo template "${mkTplName.trim()}".`);
+      logUsage({ tool: "MKT System", action: "Tạo ad template", templates: 1, note: mkTplName.trim() });
       const origin = mkTplOriginRef.current;
       if (origin) setSdLocTplDone(prev => ({ ...prev, [origin]: mkTplName.trim() }));
       setMkTplName("");
@@ -2031,6 +2051,7 @@ export default function Home() {
       marketTargets: list(mkcMeta.marketTargets), languages: list(mkcMeta.languages),
     };
     setMkBusy("creative"); setMkError(""); setMkNote("");
+    const t0 = Date.now();
     try {
       // One file per request: several PNG banners in one body would pass the
       // hosting platform's request-size limit. Two at a time.
@@ -2069,6 +2090,8 @@ export default function Home() {
       mkcIdemRef.current = null; mkcPreparedRef.current = {};
       setAbMkSel([]);
       setMkBatchTag(mkcMeta.tags.split(",").map(x => x.trim()).filter(Boolean)[0] || "");
+      logUsage({ tool: "MKT System", action: "Upload creative", app: cbAppName(), markets: list(mkcMeta.tags).slice(1).join(", "),
+        images: d.creatives?.length || 0, startedAt: t0, result: d.errors?.length ? "partial" : "ok", note: list(mkcMeta.tags)[0] || "" });
       setMkNote(`✅ Đã đưa ${d.creatives?.length || 0} creative vào thư viện MKT System.` +
         (d.errors?.length ? `\n⚠️ Bỏ qua:\n${d.errors.join("\n")}` : ""));
     } catch (e) {
@@ -2259,6 +2282,8 @@ export default function Home() {
       }
     }
     if (done.length) setMkNote(`✅ Đã tạo ${done.length} template: ${done.join(", ")}`);
+    logUsage({ tool: "Ad Copy Studio", action: "Tạo ad template theo thị trường", app: sdAppName || sdUrl, templates: done.length,
+      markets: sdLocBlocks.map(m => m.code).join(", "), result: failed.length ? (done.length ? "partial" : "error") : "ok", note: failed.join(" | ").slice(0, 400) });
     if (failed.length) setMkError("❌ Chưa tạo được:\n" + failed.join("\n"));
     setMkBusy("");
     void mkLoadTemplates();
@@ -2400,6 +2425,8 @@ export default function Home() {
     const sets = cbSets();
     const log: string[] = [];
     setCbPushLog([]);
+    const t0 = Date.now();
+    let nCreatives = 0, batchTag = "";
     try {
       if (cbGenRef.current === null) {
         setCbPushBusy("🔢 Đang lấy số Gen trên MKT...");
@@ -2408,6 +2435,7 @@ export default function Home() {
         cbGenRef.current = n;
       }
       const gen = cbGenRef.current, date = mkToday();
+      batchTag = `${date} Gen${gen}`;
 
       // 1. Ad templates, one per market.
       setCbPushBusy("📝 Đang tạo ad template...");
@@ -2500,6 +2528,7 @@ export default function Home() {
         });
         ready.forEach(j => cbBulkedRef.current.add(j.id));
         setMkBatchTag(`${date} Gen${gen}`);
+        nCreatives = d.creatives?.length ?? ready.length;
         cbIdemRef.current = null;
         log.push(`✅ ${d.creatives?.length ?? ready.length} creative (tag "${date} Gen${gen}" + ${Array.from(new Set(ready.map(j => cbMarketOf(j.s.lang)))).join("/")})`);
       } else if (!failed.length) {
@@ -2512,6 +2541,10 @@ export default function Home() {
     } finally {
       setCbPushLog(log);
       setCbPushBusy("");
+      const bad = log.some(l => l.startsWith("❌")), good = log.some(l => l.startsWith("✅"));
+      logUsage({ tool: "Banner + Ad Copy", action: "Đẩy lên MKT", app: cbAppName(), markets: sets.map(x => cbMarketOf(x.lang)).join(", "),
+        images: nCreatives, templates: log.filter(l => l.startsWith("✅ Template") || l.startsWith("✅ Cập nhật")).length, startedAt: t0,
+        result: bad ? (good ? "partial" : "error") : "ok", note: [batchTag, ...log.filter(l => l.startsWith("❌"))].join(" | ").slice(0, 400) });
     }
   };
 
@@ -3278,6 +3311,7 @@ export default function Home() {
             style={{color: t.textMuted, borderColor: t.border, backgroundColor: t.tabBg}}>
             {darkMode ? "☀️" : "🌙"} {darkMode ? "Light mode" : "Dark mode"}
           </button>
+          <div className="text-[10px] text-center" style={{color: t.textMuted}} title="Lịch sử thay đổi: CHANGELOG.md">v{process.env.APP_VERSION}</div>
         </div>
       </aside>
 

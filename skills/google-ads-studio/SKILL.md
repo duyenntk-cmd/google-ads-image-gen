@@ -74,6 +74,16 @@ trước khi gửi. Đừng bỏ lớp kiểm tra này.
   `MKT_SYSTEM_URL` trên Vercel (có thể chứa `{tag}`, vd `https://<web MKT>/creative-library?tag={tag}`,
   để mở thẳng danh sách đã lọc). Không đặt env thì app đoán từ host API trong mã kết nối (bỏ `api.`).
 
+## Version và log sử dụng
+
+- Mỗi version ghi trong `CHANGELOG.md` (mục tiêu, ngày, thay đổi) và có git tag cùng tên (`v5.3`…).
+  Số version nằm ở `package.json`, hiện ở cuối sidebar. Khi có thay đổi lớn: tăng version, viết CHANGELOG,
+  rồi gắn tag.
+- Log sử dụng: mỗi việc chạy xong ghi 1 dòng vào tab `UsageLog` của sheet hệ thống (cùng file với log đăng nhập).
+  Cột gồm: thời gian, ngày, email, công cụ, hành động, app, thị trường, số ảnh, số template, thời gian chạy,
+  kết quả (ok/partial/error), ghi chú, version. Gọi qua `logUsage()` ở `app/page.tsx`. Lỗi ghi log không bao giờ
+  làm hỏng công cụ.
+
 ## Ba điều hay bị hỏi nhất
 
 **Kích thước ảnh App campaign.** App campaign KHÔNG nhận kích thước cố định, nó nhận
