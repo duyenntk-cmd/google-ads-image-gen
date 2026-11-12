@@ -15,7 +15,7 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `GOOGLE_ADS_MCC_CUSTOMER_ID` | tài khoản MCC |
 | `NEXTAUTH_URL` | URL gốc, dùng dựng redirect URI |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | đọc/ghi Google Sheets: user, log đăng nhập, log sử dụng (`UsageLog`), đọc report Phân tích Camp |
-| `MKT_SYSTEM_URL` | (tuỳ chọn) link web MKT System cho nút "Mở MKT System"; được chứa `{tag}` |
+| `MKT_SYSTEM_URL` | (tuỳ chọn) thay mẫu link nút "Mở MKT System" (mặc định: trang Creative của `mktpro.aperogroup.ai` lọc theo tag, xem `lib/mktLink.ts`); được chứa `{tag}`, `{from}`, `{to}` |
 
 ## API route
 

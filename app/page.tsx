@@ -8,6 +8,7 @@ import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 import CampDoctor from "@/components/CampDoctor";
 import { abSaveRun, abListRuns, abLoadArt, abDeleteRun, AbRunMeta } from "@/lib/abHistory";
+import { fillMktLink } from "@/lib/mktLink";
 
 interface Brief {
   app_name: string; tagline?: string; headline: string; subheadline: string; cta_text: string;
@@ -2871,7 +2872,7 @@ export default function Home() {
   const mkSystemLinkEl = (tag: string) => {
     const base = mkConn?.systemUrl || "";
     if (!base && !tag) return null;
-    const href = base.includes("{tag}") ? base.replace("{tag}", encodeURIComponent(tag)) : base;
+    const href = fillMktLink(base, tag);
     return (
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         {href && (

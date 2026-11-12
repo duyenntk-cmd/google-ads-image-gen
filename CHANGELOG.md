@@ -14,6 +14,15 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v6.1 — 2026-11-12 · Link thẳng tới bộ creative vừa đẩy
+
+**Mục tiêu:** đẩy xong bấm một nút là thấy đúng bộ creative vừa tạo trên MKT System.
+
+- Nút "Mở MKT System" (Banner + Ad Copy và Outro Studio) mở thẳng trang Creative của MKT System,
+  lọc sẵn theo tag vừa đẩy, khoảng ngày 30 ngày gần nhất như mặc định của trang đó.
+- Outro Studio: lỗi push ghi rõ bước hỏng (khởi tạo, gửi S3, hoàn tất, tạo creative); tên file trên S3
+  rút gọn, không dấu; thời lượng video gửi số giây nguyên.
+
 ## v6.0 — 2026-11-12 · Outro Studio
 
 **Mục tiêu:** làm lại outro cho video ads hàng loạt và đưa thẳng video thành phẩm vào thư viện creative MKT System.
