@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 import { parseConnectCode } from "@/lib/mktClient";
 import { storeConnection, clearConnection, readConnection } from "@/lib/mktSession";
 
@@ -6,18 +7,7 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 /**
- * Outro Studio → MKT System: the connection.
- *
- * Same connect code and same cookie (`mkt_connect`) as the creative upload on
- * the Banner + Ad Copy page, so connecting in one place connects both. The
- * code stays in an httpOnly cookie; the page only ever sees whose code it is
- * and when it expires.
- *
- * The routes are behind proxy.ts like every other /api route.
- */
-
-/**
- * Where MKT System's web app lives, for the "Mở MKT System" link. Not a
+ * Where MKT System's web app lives, for "open in MKT System" links. Not a
  * secret. MKT_SYSTEM_URL (Vercel env) wins and may contain "{tag}" to open a
  * filtered list; otherwise it is guessed from the API host the connect code
  * points at, minus a leading "api." / "api-".
@@ -28,29 +18,28 @@ function systemUrl(backendUrl: string): string {
     const u = new URL(backendUrl);
     u.hostname = u.hostname.replace(/^api[.-]/, "");
     return u.origin;
-  } catch {
-    return "";
-  }
+  } catch { return ""; }
 }
 
-const noStore = { "cache-control": "no-store" };
-
+/** Current connection, for the header line the guide asks to always show. */
 export async function GET() {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   const conn = await readConnection();
-  if (!conn) return NextResponse.json({ connected: false }, { headers: noStore });
-  return NextResponse.json(
-    { connected: true, email: conn.email, expiresAt: conn.expiresAt, systemUrl: systemUrl(conn.backendUrl) },
-    { headers: noStore },
-  );
+  if (!conn) return NextResponse.json({ connected: false });
+  return NextResponse.json({ connected: true, email: conn.email, expiresAt: conn.expiresAt, systemUrl: systemUrl(conn.backendUrl) });
 }
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   try {
     const { code } = await req.json();
     const conn = parseConnectCode(String(code || ""));
 
-    // Check the code works before keeping it, so a bad code fails here and
-    // not halfway through pushing a batch of videos.
+    // Verify before storing: a code that parses but cannot authenticate is
+    // worse than one rejected outright, because the failure would surface
+    // later, in the middle of an upload.
     const res = await fetch(conn.backendUrl + "auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -63,12 +52,7 @@ export async function POST(req: NextRequest) {
     }
 
     await storeConnection(String(code).trim(), conn);
-    return NextResponse.json({
-      connected: true,
-      email: conn.email,
-      expiresAt: conn.expiresAt,
-      systemUrl: systemUrl(conn.backendUrl),
-    });
+    return NextResponse.json({ connected: true, email: conn.email, expiresAt: conn.expiresAt, systemUrl: systemUrl(conn.backendUrl) });
   } catch (err) {
     return NextResponse.json(
       { connected: false, error: (err as Error)?.message || "Không kết nối được." },
@@ -77,8 +61,13 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Forgets the code on this web. MKT System has no revoke, so it stays valid there until it expires. */
+/**
+ * Forget the code here. It stays valid on MKT System until it expires — there
+ * is no revoke endpoint — and the UI says so.
+ */
 export async function DELETE() {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   await clearConnection();
   return NextResponse.json({ connected: false });
 }

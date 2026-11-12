@@ -1,0 +1,124 @@
+---
+name: google-ads-studio
+description: Bộ công cụ Google Ads cho app mobile tại https://google-ads-image-gen.vercel.app — gồm Gen Banner (cắt ảnh từ video ads), AI Banner (gen 20 creative App campaign từ URL store, localize, lưu lịch sử), Ad Copy Studio (keyword + 5 tiêu đề/5 mô tả + localize), Launch Camp (tạo campaign Google Ads), YouTube Upload (up hàng loạt video unlisted lấy link chạy ads), Phân tích Camp (đọc report GG Ads + est ROAS D0 của system, gợi ý tăng/giảm budget, chỉnh tROAS, thay asset trên từng campaign). Dùng skill này khi người dùng hỏi cách dùng tool, gặp lỗi khi dùng, muốn biết một tính năng nằm ở đâu, muốn sửa/phát triển code của repo duyenntk-cmd/google-ads-image-gen, hỏi về chi phí mỗi lượt gen, hỏi kích thước ảnh Google App campaign, hỏi nên tăng budget bao nhiêu / khi nào chỉnh tROAS / camp có đạt ROAS D0 không, hoặc nói "phân tích camp", "gen banner", "gen ảnh quảng cáo", "tạo creative", "viết ad copy", "tìm keyword", "localize quảng cáo", "up video unlisted", "tạo campaign".
+---
+
+# Google Ads Studio
+
+Web app Next.js, deploy trên Vercel, đăng nhập bằng Google. Năm công cụ trong một sidebar.
+
+**Quy tắc bắt buộc về khoá:** mọi API key và secret CHỈ nằm trong Environment Variables của
+Vercel, KHÔNG BAO GIỜ viết vào code. Khi sửa code, không hardcode, không log giá trị khoá,
+không đưa khoá vào commit message hay PR.
+
+## Năm công cụ
+
+| Sidebar | Việc | Chạy bằng |
+|---|---|---|
+| 🎨 Gen Banner | Upload video ads → cắt frame → resize ra nhiều kích thước GDN | canvas trong trình duyệt |
+| ✨ AI Banner | URL store → 20 creative App campaign hoàn chỉnh | OpenAI ảnh + GPT-4o-mini |
+| 🎯 Ad Copy Studio | Keyword → ad copy cho keyword đó → localize | Claude (Anthropic) |
+| 🚀 Launch Camp | Tạo App campaign thật trên tài khoản Google Ads | Google Ads API |
+| ▶️ YouTube Upload | Up hàng loạt video Unlisted, lấy link chạy ads | YouTube Data API |
+| 🎬 Outro Studio | Cắt outro cũ, resize 9:16, logo bay, gắn end card mới → xuất hàng loạt → push video lên thư viện creative MKT System | trang tĩnh `public/outro-studio`, dựng video trong trình duyệt |
+| 🔌 MKT System | Đẩy ad template + creative sang MKT System bằng mã kết nối | API MKT System |
+| 📊 Phân tích Camp | Report GG Ads + est ROAS (system) → gợi ý action trên từng camp | luật trong `lib/campDoctor.ts` |
+
+Chi tiết từng công cụ: `references/tools.md`.
+Kiến trúc, API route, biến môi trường, quy ước code: `references/architecture.md`.
+Khung quyết định budget / tROAS cho App campaign: `references/camp-analysis.md`.
+
+## Phân tích Camp — khung quyết định (tóm tắt)
+
+**Target ROAS D0 = 100%**, so với `est_roas` của data system (không so với tROAS của camp).
+Camp đang learning thì không chỉnh. Mỗi lần chỉnh tối đa khoảng 20%.
+
+| Tiêu hết budget và ROAS ≥ target | Tăng budget |
+|---|---|
+| Vừa đạt, mới ổn định | +10–15% |
+| Tốt, hết budget liên tục 3–7 ngày | +15–20% |
+| ≥ 120% target, ổn định | +20–30% |
+| Dao động, mới vài ngày tốt | 0–10% / giữ |
+| Dưới target | Không tăng; tối ưu trước |
+
+- Tiêu ít hơn budget mà ROAS tốt → **kiểm tra tROAS có quá cao** (hạ từng bước), không phải tăng budget.
+- Tiêu hết budget mà ROAS thấp → không scale, kiểm tra chất lượng user.
+- ROAS tốt nhưng ít conversion → kiểm tra tracking / event tối ưu.
+- Tăng budget mà volume không tăng → kiểm tra giới hạn đấu giá, tROAS, quy mô thị trường.
+
+## MKT System — hai điều phải nhớ
+
+Mã `mktmcp_...` là **credential của user trong tối đa 24h**, tính từ lúc user đăng nhập
+MKT System chứ không phải lúc copy, **không gia hạn và không thu hồi được**. Nó KHÔNG đặt
+vào biến môi trường Vercel như các API key khác — nó của từng người và dán lúc chạy — mà
+giữ trong cookie httpOnly phía server.
+
+Backend MKT System **cho lưu ad template không tạo campaign được** (khối chỉ 1 headline
+hoặc không có description). App tự kiểm tra theo luật lúc-tạo-campaign cho TỪNG khối
+trước khi gửi. Đừng bỏ lớp kiểm tra này.
+
+## Đặt tên cho Google++ (MKT System tự map template theo tên + tag)
+
+- **Tag creative:** đúng 2 tag. Tag main = `<ngày YYYYMMDD> Gen<N>` (1 tag duy nhất, chung cả đợt,
+  vd `20261103 Gen1`). Tag localize = mã thị trường viết hoa (`US`, `VN`, `GLOBAL`). Mỗi tag localize
+  = 1 campaign. Tag phân biệt hoa/thường.
+- **Ad Template:** `Ad Template <ngày> Gen<N> <THỊ TRƯỜNG>` (vd `Ad Template 20261005 Gen1 US`).
+  = `Ad Template <tag main> <tag localize>`. Ngày và Gen phải **trùng** tag main của creative.
+- **Campaign Template:** `Campaign Template <THỊ TRƯỜNG>`. Tạo tay một lần trên MKT, dùng lại cho mọi đợt.
+  API tích hợp không có endpoint tạo loại này.
+- Google++ so tên **bỏ qua hoa/thường, dấu cách, `_`, `[ ]`**. Hai template trùng tên theo cách so này
+  → **Ambiguous**. App tìm template trùng tên trước khi tạo, và cập nhật template có sẵn thay vì tạo thêm.
+- Creative và Ad Template trong một lần đẩy dùng **chung một số Gen**. Số Gen = Gen cao nhất trong ngày
+  trên MKT (đếm mọi cách viết) + 1.
+- **Link mở MKT System:** sau khi upload xong (modal creative, bước 3), app hiện nút **🔗 Mở MKT System**
+  và **📋 Chép tag `<ngày> Gen<N>`** để lọc đúng bộ gen trong Creative Library. Link lấy từ env
+  `MKT_SYSTEM_URL` trên Vercel (có thể chứa `{tag}`, vd `https://<web MKT>/creative-library?tag={tag}`,
+  để mở thẳng danh sách đã lọc). Không đặt env thì app đoán từ host API trong mã kết nối (bỏ `api.`).
+
+## Version và log sử dụng
+
+- Mỗi version ghi trong `CHANGELOG.md` (mục tiêu, ngày, thay đổi) và có git tag cùng tên (`v5.3`…).
+  Số version nằm ở `package.json`, hiện ở cuối sidebar. Khi có thay đổi lớn: tăng version, viết CHANGELOG,
+  rồi gắn tag.
+- Log sử dụng: mỗi việc chạy xong ghi 1 dòng vào tab `UsageLog` của sheet hệ thống (cùng file với log đăng nhập).
+  Cột gồm: thời gian, ngày, email, công cụ, hành động, app, thị trường, số ảnh, số template, thời gian chạy,
+  kết quả (ok/partial/error), ghi chú, version. Gọi qua `logUsage()` ở `app/page.tsx`. Lỗi ghi log không bao giờ
+  làm hỏng công cụ.
+
+## Ba điều hay bị hỏi nhất
+
+**Kích thước ảnh App campaign.** App campaign KHÔNG nhận kích thước cố định, nó nhận
+image asset theo 3 TỈ LỆ: 1.91:1 (1200×628), 1:1 (1200×1200), 4:5 (1200×1500).
+Tối đa 20 ảnh/ad group, ≤5MB, PNG hoặc JPG. 9:16 là tỉ lệ VIDEO, không phải tỉ lệ ảnh.
+AI Banner chia 20 slot thành 7 + 7 + 6 theo đúng ba tỉ lệ đó.
+
+**Tiền mỗi lượt gen.** Tính theo chất lượng ảnh, hiện trên nút trước khi bấm:
+low ~0,006$/ảnh · medium ~0,053$/ảnh · high ~0,211$/ảnh (quy đổi 26.000₫/$).
+Bộ 20 ảnh chất lượng high ≈ 28.000₫. Gen lại 1 ảnh ≈ 1.400₫. Localize sang thị trường
+khác KHÔNG tốn tiền ảnh — chỉ vẽ lại chữ lên ảnh cũ, vài trăm đồng tiền dịch.
+
+**Deploy xong không thấy thay đổi.** Nhánh production trên Vercel không phải nhánh đang
+làm việc, nên mỗi deployment phải bấm **Promote to Production** thủ công thì mới lên
+domain chính.
+
+## Chữ trên banner — điều quan trọng nhất
+
+Chữ trên banner (headline, phụ đề, CTA, logo, Play badge) do **canvas vẽ sau**, không phải
+model vẽ. Nhờ vậy chữ luôn sắc nét và giống hệt nhau ở cả 20 size. Model chỉ vẽ phần
+tranh và phải chừa trống vùng dành cho chữ.
+
+Hệ quả bắt buộc phải biết: chữ **bên trong màn hình điện thoại** trong ảnh là pixel do
+model vẽ. Localize đổi được chữ canvas, KHÔNG đổi được chữ trong mockup điện thoại.
+Muốn cả mockup đúng ngôn ngữ thì phải gen bộ mới với ngôn ngữ đó.
+
+## Thứ tự thao tác ở AI Banner (quan trọng)
+
+Chọn **Thị trường + Ngôn ngữ TRƯỚC**, rồi mới bấm ✨ Auto Prompt. Creative direction được
+viết CHO một thị trường; chọn thị trường sau khi đã có prompt thì chữ trên banner dễ ra
+sai ngôn ngữ. App có cảnh báo màu cam khi hai thứ này lệch nhau.
+
+## Khi người dùng báo lỗi
+
+Đọc `references/troubleshooting.md` — có sẵn cách xử lý cho: gen ra thiếu ảnh (rate limit),
+chữ đè lên nhân vật, hai nhân vật trong một ảnh, chữ sai ngôn ngữ, Auto Prompt không chạy,
+lấy dữ liệu store thất bại, Launch Camp không kết nối được.

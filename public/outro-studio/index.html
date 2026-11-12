@@ -1939,7 +1939,7 @@ window.addEventListener("hashchange",route);route();
 libLoad();histLoad();
 
 /* ---------------- push lên MKT system ----------------
-   Giống upload creative ở trang Banner + Ad Copy: dùng chung mã kết nối (cookie mkt_connect, giữ ở server),
+   Giống upload creative ở trang Banner + Ad Copy: dùng chung mã kết nối qua /api/mkt/connect (cookie mkt_connect, giữ ở server),
    video lên S3 của MKT System bằng multipart, rồi 1 lệnh bulk tạo creative trong thư viện.
    Video lớn hơn giới hạn 4,5MB mỗi request của Vercel nên trình duyệt PUT từng phần thẳng lên S3 qua presigned URL;
    server chỉ ký các bước init/presign/complete bằng mã kết nối (/api/outro/mkt/upload). */
@@ -1959,7 +1959,7 @@ async function mktJson(url,opts){
 const mktApi=body=>mktJson("/api/outro/mkt/upload",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 async function mktCheck(){
   if(mkt.checked)return;mkt.checked=true;
-  try{const d=await mktJson("/api/outro/mkt");mkt.conn=d.connected?{email:d.email,expiresAt:d.expiresAt,systemUrl:d.systemUrl||""}:null;}
+  try{const d=await mktJson("/api/mkt/connect");mkt.conn=d.connected?{email:d.email,expiresAt:d.expiresAt,systemUrl:d.systemUrl||""}:null;}
   catch(e){mkt.conn=null;}
   renderConn();renderMkt();
 }
@@ -1974,7 +1974,7 @@ function renderConn(){
 async function mktConnect(){
   const code=$("mktCode").value.trim();if(!code||mkt.busy)return;
   const b=$("mktConnect");b.disabled=true;b.textContent="Đang kết nối…";mkt.note="";
-  try{const d=await mktJson("/api/outro/mkt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
+  try{const d=await mktJson("/api/mkt/connect",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
     mkt.conn={email:d.email,expiresAt:d.expiresAt,systemUrl:d.systemUrl||""};$("mktCode").value="";}
   catch(e){mkt.note="Không kết nối được: "+(e&&e.message||e);}
   finally{b.disabled=false;b.textContent="Kết nối";}
@@ -1984,7 +1984,7 @@ $("mktConnect").onclick=mktConnect;
 $("mktCode").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();mktConnect();}});
 $("mktOff").onclick=async()=>{
   if(mkt.busy)return;
-  try{await fetch("/api/outro/mkt",{method:"DELETE"});}catch(e){}
+  try{await fetch("/api/mkt/connect",{method:"DELETE"});}catch(e){}
   mkt.conn=null;mkt.note="Đã xoá mã khỏi web này. Mã vẫn còn hiệu lực trên MKT System tới khi hết hạn, vì MKT System không thu hồi được mã.";
   renderConn();renderMkt();
 };
@@ -2083,7 +2083,7 @@ $("mktPush").onclick=async()=>{
   const pending=$("mktTagIn").value.trim();if(pending){addTag(pending);$("mktTagIn").value="";}
   const meta={tags:[...S.mkt.tags],angleCodes:S.mkt.angle?[S.mkt.angle]:[]};
   const list=[...results.entries()].filter(([id])=>!mkt.done.has(id));if(!list.length)return;
-  mkt.busy=true;mkt.failed=0;mkt.lastErr="";mkt.note="";renderMkt();
+  mkt.busy=true;mkt.failed=0;mkt.lastErr="";mkt.note="";renderMkt();const t0=Date.now();
   const fail=(id,e)=>{console.error(e);mkt.failed++;mkt.lastErr=String(e&&e.message||e).slice(0,160);mktRowChip(id,"bad","MKT: lỗi");};
   let k=0;
   for(const [id,rec] of list){
@@ -2105,6 +2105,10 @@ $("mktPush").onclick=async()=>{
       mkt.link=mktLink(meta.tags[0]);}
     catch(e){for(const [id] of ready)fail(id,e);}
   }
+  const pushed=list.filter(([id])=>mkt.done.has(id)).length;
+  fetch("/api/usage-log",{method:"POST",headers:{"Content-Type":"application/json"},keepalive:true,
+    body:JSON.stringify({tool:"Outro Studio",action:"Push video lên MKT",images:pushed,durationSec:(Date.now()-t0)/1000,
+      result:!mkt.failed?"ok":pushed?"partial":"error",note:[meta.tags.join(", "),meta.angleCodes[0]?"angle "+meta.angleCodes[0]:"",mkt.failed?"lỗi: "+mkt.lastErr:""].filter(Boolean).join(" · ")})}).catch(()=>{});
   mkt.busy=false;renderMkt();
 };
 

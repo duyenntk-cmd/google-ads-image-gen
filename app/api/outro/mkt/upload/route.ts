@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession } from "@/lib/apiAuth";
 import { requireMkt } from "@/lib/mktSession";
 import { ConnectCodeExpiredError, uploadToS3 } from "@/lib/mktClient";
 
@@ -8,7 +9,8 @@ export const maxDuration = 60;
 /**
  * Outro Studio → MKT System: putting finished videos in the creative library.
  *
- * Same two stages as the creative upload on the Banner + Ad Copy page: the
+ * Same connection (/api/mkt/connect, cookie `mkt_connect`) and the same two
+ * stages as the creative upload on the Banner + Ad Copy page: the
  * file goes to MKT System's S3 by multipart upload, then one bulk call to
  * `automation-facebook/creative-settings/bulk` creates the creatives.
  *
@@ -170,6 +172,8 @@ async function create(mkt: Mkt, body: Record<string, unknown>) {
 const ACTIONS = { init, presign, complete, abort, thumb, create } as const;
 
 export async function POST(req: NextRequest) {
+  const unauth = await requireSession();
+  if (unauth) return unauth;
   let body: Record<string, unknown>;
   try {
     body = await req.json();
