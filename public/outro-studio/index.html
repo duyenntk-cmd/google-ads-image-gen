@@ -2044,35 +2044,42 @@ async function mktProbe(blob){
   finally{v.removeAttribute("src");v.load();URL.revokeObjectURL(u);}
 }
 // đưa 1 video lên S3 của MKT System; trả về các trường của creative (chưa tạo creative)
+// tên file trên S3: ngắn, không dấu, chỉ chữ/số/gạch (tên video tải về thường rất dài và nhiều dấu chấm)
+const mktSafe=s=>String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[đĐ]/g,"d")
+  .replace(/[^A-Za-z0-9_-]+/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"").slice(0,48)||"video";
+// ghi rõ bước nào lỗi để biết lỗi nằm ở MKT System hay ở kho S3
+const mktStep=(step,p)=>p.catch(e=>{throw new Error(`${step}: ${e&&e.message||e}`);});
 async function mktUpload(rec,onProgress){
   const type=(rec.blob.type||"").split(";")[0].trim();
   if(!/^video\/(mp4|quicktime)$/.test(type))throw new Error("MKT System chỉ nhận MP4/MOV, video này là WebM. Xuất lại bằng Chrome hoặc Edge bản mới.");
-  const name=rec.fname.replace(/\.[^.]+$/,""),fileName=name+(type==="video/quicktime"?".mov":".mp4"),size=rec.blob.size;
+  const name=rec.fname.replace(/\.[^.]+$/,"").slice(0,100),safe=mktSafe(name)+"-"+Date.now().toString(36);
+  const fileName=safe+(type==="video/quicktime"?".mov":".mp4"),size=rec.blob.size;
   const probe=await mktProbe(rec.blob);
-  const {uploadId,key,partSize}=await mktApi({action:"init",fileName,contentType:type,size});
+  const {uploadId,key,partSize}=await mktStep("Khởi tạo upload",mktApi({action:"init",fileName,contentType:type,size}));
   try{
     const n=Math.max(1,Math.ceil(size/partSize)),nums=Array.from({length:n},(_,i)=>i+1),parts=[];let sent=0;
     for(let i=0;i<n;i+=3){ // xin presigned URL theo từng đợt 3 phần để URL không hết hạn khi mạng chậm
-      const {parts:urls}=await mktApi({action:"presign",uploadId,key,partNumbers:nums.slice(i,i+3)});
+      const {parts:urls}=await mktStep("Xin link upload",mktApi({action:"presign",uploadId,key,partNumbers:nums.slice(i,i+3)}));
       await Promise.all(urls.map(async({partNumber,presignedUrl})=>{
         const chunk=rec.blob.slice((partNumber-1)*partSize,partNumber*partSize);
         let res=null;
         for(let t=0;;t++){
           try{res=await fetch(presignedUrl,{method:"PUT",body:chunk});} // không gửi Authorization: presigned URL đã mang quyền
           catch(e){if(t<2){await sleep(1500*(t+1));continue;}
-            throw new Error("Trình duyệt không gửi được video lên kho S3 của MKT System: kho chưa cho phép web này (CORS) hoặc mạng chập chờn.");}
+            throw new Error("Gửi video lên S3: trình duyệt không gửi được lên kho S3 của MKT System, kho chưa cho phép web này (CORS) hoặc mạng chập chờn.");}
           if(res.ok||res.status<500||t>=2)break;await sleep(1500*(t+1));
         }
-        if(!res.ok)throw new Error(`Upload phần ${partNumber} lỗi HTTP ${res.status}`);
+        if(!res.ok)throw new Error(`Gửi video lên S3: phần ${partNumber} lỗi HTTP ${res.status}`);
         const etag=res.headers.get("ETag");
-        if(!etag)throw new Error("Kho S3 của MKT System không cho web này đọc ETag (CORS chưa mở header ETag).");
+        if(!etag)throw new Error("Gửi video lên S3: kho S3 của MKT System không cho web này đọc ETag (CORS chưa mở header ETag).");
         parts.push({PartNumber:partNumber,ETag:etag.replace(/"/g,"")});sent+=chunk.size;onProgress(sent/size);
       }));
     }
-    const {url}=await mktApi({action:"complete",uploadId,key,parts});
+    const {url}=await mktStep("Hoàn tất upload",mktApi({action:"complete",uploadId,key,parts}));
     let thumbnail=null; // thiếu thumbnail thì creative vẫn vào thư viện, chỉ không có ảnh xem trước
-    if(probe.thumb)try{thumbnail=(await mktApi({action:"thumb",name:`thumb-${name}.jpg`,dataUrl:probe.thumb})).url;}catch(e){}
-    return {url,name,size,...(thumbnail&&{thumbnail}),...(probe.duration>0&&{duration:probe.duration})};
+    if(probe.thumb)try{thumbnail=(await mktApi({action:"thumb",name:`thumb-${safe}.jpg`,dataUrl:probe.thumb})).url;}catch(e){}
+    // thời lượng gửi số giây nguyên
+    return {url,name,size,...(thumbnail&&{thumbnail}),...(probe.duration>0&&{duration:Math.max(1,Math.round(probe.duration))})};
   }catch(e){
     mktApi({action:"abort",uploadId,key}).catch(()=>{}); // không để phần dở dang nằm lại trong kho
     throw e;
@@ -2084,7 +2091,7 @@ $("mktPush").onclick=async()=>{
   const meta={tags:[...S.mkt.tags],angleCodes:S.mkt.angle?[S.mkt.angle]:[]};
   const list=[...results.entries()].filter(([id])=>!mkt.done.has(id));if(!list.length)return;
   mkt.busy=true;mkt.failed=0;mkt.lastErr="";mkt.note="";renderMkt();const t0=Date.now();
-  const fail=(id,e)=>{console.error(e);mkt.failed++;mkt.lastErr=String(e&&e.message||e).slice(0,160);mktRowChip(id,"bad","MKT: lỗi");};
+  const fail=(id,e)=>{console.error(e);mkt.failed++;mkt.lastErr=String(e&&e.message||e).slice(0,240);mktRowChip(id,"bad","MKT: lỗi");};
   let k=0;
   for(const [id,rec] of list){
     k++;if(mkt.prepared.has(id))continue; // đã lên S3 ở lần bấm trước, chỉ còn thiếu bước tạo creative
@@ -2100,7 +2107,7 @@ $("mktPush").onclick=async()=>{
     const items=ready.map(([id])=>({...mkt.prepared.get(id),...meta})),body=JSON.stringify(items);
     // bấm lại sau lỗi mạng thì gửi cùng key, MKT System trả lại kết quả cũ thay vì tạo trùng
     if(!mkt.idem||mkt.idem.body!==body)mkt.idem={body,key:crypto.randomUUID()};
-    try{await mktApi({action:"create",items,idempotencyKey:mkt.idem.key});mkt.idem=null;
+    try{await mktStep("Tạo creative trên MKT",mktApi({action:"create",items,idempotencyKey:mkt.idem.key}));mkt.idem=null;
       for(const [id] of ready){mkt.prepared.delete(id);mkt.done.set(id,true);mktRowChip(id,"ok","MKT: đã push");}
       mkt.link=mktLink(meta.tags[0]);}
     catch(e){for(const [id] of ready)fail(id,e);}

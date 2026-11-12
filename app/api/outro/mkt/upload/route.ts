@@ -140,7 +140,7 @@ async function create(mkt: Mkt, body: Record<string, unknown>) {
   const prepared: Record<string, unknown>[] = [];
   for (const it of items as Record<string, unknown>[]) {
     const url = str(it?.url);
-    const name = str(it?.name).trim();
+    const name = str(it?.name).trim().slice(0, 120);
     if (!url.startsWith("https://") || !name) return bad(`${name || "video"}: thiếu url hoặc tên.`);
     const thumbnail = str(it.thumbnail);
     const tags = strList(it.tags);
@@ -152,7 +152,8 @@ async function create(mkt: Mkt, body: Record<string, unknown>) {
       isPublic: Boolean(it.isPublic),
       ...(typeof it.size === "number" && it.size > 0 && { size: it.size }),
       ...(thumbnail.startsWith("https://") && { thumbnail }),
-      ...(typeof it.duration === "number" && it.duration > 0 && { duration: Math.round(it.duration * 100) / 100 }),
+      // whole seconds: the Banner page never sends duration, so its type is unproven; an integer fits either way
+      ...(typeof it.duration === "number" && it.duration > 0 && { duration: Math.max(1, Math.round(it.duration)) }),
       ...(tags.length && { tags }),
       ...(angleCodes.length && { angleCodes }),
     });
@@ -180,7 +181,8 @@ export async function POST(req: NextRequest) {
   } catch {
     return bad("Body không phải JSON.");
   }
-  const run = ACTIONS[str(body.action) as keyof typeof ACTIONS];
+  const action = str(body.action);
+  const run = ACTIONS[action as keyof typeof ACTIONS];
   if (!run) return bad("action không hợp lệ.");
 
   try {
@@ -188,6 +190,9 @@ export async function POST(req: NextRequest) {
     return await run(mkt, body);
   } catch (err) {
     const e = err as Error & { status?: number; body?: unknown };
+    // MKT System's own message is often just "Internal server error"; the
+    // step and its response body in the Vercel log are what narrow it down.
+    console.error(`[outro-mkt] ${action} failed`, e?.status ?? "", e?.message, JSON.stringify(e?.body ?? null).slice(0, 1000));
     // `reconnect` tells the page to ask for a new connect code.
     if (e?.message === "not_connected") {
       return NextResponse.json({ success: false, error: "not_connected", reconnect: true }, { status: 401 });
