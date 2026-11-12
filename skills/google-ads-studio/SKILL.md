@@ -71,9 +71,11 @@ trước khi gửi. Đừng bỏ lớp kiểm tra này.
 - Creative và Ad Template trong một lần đẩy dùng **chung một số Gen**. Số Gen = Gen cao nhất trong ngày
   trên MKT (đếm mọi cách viết) + 1.
 - **Link mở MKT System:** sau khi upload xong (modal creative, bước 3), app hiện nút **🔗 Mở MKT System**
-  và **📋 Chép tag `<ngày> Gen<N>`** để lọc đúng bộ gen trong Creative Library. Link lấy từ env
-  `MKT_SYSTEM_URL` trên Vercel (có thể chứa `{tag}`, vd `https://<web MKT>/creative-library?tag={tag}`,
-  để mở thẳng danh sách đã lọc). Không đặt env thì app đoán từ host API trong mã kết nối (bỏ `api.`).
+  và **📋 Chép tag `<ngày> Gen<N>`**. Nút mở thẳng trang Creative của MKT System
+  (`https://mktpro.aperogroup.ai/automate-campaign/creative?...&tags=<tag>`) đã lọc theo tag main của bộ
+  vừa upload, khoảng ngày 30 ngày gần nhất như mặc định của trang đó. Outro Studio dùng cùng link, lọc theo
+  tag đầu tiên. Mẫu link nằm ở `lib/mktLink.ts`; env `MKT_SYSTEM_URL` trên Vercel (tuỳ chọn) thay được mẫu này,
+  có thể chứa `{tag}`, `{from}`, `{to}`.
 
 ## Version và log sử dụng
 

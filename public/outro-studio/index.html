@@ -2015,9 +2015,13 @@ function mktRowChip(id,cls,txt){
   let c=r.querySelector(".mktst");if(!c){c=document.createElement("span");c.className="chip mktst";r.querySelector(".act").prepend(c);}
   c.className="chip mktst "+cls;c.textContent=txt;
 }
-// link "Mở MKT System": MKT_SYSTEM_URL nếu có (được chứa {tag} để mở sẵn danh sách lọc theo tag), không thì đoán từ host API
-function mktLink(tag){const base=mkt.conn&&mkt.conn.systemUrl||"";
-  return base.includes("{tag}")?base.replace("{tag}",encodeURIComponent(tag||"")):base;}
+// link "Mở MKT System": trang Creative của MKT System lọc sẵn theo tag vừa push.
+// Mẫu link lấy từ server (lib/mktLink.ts); điền {tag}, {from}, {to} giống fillMktLink() ở đó:
+// khoảng ngày như mặc định của trang MKT, từ 00:00 ba mươi ngày trước tới hết hôm nay.
+function mktFill(base,tag,now=new Date()){
+  const from=new Date(now.getFullYear(),now.getMonth(),now.getDate()-30),to=new Date(now.getFullYear(),now.getMonth(),now.getDate(),23,59,59,999);
+  return base.split("{tag}").join(encodeURIComponent(tag||"")).split("{from}").join(encodeURIComponent(from.toISOString())).split("{to}").join(encodeURIComponent(to.toISOString()));}
+function mktLink(tag){const base=mkt.conn&&mkt.conn.systemUrl||"";return base?mktFill(base,tag):"";}
 function renderMkt(){
   const done=[...results.entries()];
   $("mktBox").hidden=!done.length||!!exporting;

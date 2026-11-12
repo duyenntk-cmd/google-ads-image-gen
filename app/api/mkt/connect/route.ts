@@ -2,24 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireSession } from "@/lib/apiAuth";
 import { parseConnectCode } from "@/lib/mktClient";
 import { storeConnection, clearConnection, readConnection } from "@/lib/mktSession";
+// systemUrl is the "Mở MKT System" link template (Creative page filtered by
+// tag, see lib/mktLink.ts); the page fills in {tag}, {from} and {to}. Not a secret.
+import { mktLinkTemplate } from "@/lib/mktLink";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
-
-/**
- * Where MKT System's web app lives, for "open in MKT System" links. Not a
- * secret. MKT_SYSTEM_URL (Vercel env) wins and may contain "{tag}" to open a
- * filtered list; otherwise it is guessed from the API host the connect code
- * points at, minus a leading "api." / "api-".
- */
-function systemUrl(backendUrl: string): string {
-  if (process.env.MKT_SYSTEM_URL) return process.env.MKT_SYSTEM_URL;
-  try {
-    const u = new URL(backendUrl);
-    u.hostname = u.hostname.replace(/^api[.-]/, "");
-    return u.origin;
-  } catch { return ""; }
-}
 
 /** Current connection, for the header line the guide asks to always show. */
 export async function GET() {
@@ -27,7 +15,7 @@ export async function GET() {
   if (unauth) return unauth;
   const conn = await readConnection();
   if (!conn) return NextResponse.json({ connected: false });
-  return NextResponse.json({ connected: true, email: conn.email, expiresAt: conn.expiresAt, systemUrl: systemUrl(conn.backendUrl) });
+  return NextResponse.json({ connected: true, email: conn.email, expiresAt: conn.expiresAt, systemUrl: mktLinkTemplate() });
 }
 
 export async function POST(req: NextRequest) {
@@ -52,7 +40,7 @@ export async function POST(req: NextRequest) {
     }
 
     await storeConnection(String(code).trim(), conn);
-    return NextResponse.json({ connected: true, email: conn.email, expiresAt: conn.expiresAt, systemUrl: systemUrl(conn.backendUrl) });
+    return NextResponse.json({ connected: true, email: conn.email, expiresAt: conn.expiresAt, systemUrl: mktLinkTemplate() });
   } catch (err) {
     return NextResponse.json(
       { connected: false, error: (err as Error)?.message || "Không kết nối được." },
