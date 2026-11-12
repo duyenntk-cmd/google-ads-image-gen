@@ -14,6 +14,14 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v6.2 — 2026-11-12 · Lịch sử push lên MKT
+
+**Mục tiêu:** xem lại các bộ video đã đẩy lên MKT System theo ngày giờ.
+
+- Outro Studio: khung "Lịch sử push lên MKT" lưu mỗi lần push thành công (ngày giờ, số video, tên video, tag, angle code,
+  tài khoản MKT), nhóm theo ngày. Mỗi dòng có nút mở đúng bộ đó trên MKT (lọc theo tag và ngày push).
+  Lưu trong trình duyệt (IndexedDB), giữ 300 lần push gần nhất.
+
 ## v6.1 — 2026-11-12 · Link thẳng tới bộ creative vừa đẩy
 
 **Mục tiêu:** đẩy xong bấm một nút là thấy đúng bộ creative vừa tạo trên MKT System.
