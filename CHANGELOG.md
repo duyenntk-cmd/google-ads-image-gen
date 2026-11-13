@@ -14,6 +14,18 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v6.4 — 2026-11-13 · Outro Studio: tự cắt đoạn hướng dẫn quay điện thoại
+
+**Mục tiêu:** bỏ đoạn cuối "hướng dẫn cách làm video/ảnh AI" (quay chiếc điện thoại mở TikTok/CapCut, tay hoặc bút bấm
+vào màn hình) vì khác giao diện app mình.
+
+- Mỗi video được lấy mẫu khoảng mỗi giây một khung, GPT-4o-mini (`/api/outro/tutorial`, khoá `OPENAI_API_KEY`) chấm từng
+  khung có phải đoạn hướng dẫn không. Các khung liền nhau gộp thành đoạn, điểm cắt dò chính xác ở 30 khung/giây.
+- Đoạn chạm tới cuối video (hoặc tới chỗ cắt outro) được tick cắt sẵn; đoạn nằm giữa video thì hiện để tự xem và tick.
+  Gần như cả video giống màn hình điện thoại thì không tự cắt.
+- Bật/tắt ở "Đoạn cắt trong video" (mặc định bật). Lỗi AI thì báo lỗi, có nút Thử lại, video xử lý như trước.
+- Khi đoạn hướng dẫn đã cắt tới hết video, phần tìm end card không còn bắt chọn điểm cắt nằm trong đoạn đó.
+
 ## v6.3 — 2026-11-13 · Outro Studio: hết giật và kéo dài khi dựng realtime
 
 **Mục tiêu:** video xuất ra (và đẩy lên MKT) luôn đúng thời lượng, không giật.

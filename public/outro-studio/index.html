@@ -466,6 +466,7 @@ const DEFAULTS={
         center:"0.5,0.5",radius:"0.3,0.18",cspeed:0.2,startAngle:-90,clockwise:"1",
         xRange:"0.2,0.8",zigs:3,points:"[[0.15,0.1,0],[0.85,0.3,2],[0.5,0.85,4]]",interp:"smooth",loop:false},
   rival:{on:true},
+  tut:{on:true},
   mkt:{tags:[],angle:"",recent:[]},
   outro:{mode:"make",appUrl:"",fit:"blur",imgDur:3,appName:"Mitu AI",tagline:"Biến ảnh thành video AI",cta:"Tải ngay",
          dur:3,bg1:"#1a1033",bg2:"#ff4f8b",textColor:"#ffffff",accent:"#ffffff",ctaText:"#ff4f8b",badges:"both",xf:0}
@@ -765,9 +766,11 @@ function drawMainFrame(ctx,W,H,v,t,mainEnd){
 }
 const cutOf=it=>it?(it.cutMode==="none"||it.cutAt==null?it.duration:it.cutAt):0;
 // các đoạn được giữ lại (thời gian gốc): từ 0 tới điểm cắt outro, trừ các đoạn giữa video đang được tick cắt
+// đoạn cắt đang có hiệu lực: thêm tay luôn tính; đoạn tự tìm theo công tắc của loại đó (logo đối thủ / hướng dẫn AI)
+const segActive=g=>g.on&&(g.manual||(g.kind==="tut"?S.tut.on:S.rival.on));
 function keepRanges(it){
   if(!it)return [];const end=cutOf(it);let r=[[0,end]];
-  for(const g of (it.segs||[])){if(!g.on||(!g.manual&&!S.rival.on))continue;
+  for(const g of (it.segs||[])){if(!segActive(g))continue;
     const n=[];for(const [a,b] of r){if(g.e<=a||g.s>=b){n.push([a,b]);continue;}if(g.s>a)n.push([a,g.s]);if(g.e<b)n.push([g.e,b]);}r=n;}
   r=r.filter(([a,b])=>b-a>=0.05);return r.length?r:[[0,Math.min(0.5,end)]];
 }
@@ -1254,7 +1257,7 @@ async function detectRivals(it,onTick){
   const covered=out.reduce((a,g)=>a+g.e-g.s,0);
   it.rivalWide=covered>dur*0.6;
   if(it.rivalWide)out.forEach(g=>g.on=false); // logo gần như suốt video: có thể là watermark, không tự cắt
-  it.segs=(it.segs||[]).filter(g=>g.manual).concat(out).sort((a,b)=>a.s-b.s);
+  it.segs=(it.segs||[]).filter(g=>g.manual||g.kind==="tut").concat(out).sort((a,b)=>a.s-b.s);
   it.rivalVer=rivalVer;
 }
 function rivalsChanged(){
@@ -1264,30 +1267,106 @@ function rivalsChanged(){
   renderFiles();renderCut();updateExport();runScanQueue();
 }
 
+/* ---- tự cắt đoạn hướng dẫn (AI) ----
+   Có video kết thúc bằng đoạn quay chiếc điện thoại đang mở TikTok/CapCut (tay hoặc bút bấm vào màn hình) để hướng dẫn
+   cách làm video/ảnh AI, khác hẳn giao diện app mình nên phải cắt. Lấy mẫu khoảng mỗi giây một khung, nhờ GPT-4o-mini
+   (/api/outro/tutorial) chấm từng khung, gộp các khung liền nhau thành đoạn, rồi tìm điểm chuyển cảnh chính xác ở hai
+   đầu đoạn (15 khung/giây). Đoạn chạm tới cuối video (hoặc tới chỗ cắt outro) được tick cắt sẵn; đoạn giữa video thì để
+   người dùng xem rồi tự tick. */
+const TUT_STEP=1,TUT_MAX=60,TUT_W=288;
+const needTut=it=>S.tut.on&&!it.tutScanned&&!it.noFrames&&!!it.el&&it.status!=="error"&&it.status!=="loading";
+// đọc lần lượt các khung (thời gian tăng dần): bằng WebCodecs nếu được, không thì tua <video>
+async function grabFrames(it,times,each){
+  if(FAST){let src=null;
+    try{src=new FrameSource(await demuxFile(it.file));src.seekKey(times[0]);
+      for(let i=0;i<times.length;i++){if(it.skip)throw new Error("skip");await each(await src.frameAt(times[i]),i);}return;}
+    catch(e){if(it.skip)throw e;}
+    finally{if(src)src.close();}}
+  const v=it.el;for(let i=0;i<times.length;i++){if(it.skip)throw new Error("skip");await seek(v,times[i]);await each(v,i);}
+}
+// điểm chuyển cảnh giữa a và b, dò ở 30 khung/giây. side "start" (vào đoạn hướng dẫn): trả về ngay sau khung cuối của
+// cảnh cũ, để không lọt khung nào của đoạn hướng dẫn; side "end" (ra khỏi đoạn): trả về khung đầu của cảnh mới.
+// Không có cắt cảnh rõ (chuyển mờ dần) thì lấy giữa.
+async function tutBoundary(it,a,b,side){
+  const ts=[];for(let t=a;t<=b+1e-6;t+=1/30)ts.push(Math.min(t,it.duration-0.03));
+  const W=64,H=Math.max(2,Math.round(it.el.videoHeight*W/it.el.videoWidth));
+  const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d",{willReadFrequently:true});
+  const hs=[];await grabFrames(it,ts,async(f,i)=>{x.drawImage(f,0,0,W,H);hs[i]=histOf(x.getImageData(0,0,W,H).data);});
+  let bi=-1,bd=0;for(let i=1;i<hs.length;i++){const d=1-Math.max(0,correl(hs[i],hs[i-1]));if(d>bd){bd=d;bi=i;}}
+  if(bd<=0.2)return (a+b)/2;
+  return side==="start"?ts[bi-1]+0.001:ts[bi];
+}
+async function detectTutorial(it,onTick){
+  const dur=it.duration,n=Math.max(3,Math.min(TUT_MAX,Math.round(dur/TUT_STEP))),step=dur/n;
+  const times=Array.from({length:n},(_,i)=>Math.min(dur-0.05,(i+0.5)*step));
+  const W=TUT_W,H=Math.max(2,Math.round(it.el.videoHeight*W/it.el.videoWidth));
+  const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");
+  const imgs=new Array(n);
+  await grabFrames(it,times,async(f,i)=>{x.drawImage(f,0,0,W,H);imgs[i]=c.toDataURL("image/jpeg",0.7);
+    if(i%5===0){onTick&&onTick(0.5*i/n);await yieldNow();}});
+  onTick&&onTick(0.55);
+  let r,d=null;
+  try{r=await fetch("/api/outro/tutorial",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({frames:times.map((t,i)=>({t,img:imgs[i]}))})});d=await r.json().catch(()=>null);}
+  catch(e){throw new Error("mất mạng, không gọi được AI");}
+  if(!d)throw new Error(r.redirected||/\/login/.test(r.url)?"phiên đăng nhập web đã hết, tải lại trang":`server lỗi HTTP ${r.status}`);
+  if(!r.ok||!d.success)throw new Error(d.error||`HTTP ${r.status}`);
+  const lab=times.map((_,i)=>!!(d.labels&&d.labels[i]));
+  for(let i=1;i<n-1;i++)if(!lab[i]&&lab[i-1]&&lab[i+1])lab[i]=true; // 1 khung lẻ bị chấm sai giữa đoạn
+  const runs=[];for(let i=0;i<n;i++){if(!lab[i])continue;let j=i;while(j+1<n&&lab[j+1])j++;runs.push([i,j]);i=j;}
+  const out=[];
+  for(const [a,b] of runs){
+    const atEnd=b===n-1;if(b===a&&!atEnd)continue; // 1 khung lẻ giữa video: bỏ qua cho chắc
+    const s=a===0?0:await tutBoundary(it,times[a-1],times[a],"start");
+    const e=atEnd?dur:await tutBoundary(it,times[b],times[b+1],"end");
+    const g={s,e:Math.min(dur,Math.max(e,s+0.1)),manual:false,kind:"tut",score:1,name:"Đoạn hướng dẫn (AI)"};
+    g.on=atEnd||g.e>=cutOf(it)-1.5;g.mid=!g.on;out.push(g);
+    onTick&&onTick(0.6+0.35*out.length/runs.length);
+  }
+  const covered=out.reduce((a,g)=>a+g.e-g.s,0);
+  it.tutWide=covered>dur*0.7;if(it.tutWide)out.forEach(g=>g.on=false); // gần như cả video: có thể là kiểu quảng cáo quay màn hình, không tự cắt
+  for(const g of out)try{g.thumb=await thumbOf(it,(g.s+g.e)/2,90);}catch(e){}
+  it.segs=(it.segs||[]).filter(g=>g.kind!=="tut").concat(out).sort((a,b)=>a.s-b.s);
+  it.tutScanned=true;it.tutErr=null;it.tutNote=out.length?String(d.note||""):"";
+  // đoạn hướng dẫn đã cắt tới hết video mà phần tìm end card còn đang hỏi chọn điểm cắt trong chính đoạn đó: khỏi hỏi nữa
+  const endSeg=out.find(g=>g.on&&g.e>=dur-0.01);
+  if(endSeg&&it.cutMode==="auto"&&it.outroStatus==="choose"&&it.cutAt==null&&it.cands.every(c=>c.cutAt>=endSeg.s-0.5))it.outroStatus="nooutro";
+}
+
 /* ---- danh sách đoạn cắt ở bước 1 ---- */
 function afterSegChange(it){renderFiles();syncTimeline();updateExport();if(sel===it){renderSegs(it);previewAt(+$("scrub").value);}}
 function renderSegs(it){
   const box=$("segBox");if(!box||!it)return;
-  const segs=it.segs||[],active=segs.filter(g=>g.on&&(g.manual||S.rival.on));
-  let head="";
-  if(!LIB.rivals.length)head=`<p class="hint">Muốn tự cắt các đoạn có logo đối thủ, kể cả giữa video? Thêm ảnh logo hoặc icon của đối thủ ở menu <a href="#rival">Logo đối thủ</a>.</p>`;
+  const segs=it.segs||[],active=segs.filter(segActive);
+  const tuts=segs.filter(g=>g.kind==="tut");
+  const tutState=!S.tut.on?"Đang tắt.":it.busy&&it.phase==="tut"?"Đang tìm…":!it.tutScanned?"Chưa tìm.":it.tutErr?"Lỗi: "+esc(it.tutErr):
+    tuts.length?`Tìm thấy ${tuts.length} đoạn${it.tutNote?": "+esc(it.tutNote):"."}`:"Không thấy đoạn hướng dẫn.";
+  let head=`<div class="row"><label class="toggle"><input type="checkbox" id="tutOn" ${S.tut.on?"checked":""}> Tự cắt đoạn hướng dẫn quay màn hình điện thoại (AI)</label><span class="hint">${tutState}</span>
+    ${S.tut.on&&it.phase!=="tut"&&(!it.tutScanned||it.tutErr)?`<button class="btn sm" id="tutRun" type="button">${it.tutErr?"Thử lại":"Tìm ngay"}</button>`:""}</div>`;
+  if(it.tutWide)head+=`<p class="note">Gần như cả video giống màn hình điện thoại đang mở app, nên web không tự cắt để tránh mất cả video. Tick các đoạn bên dưới nếu vẫn muốn cắt.</p>`;
+  if(tuts.some(g=>g.mid&&!g.on))head+=`<p class="hint">Đoạn hướng dẫn nằm giữa video chưa được tick sẵn, xem lại rồi tick nếu muốn cắt.</p>`;
+  if(!LIB.rivals.length)head+=`<p class="hint">Muốn tự cắt các đoạn có logo đối thủ, kể cả giữa video? Thêm ảnh logo hoặc icon của đối thủ ở menu <a href="#rival">Logo đối thủ</a>.</p>`;
   else{
-    const state=!S.rival.on?"Đang tắt.":it.rivalVer!==rivalVer?"Chưa tìm với thư viện logo hiện tại.":`Tìm thấy ${segs.filter(g=>!g.manual).length} đoạn có logo đối thủ.`;
-    head=`<div class="row"><label class="toggle"><input type="checkbox" id="rivalOn" ${S.rival.on?"checked":""}> Tự cắt các đoạn có logo đối thủ</label><span class="hint">${state}</span>
+    const state=!S.rival.on?"Đang tắt.":it.rivalVer!==rivalVer?"Chưa tìm với thư viện logo hiện tại.":`Tìm thấy ${segs.filter(g=>!g.manual&&g.kind!=="tut").length} đoạn có logo đối thủ.`;
+    head+=`<div class="row"><label class="toggle"><input type="checkbox" id="rivalOn" ${S.rival.on?"checked":""}> Tự cắt các đoạn có logo đối thủ</label><span class="hint">${state}</span>
       ${S.rival.on&&it.rivalVer!==rivalVer&&!it.busy?`<button class="btn sm" id="rivalRun" type="button">Tìm ngay</button>`:""}</div>`;
     if(it.rivalWide)head+=`<p class="note">Logo đối thủ xuất hiện gần như suốt video (có thể là watermark ở góc), nên web không tự cắt để tránh mất cả video. Tick các đoạn bên dưới nếu vẫn muốn cắt, hoặc dùng cách che logo.</p>`;
   }
   const end=it.duration;
-  const bar=`<div class="srcbar" title="Toàn bộ video gốc: đỏ là đoạn bị cắt">${segs.filter(g=>g.on&&(g.manual||S.rival.on)).map(g=>`<i style="left:${g.s/end*100}%;width:${Math.max(0.6,(g.e-g.s)/end*100)}%"></i>`).join("")}${it.cutMode!=="none"&&it.cutAt!=null?`<b style="left:${it.cutAt/end*100}%"></b>`:""}</div>`;
+  const bar=`<div class="srcbar" title="Toàn bộ video gốc: đỏ là đoạn bị cắt">${segs.filter(segActive).map(g=>`<i style="left:${g.s/end*100}%;width:${Math.max(0.6,(g.e-g.s)/end*100)}%"></i>`).join("")}${it.cutMode!=="none"&&it.cutAt!=null?`<b style="left:${it.cutAt/end*100}%"></b>`:""}</div>`;
   const rows=segs.map((g,i)=>`<div class="segrow ${g.on?"":"off"}" data-i="${i}">
       <input type="checkbox" class="segon" ${g.on?"checked":""} aria-label="Cắt đoạn này">
       ${g.thumb?`<img alt="" src="${g.thumb}">`:`<span class="nothumb"></span>`}
       <span class="segt"><input type="text" inputmode="decimal" autocomplete="off" class="segs" value="${g.s.toFixed(2)}" aria-label="Bắt đầu"> → <input type="text" inputmode="decimal" autocomplete="off" class="sege" value="${g.e.toFixed(2)}" aria-label="Kết thúc"> s</span>
-      <span class="segn">${g.manual?"Thêm tay":esc(g.name)+` · khớp ${Math.round(g.score*100)}%`}</span>
+      <span class="segn">${g.manual?"Thêm tay":g.kind==="tut"?esc(g.name)+(g.mid?" · giữa video":""):esc(g.name)+` · khớp ${Math.round(g.score*100)}%`}</span>
       <button class="btn sm ghost seggo" type="button" title="Xem đoạn này">Xem</button><button class="x segdel" type="button" title="Xoá đoạn" aria-label="Xoá đoạn">×</button></div>`).join("");
-  box.innerHTML=`<h3>Đoạn cắt giữa video</h3>${head}${segs.length?bar:""}<div class="seglist">${rows}</div>
+  box.innerHTML=`<h3>Đoạn cắt trong video</h3>${head}${segs.length?bar:""}<div class="seglist">${rows}</div>
     <div class="row"><button class="btn sm" id="segAdd" type="button">+ Thêm đoạn cắt tại vị trí đang xem</button><span class="hint">${active.length?`Đang cắt ${active.length} đoạn, tổng ${active.reduce((a,g)=>a+g.e-g.s,0).toFixed(1)}s.`:""}</span></div>`;
   const ro=$("rivalOn");if(ro)ro.onchange=()=>{S.rival.on=ro.checked;persist();if(ro.checked)rivalsChanged();for(const x of items)afterSegChange(x);renderSegs(it);};
+  const to=$("tutOn");if(to)to.onchange=()=>{S.tut.on=to.checked;persist();
+    if(to.checked){for(const x of items)if(needTut(x)&&!x.busy)x.status="analyzing";runScanQueue();}
+    for(const x of items)afterSegChange(x);renderSegs(it);renderCut();};
+  const tr=$("tutRun");if(tr)tr.onclick=()=>{if(it.busy)return;it.tutScanned=false;it.tutErr=null;it.status="analyzing";renderFiles();renderCut();updateExport();runScanQueue();};
   const rr=$("rivalRun");if(rr)rr.onclick=()=>{it.status="analyzing";renderFiles();renderCut();updateExport();runScanQueue();};
   box.querySelectorAll(".segrow").forEach(row=>{const g=segs[+row.dataset.i];
     row.querySelector(".segon").onchange=e=>{g.on=e.target.checked;afterSegChange(it);};
@@ -1329,7 +1408,7 @@ async function addFiles(files){
 let scanning=false;
 async function runScanQueue(){
   if(scanning)return;scanning=true;
-  try{let it;while((it=items.find(x=>x.status==="analyzing"&&!x.busy&&!x.skip&&(x.cutMode!=="none"&&!x.outroScanned||needRival(x))))){it.busy=true;if(sel===it)renderCut();await detect(it);it.busy=false;await crossFill();}}
+  try{let it;while((it=items.find(x=>x.status==="analyzing"&&!x.busy&&!x.skip&&(x.cutMode!=="none"&&!x.outroScanned||needRival(x)||needTut(x))))){it.busy=true;if(sel===it)renderCut();await detect(it);it.busy=false;await crossFill();}}
   finally{scanning=false;}
   if(sel)previewAt(0);
 }
@@ -1367,18 +1446,23 @@ async function detect(it){
     }
     if(needRival(it)){it.phase="rival";it.prog=0;if(sel===it)renderCut();
       try{await detectRivals(it,p=>{it.prog=p;if(sel===it)updateProg(it);});}catch(e){if(it.skip)throw e;console.warn("Tìm logo đối thủ lỗi:",e);it.rivalVer=rivalVer;}}
+    if(needTut(it)){it.phase="tut";it.prog=0;if(sel===it)renderCut();
+      try{await detectTutorial(it,p=>{it.prog=p;if(sel===it)updateProg(it);});}
+      catch(e){if(it.skip)throw e;console.warn("Tìm đoạn hướng dẫn lỗi:",e);it.tutErr=String(e&&e.message||e).slice(0,160);it.tutScanned=true;}}
     it.status=it.outroScanned?it.outroStatus:"nooutro";
-  }catch(e){if(it.skip){it.cands=[];it.conf="none";it.status="nooutro";it.outroScanned=true;it.outroStatus="nooutro";it.rivalVer=rivalVer;if(it.cutMode!=="none")it.cutMode="manual";it.cutAt=null;}else{console.error(e);it.status="nooutro";}}
+  }catch(e){if(it.skip){it.cands=[];it.conf="none";it.status="nooutro";it.outroScanned=true;it.outroStatus="nooutro";it.rivalVer=rivalVer;it.tutScanned=true;if(it.cutMode!=="none")it.cutMode="manual";it.cutAt=null;}else{console.error(e);it.status="nooutro";}}
   it.phase=null;
   renderFiles();if(sel===it){renderCut();syncTimeline();previewAt(0);}
   updateExport();
 }
 function chipOf(it){
   if(it.status==="loading")return ['idle','Đang đọc'];
-  if(it.status==="analyzing"&&it.cutMode==="none"&&!it.busy&&!needRival(it))return ['idle','Không cắt'];
+  if(it.status==="analyzing"&&it.cutMode==="none"&&!it.busy&&!needRival(it)&&!needTut(it))return ['idle','Không cắt'];
   if(it.status==="analyzing")return ['idle',it.busy?'Đang quét':'Chờ quét'];
   if(it.status==="error")return ['bad','Lỗi file'];
   if(it.noFrames)return ['bad','Không đọc được hình'];
+  {const te=(it.segs||[]).find(g=>g.kind==="tut"&&segActive(g)&&g.e>=it.duration-0.01);
+    if(te&&!(it.cutMode==="auto"&&it.status==="choose"&&it.cutAt==null)&&cutOf(it)>te.s)return ['ok','Cắt hướng dẫn '+fmtT(te.s)];}
   if(it.cutMode==="none")return ['idle','Không cắt'];
   if(it.cutMode==="manual")return it.cutAt!=null?['ok','Cắt '+fmtT(it.cutAt)]:['warn','Nhập điểm cắt'];
   if(it.status==="choose"&&it.cutAt==null)return ['warn','Cần chọn'];
@@ -1389,7 +1473,7 @@ function renderFiles(){
   const box=$("fileList");box.innerHTML="";
   for(const it of items){const [cls,txt]=chipOf(it);
     const d=document.createElement("div");d.className="file";d.setAttribute("aria-current",it===sel);d.tabIndex=0;
-    d.innerHTML=`<label class="cutchk" title="Tick để cắt outro cũ của video này"><input type="checkbox" ${it.cutMode!=="none"?"checked":""} ${it.status==="error"?"disabled":""} aria-label="Cắt outro cũ"></label><img alt="">${""}<div style="min-width:0"><div class="nm"></div><div class="meta">${it.duration?it.duration.toFixed(2)+"s":""}${it.el?" · "+it.el.videoWidth+"×"+it.el.videoHeight:""}${it.codec?" · "+it.codec:""}</div></div><div class="row" style="gap:4px">${(()=>{const n=(it.segs||[]).filter(g=>g.on&&(g.manual||S.rival.on)).length;return n?`<span class="chip warn" title="Số đoạn cắt giữa video">−${n} đoạn</span>`:"";})()}<span class="chip ${cls}">${txt}</span><button class="x" title="Bỏ video" aria-label="Bỏ video">×</button></div>`;
+    d.innerHTML=`<label class="cutchk" title="Tick để cắt outro cũ của video này"><input type="checkbox" ${it.cutMode!=="none"?"checked":""} ${it.status==="error"?"disabled":""} aria-label="Cắt outro cũ"></label><img alt="">${""}<div style="min-width:0"><div class="nm"></div><div class="meta">${it.duration?it.duration.toFixed(2)+"s":""}${it.el?" · "+it.el.videoWidth+"×"+it.el.videoHeight:""}${it.codec?" · "+it.codec:""}</div></div><div class="row" style="gap:4px">${(()=>{const n=(it.segs||[]).filter(segActive).length;return n?`<span class="chip warn" title="Số đoạn cắt giữa video">−${n} đoạn</span>`:"";})()}<span class="chip ${cls}">${txt}</span><button class="x" title="Bỏ video" aria-label="Bỏ video">×</button></div>`;
     if(it.thumb)d.querySelector("img").src=it.thumb;d.querySelector(".nm").textContent=it.name;
     const ck=d.querySelector(".cutchk input");ck.onclick=e=>e.stopPropagation();d.querySelector(".cutchk").onclick=e=>e.stopPropagation();
     ck.onchange=()=>{setCutMode(it,ck.checked?(it.prevMode||"auto"):"none");};
@@ -1426,7 +1510,7 @@ function renderCut(){
   if(!it){box.innerHTML='<p class="hint">Thêm video để bắt đầu. Công cụ sẽ quét phần cuối video để tìm end card.</p>';return;}
   if(it.status==="loading"||(it.status==="analyzing"&&(it.busy||it.cutMode!=="none"&&!it.outroScanned||needRival(it)))){
     const waiting=it.status==="analyzing"&&!it.busy;
-    box.innerHTML=`<div class="sub"><p class="hint"><span class="spin"></span> ${waiting?"Đang chờ quét":it.phase==="rival"?"Đang tìm logo đối thủ trong":"Đang quét phần cuối của"} <b></b>${waiting?" (các video được quét lần lượt)":it.phase==="rival"?" (quét toàn bộ video)":" để tìm end card"}…${it.slowScan?` Đang quét theo cách chậm hơn vì ${it.slowScan}`:""}</p><div class="prog"><i id="detProg"></i></div>
+    box.innerHTML=`<div class="sub"><p class="hint"><span class="spin"></span> ${waiting?"Đang chờ quét":it.phase==="rival"?"Đang tìm logo đối thủ trong":it.phase==="tut"?"Đang nhờ AI tìm đoạn hướng dẫn quay điện thoại trong":"Đang quét phần cuối của"} <b></b>${waiting?" (các video được quét lần lượt)":it.phase==="rival"?" (quét toàn bộ video)":it.phase==="tut"?" (mỗi giây một khung)":" để tìm end card"}…${it.slowScan?` Đang quét theo cách chậm hơn vì ${it.slowScan}`:""}</p><div class="prog"><i id="detProg"></i></div>
       <div class="row"><button class="btn sm" id="skipScan" type="button">Bỏ qua, tự nhập điểm cắt</button><span class="hint">Dùng khi quét quá lâu hoặc bạn đã biết chỗ cần cắt.</span></div></div>`;
     box.querySelector("b").textContent=it.name;updateProg(it);
     $("skipScan").onclick=()=>{it.skip=true;if(!it.busy){it.cands=[];it.conf="none";it.status="nooutro";it.cutMode="manual";it.cutAt=null;renderFiles();renderCut();updateExport();}else $("skipScan").textContent="Đang dừng quét…";};
@@ -1937,7 +2021,7 @@ async function removeItem(store,id){
   try{await DB.del(store,id);}catch(e){}
   if(store==="logos"&&S.logo.libId===id){S.logo.libId=null;A.logo=null;persist();}
   if(store==="outros"&&S.outro.libId===id){S.outro.libId=null;A.outroKind=null;persist();}
-  if(store==="rivals"){for(const it of items)if(it.segs)it.segs=it.segs.filter(g=>g.manual);rivalsChanged();}
+  if(store==="rivals"){for(const it of items)if(it.segs)it.segs=it.segs.filter(g=>g.manual||g.kind==="tut");rivalsChanged();}
   renderLib();refresh();setTimeout(()=>URL.revokeObjectURL(r.url),1000);
 }
 async function selectLogo(r,quiet){
