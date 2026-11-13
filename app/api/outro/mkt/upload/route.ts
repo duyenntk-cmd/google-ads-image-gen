@@ -22,7 +22,7 @@ export const maxDuration = 60;
  * part of one upload, for half an hour.
  *
  * One POST, `action` picks the step:
- *   init     { fileName, contentType, size }      → { uploadId, key, partSize }
+ *   init     { fileName, contentType, size }      → { uploadId, key, partSize, parts }  (links for the first parts)
  *   presign  { uploadId, key, partNumbers }        → { parts: [{ partNumber, presignedUrl }] }
  *   complete { uploadId, key, parts }              → { url }
  *   abort    { uploadId, key }                     → {}
@@ -74,7 +74,17 @@ async function init(mkt: Mkt, body: Record<string, unknown>) {
     method: "POST",
     body: { fileName, contentType, folder: "mkt-system" },
   });
-  return NextResponse.json({ success: true, uploadId, key, partSize: PART_SIZE });
+  // Presign the first parts here too, saving the page one round trip per video
+  // (all of them for a video up to 60MB). If it fails the page presigns itself.
+  let parts: { partNumber: number; presignedUrl: string }[] = [];
+  try {
+    const first = Array.from({ length: Math.min(6, Math.ceil(size / PART_SIZE)) }, (_, i) => i + 1);
+    parts = (await mkt.request<{ parts: typeof parts }>("files/multipart/presign-batch", {
+      method: "POST",
+      body: { uploadId, key, partNumbers: first, expiresIn: 1800 },
+    })).parts || [];
+  } catch { parts = []; }
+  return NextResponse.json({ success: true, uploadId, key, partSize: PART_SIZE, parts });
 }
 
 async function presign(mkt: Mkt, body: Record<string, unknown>) {

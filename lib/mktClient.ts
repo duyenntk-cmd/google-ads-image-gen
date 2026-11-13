@@ -68,12 +68,29 @@ export interface MktClient {
   expiresAt: number;
 }
 
+/**
+ * Access tokens kept across requests on a warm server instance, keyed by the
+ * user's own refresh token (so a request can only ever pick up the token its
+ * own cookie already entitles it to). Without this every route call began with
+ * a POST /auth, doubling each round trip to MKT System — a video push makes a
+ * dozen such calls.
+ */
+const tokenCache = new Map<string, { token: string; exp: number }>();
+const refreshing = new Map<string, Promise<{ token: string; exp: number }>>();
+
+function rememberToken(rt: string, token: string, exp: number) {
+  if (tokenCache.size > 500) {
+    for (const [k, v] of tokenCache) if (v.exp <= Date.now() || tokenCache.size > 400) tokenCache.delete(k);
+  }
+  tokenCache.set(rt, { token, exp });
+}
+
 export function createMktClient(conn: MktConnection): MktClient {
   let accessToken: string | null = null;
   let accessExpiresAt = 0;
   let inflight: Promise<string> | null = null;
 
-  async function refresh(): Promise<string> {
+  async function refresh(): Promise<{ token: string; exp: number }> {
     if (Date.now() >= conn.expiresAt) throw new ConnectCodeExpiredError();
     const res = await fetch(conn.backendUrl + "auth", {
       method: "POST",
@@ -86,19 +103,38 @@ export function createMktClient(conn: MktConnection): MktClient {
       throw new Error(`Không lấy được access token (HTTP ${res.status}). ${detail.slice(0, 200)}`);
     }
     const body = await res.json();
-    accessToken = body?.dataSource?.accessToken;
-    if (!accessToken) throw new Error("Response /auth không có accessToken.");
+    const token = body?.dataSource?.accessToken as string | undefined;
+    if (!token) throw new Error("Response /auth không có accessToken.");
     // The guide says an hour, and also says to read exp rather than assume it.
-    accessExpiresAt = ((decodeJwt(accessToken) as { exp?: number }).exp || 0) * 1000;
-    return accessToken;
+    const exp = ((decodeJwt(token) as { exp?: number }).exp || 0) * 1000;
+    rememberToken(conn.refreshToken, token, exp);
+    return { token, exp };
   }
 
   function getAccessToken(force = false): Promise<string> {
     if (!force && accessToken && accessExpiresAt - Date.now() > 60_000) {
       return Promise.resolve(accessToken);
     }
-    // One refresh for however many calls are in flight.
-    if (!inflight) inflight = refresh().finally(() => { inflight = null; });
+    if (force) tokenCache.delete(conn.refreshToken);
+    else {
+      const c = tokenCache.get(conn.refreshToken);
+      if (c && c.exp - Date.now() > 60_000) {
+        accessToken = c.token;
+        accessExpiresAt = c.exp;
+        return Promise.resolve(c.token);
+      }
+    }
+    // One refresh for however many calls are in flight, across requests too.
+    if (!inflight) {
+      let shared = refreshing.get(conn.refreshToken);
+      if (!shared || force) {
+        shared = refresh().finally(() => refreshing.delete(conn.refreshToken));
+        refreshing.set(conn.refreshToken, shared);
+      }
+      inflight = shared
+        .then(({ token, exp }) => { accessToken = token; accessExpiresAt = exp; return token; })
+        .finally(() => { inflight = null; });
+    }
     return inflight;
   }
 
