@@ -777,9 +777,12 @@ const mainLen=it=>it?lenOf(keepRanges(it)):0;
 function srcAt(R,t){let acc=0;for(const [a,b] of R){if(t<acc+(b-a))return a+Math.max(0,t-acc);acc+=b-a;}return R.length?R[R.length-1][1]:t;}
 
 /* ---------------- dựng timeline (dùng chung cho phát thử và xuất) ---------------- */
-async function runTimeline({it,ctx,W,H,record,onProgress,stop,from=0}){
+// onFrame(pos): gọi sau mỗi lần vẽ, pos là vị trí trên dòng thời gian (giây) — dùng để nén khung theo thời gian video
+// thay vì thời gian thật. mute: không phát tiếng ra loa (tiếng được trộn riêng bằng OfflineAudioContext).
+async function runTimeline({it,ctx,W,H,record,onProgress,stop,from=0,onFrame=null,mute=false}){
   if(it&&it.audioP)await it.audioP;
-  const ac=audioCtx();const out=record?ac.createMediaStreamDestination():ac.destination;
+  const ac=audioCtx();
+  const out=record?ac.createMediaStreamDestination():mute?(()=>{const g=ac.createGain();g.gain.value=0;g.connect(ac.destination);return g;})():ac.destination;
   const R=it?keepRanges(it):[];const mainEnd=lenOf(R);const oD=outroDur();
   const xf=it&&oD>0?Math.min(+S.outro.xf||0,mainEnd*0.5,oD*0.5):0;
   const total=mainEnd+oD-xf;
@@ -810,6 +813,17 @@ async function runTimeline({it,ctx,W,H,record,onProgress,stop,from=0}){
   if(inMain)drawMainFrame(ctx,W,H,await mainSrc(srcAt(R,fromMain)),fromMain,mainEnd);else drawOutroFrame(ctx,W,H,te0,ov);
   if(rec)rec.start(250);
   let outroStarted=!inMain,outroT0=0,mainDone=!inMain,t0Main=0;
+  // đang xuất mà tab bị ẩn: trình duyệt ngừng vẽ nhưng video, tiếng và bộ ghi vẫn chạy, nên video ra bị đứng hình
+  // rồi nhảy cóc và dài hơn gốc. Tạm dừng tất cả khi tab ẩn, quay lại tab thì chạy tiếp đúng chỗ.
+  let hidAt=0;
+  const onVis=record||onFrame?()=>{
+    if(document.hidden){if(hidAt)return;hidAt=performance.now();
+      if(rec&&rec.state==="recording")rec.pause();
+      if(v&&!mainDone)v.pause();if(ov&&outroStarted)ov.pause();ac.suspend().catch(()=>{});}
+    else if(hidAt){const d=performance.now()-hidAt;hidAt=0;outroT0+=d;
+      ac.resume().catch(()=>{});if(v&&!mainDone)v.play().catch(()=>{});if(ov&&outroStarted&&!ov.ended)ov.play().catch(()=>{});
+      if(rec&&rec.state==="paused")rec.resume();}}:null;
+  if(onVis)document.addEventListener("visibilitychange",onVis);
   const startOutro=(off=0)=>{outroStarted=true;outroT0=performance.now()-off*1000;const when=ac.currentTime;const g0=xf>0&&off<xf?off/xf:1;
     if(ov){ov.play().catch(()=>{});playBuf(A.outroAudio,when,off,Math.max(0.01,oD-off),g0,1,Math.max(0,xf-off));}
     else if(S.outro.mode==="make"&&A.music){playBuf(A.music.buf,when,off%A.music.buf.duration,Math.max(0.01,oD-off),0.8*g0,0.8,Math.max(0,xf-off),Math.max(0,oD-off-0.6));}};
@@ -820,6 +834,7 @@ async function runTimeline({it,ctx,W,H,record,onProgress,stop,from=0}){
     if(xf>0){const a=Math.max(0,mainEnd-xf-fromMain);bus.gain.setValueAtTime(fromMain>mainEnd-xf?clamp((mainEnd-fromMain)/xf,0,1):1,t0Main+a);bus.gain.linearRampToValueAtTime(0,t0Main+mainEnd-fromMain);}
     if(oD>0&&fromMain>=mainEnd-xf)startOutro(fromMain-(mainEnd-xf));}
   else startOutro(te0);
+  if(onVis&&document.hidden)onVis();
   await new Promise(resolve=>{
     const tick=async()=>{
       if(stop.v){resolve();return;}
@@ -833,14 +848,68 @@ async function runTimeline({it,ctx,W,H,record,onProgress,stop,from=0}){
       if(outroStarted){ctx.save();if(!mainDone&&xf>0)ctx.globalAlpha=clamp((t-(mainEnd-xf))/xf,0,1);
         if(mainDone)ctx.globalAlpha=1;drawOutroFrame(ctx,W,H,Math.min(te,oD),ov);ctx.restore();}
       const pos=outroStarted?(mainEnd-xf)+te:t;onProgress&&onProgress(clamp(pos/Math.max(total,0.01),0,1),pos);
+      if(onFrame){try{await onFrame(Math.min(pos,total));}catch(e){stop.err=e;resolve();return;}}
       if(mainDone&&(oD<=0||(outroStarted&&(te>=oD-0.01||(ov&&ov.ended))))){resolve();return;}
       requestAnimationFrame(tick);};
     requestAnimationFrame(tick);});
+  if(onVis){document.removeEventListener("visibilitychange",onVis);if(hidAt)ac.resume().catch(()=>{});}
   nodes.forEach(n=>{try{n.stop()}catch(e){}});if(v)v.pause();if(ov)ov.pause();if(pfs)pfs.close();
   if(!rec)return null;
   await new Promise(r=>{rec.onstop=r;rec.stop();});
   return stop.v?null:new Blob(chunks,{type:mime.split(";")[0]});
 }
+/* ---- dựng realtime khi không dựng nhanh được (file không phải MP4, codec lạ, máy quá tải) ----
+   Trước đây ghi canvas bằng MediaRecorder: thời gian của khung là thời gian thật, nên máy chậm hoặc chuyển tab
+   là video ra giật và dài gấp nhiều lần. Giờ vẫn phát video để lấy hình, nhưng mỗi 1/30 giây của dòng thời gian
+   nén đúng 1 khung (chậm thì lặp khung đang có), tiếng trộn offline như dựng nhanh: thời lượng luôn bằng bản gốc. */
+const TIMED=!!(window.VideoEncoder&&window.AudioEncoder&&window.OfflineAudioContext&&window.Mp4Muxer);
+async function timedRealtimeExport({it,W,H,stop,onProgress}){
+  const [vcfg,vmux]=await pickVideoCfg(W,H,false);const [acfg,amux]=await pickAudioCfg();
+  if(!acfg)throw new Error("không có bộ nén âm thanh");
+  const R=keepRanges(it),mainEnd=lenOf(R),oD=outroDur(),xf=oD>0?Math.min(+S.outro.xf||0,mainEnd*0.5,oD*0.5):0,total=mainEnd+oD-xf;
+  const N=Math.max(1,Math.round(total*30));
+  const muxer=new Mp4Muxer.Muxer({target:new Mp4Muxer.ArrayBufferTarget(),video:{codec:vmux,width:W,height:H,frameRate:30},
+    audio:{codec:amux,numberOfChannels:2,sampleRate:48000},fastStart:"in-memory"});
+  let encErr=null;const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});venc.configure(vcfg);
+  const canvas=document.createElement("canvas");canvas.width=W;canvas.height=H;const ctx=canvas.getContext("2d",{alpha:false});
+  let i=0,held=0;
+  const emitUpTo=async pos=>{
+    const upto=Math.min(N,Math.floor(pos*30+1e-6)+1);
+    if(upto-i>1)held+=upto-i-1;
+    while(i<upto){const vf=new VideoFrame(canvas,{timestamp:Math.round(i*1e6/30),duration:Math.round(1e6/30)});
+      venc.encode(vf,{keyFrame:i%60===0});vf.close();i++;}
+    const t0=performance.now();
+    while(venc.encodeQueueSize>10&&!encErr&&!stop.v){if(performance.now()-t0>15000)throw new Error("Bộ nén video không phản hồi (quá 15 giây)");
+      await new Promise(r=>{const to=setTimeout(r,100);venc.addEventListener("dequeue",()=>{clearTimeout(to);r();},{once:true});});}
+    if(encErr)throw encErr;};
+  try{
+    await runTimeline({it,ctx,W,H,record:false,mute:true,stop,onProgress:p=>onProgress&&onProgress(0.95*p),onFrame:emitUpTo});
+    if(stop.err)throw stop.err;
+    if(stop.v){venc.close();return null;}
+    await emitUpTo(total+1); // đủ khung tới hết dòng thời gian
+    {let to;await Promise.race([venc.flush(),new Promise((_,j)=>{to=setTimeout(()=>j(new Error("Bộ nén video không phản hồi khi kết thúc")),20000);})]).finally(()=>clearTimeout(to));}venc.close();
+    const ab=await mixAudio(it,mainEnd,oD,xf,total,R);
+    const aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{encErr=e;}});aenc.configure(acfg);
+    const n=ab.length,L=ab.getChannelData(0),Rc=ab.numberOfChannels>1?ab.getChannelData(1):L;
+    for(let off=0;off<n;off+=4800){const len=Math.min(4800,n-off),data=new Float32Array(len*2);
+      data.set(L.subarray(off,off+len),0);data.set(Rc.subarray(off,off+len),len);
+      const ad=new AudioData({format:"f32-planar",sampleRate:48000,numberOfFrames:len,numberOfChannels:2,timestamp:Math.round(off*1e6/48000),data});
+      aenc.encode(ad);ad.close();if(aenc.encodeQueueSize>20)await yieldNow();}
+    await aenc.flush();aenc.close();if(encErr)throw encErr;
+    muxer.finalize();onProgress&&onProgress(1);
+    const blob=new Blob([muxer.target.buffer],{type:"video/mp4"});blob.heldFrames=held;blob.totalFrames=N;return blob;
+  }finally{if(venc.state!=="closed")try{venc.close();}catch(e){}}
+}
+async function realtimeExport({it,W,H,stop,onProgress}){
+  if(TIMED){try{return await timedRealtimeExport({it,W,H,stop,onProgress});}
+    catch(e){if(stop.v)return null;console.warn("Dựng realtime theo thời gian video lỗi, chuyển sang ghi màn hình:",e);delete stop.err;}}
+  const c=document.createElement("canvas");c.width=W;c.height=H;
+  return runTimeline({it,ctx:c.getContext("2d"),W,H,record:true,stop,onProgress});
+}
+// video phải dựng realtime thì chờ các video dựng nhanh xong rồi dựng lần lượt từng cái: máy bận việc khác là hình bị giật
+let fastActive=0,rtChain=Promise.resolve();
+async function rtTurn(onWait,stop){let release;const prev=rtChain;rtChain=new Promise(r=>{release=r;});
+  await prev;while(fastActive>0&&!stop.v){onWait();await sleep(300);}return release;}
 function pickMime(){const list=['video/mp4;codecs="avc1.640028,mp4a.40.2"','video/mp4;codecs=avc1,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
   for(const m of list)if(window.MediaRecorder&&MediaRecorder.isTypeSupported(m))return m;return "video/webm";}
 
@@ -1571,7 +1640,7 @@ function updateExport(){
     logoMissing?"Bước 3 đang bật nhưng chưa chọn logo, video sẽ xuất không kèm logo.":outroMissing?"Bước 4 chưa chọn outro từ thư viện, video sẽ xuất không kèm outro.":"";
 }
 $("exportHint").textContent=FAST?"Video được dựng ngay trên máy bạn, định dạng MP4. Có thể chuyển sang tab khác trong lúc xuất, phần trăm tiến độ hiện trên tên tab. Đừng đóng tab.":
-  "Trình duyệt này chưa hỗ trợ dựng nhanh, nên video được dựng theo thời gian thực và phải giữ tab mở trong lúc xuất. Dùng Chrome hoặc Edge bản mới để chuyển tab thoải mái."+(/mp4/.test(pickMime())?"":" Định dạng: WebM.");
+  "Trình duyệt này chưa hỗ trợ dựng nhanh, nên video được dựng theo thời gian thực và phải giữ tab mở trong lúc xuất (chuyển tab thì việc dựng tạm dừng). Dùng Chrome hoặc Edge bản mới để chuyển tab thoải mái."+(/mp4/.test(pickMime())?"":" Định dạng: WebM.");
 /* ---- xuất: mỗi video một dòng, có nút Xuất lại; kết quả lưu vào lịch sử để tải lại được sau khi đóng trang ---- */
 const results=new Map(); // it.id -> {blob,fname}
 function makeRow(it){
@@ -1613,12 +1682,16 @@ async function runExport(list,rows){
       const onP=p=>{bar.style.width=(p*100).toFixed(1)+"%";prog[i]=p;showTotal();if(p!==lastP){lastP=p;lastT=performance.now();rb.classList.remove("hot");}};
       let blob=null,failed=null;
       try{
+        let fastErr=null;fastActive++;
         try{blob=await fastExport({it,W,H,stop,onProgress:onP,noHwFirst:attempt>0,onStage:k=>{chip.textContent=k===2?"Thử lại bằng CPU":"Thử lại cách khác";bar.style.width="0";lastT=performance.now();}});}
-        catch(e){console.warn("Chuyển sang dựng realtime:",e);if(stop.v)throw e;
-          chip.textContent="Dựng realtime, giữ tab mở";bar.style.width="0";lastT=performance.now();
-          const why=document.createElement("p");why.className="why";why.textContent="Không dựng nhanh được vì "+whyText(e);r.appendChild(why);
-          const c=document.createElement("canvas");c.width=W;c.height=H;
-          blob=await runTimeline({it,ctx:c.getContext("2d"),W,H,record:true,stop,onProgress:onP});}
+        catch(e){fastErr=e;}finally{fastActive--;}
+        if(fastErr){console.warn("Chuyển sang dựng realtime:",fastErr);if(stop.v)throw fastErr;
+          const why=document.createElement("p");why.className="why";why.textContent="Không dựng nhanh được vì "+whyText(fastErr).replace(/\.?\s*$/,". ")+"Video này dựng theo thời gian thực sau khi các video khác xong; chuyển tab thì việc dựng tạm dừng.";r.appendChild(why);
+          chip.textContent="Chờ dựng realtime";bar.style.width="0";
+          const release=await rtTurn(()=>{lastT=performance.now();},stop);
+          try{if(!stop.v){chip.textContent="Dựng realtime, giữ tab mở";lastT=performance.now();
+            blob=await realtimeExport({it,W,H,stop,onProgress:onP});}}
+          finally{release();}}
       }catch(e){failed=e;}
       clearInterval(stall);
       if(mine.v&&!(exporting&&exporting.v))continue; // người dùng bấm Xuất lại: dựng lại từ đầu
