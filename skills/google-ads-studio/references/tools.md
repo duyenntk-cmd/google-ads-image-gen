@@ -73,6 +73,11 @@ phần 10MB thẳng lên S3 của MKT System qua presigned URL; nếu báo lỗi
 phép domain web này (cần mở PUT và expose header `ETag`). MKT System chỉ nhận MP4/MOV, nên xuất
 bằng Chrome/Edge (Safari/Firefox có thể ra WebM).
 
+**Dựng nhanh / dựng realtime:** mặc định dựng nhanh bằng WebCodecs (đọc MP4/MOV bằng MP4Box, khung gắn thời gian
+chính xác). File không đọc được (WebM, codec lạ) hoặc máy quá tải thì dựng realtime: vẫn phát video để lấy hình nhưng
+nén khung theo thời gian video (không theo đồng hồ thật) và trộn tiếng offline, nên thời lượng luôn đúng; chuyển tab thì
+tạm dừng. Video realtime chờ các video dựng nhanh xong rồi chạy lần lượt.
+
 **Lịch sử push lên MKT:** mỗi lần push thành công lưu 1 dòng (ngày giờ, video, tag, angle code, tài khoản MKT)
 trong IndexedDB của trình duyệt (kho `pushes`), nhóm theo ngày, mở đúng bộ trên MKT bằng link lọc tag + ngày push.
 Đổi máy hoặc xoá dữ liệu trang là mất; bản ghi chung cho cả team nằm ở tab `UsageLog` của Google Sheet.

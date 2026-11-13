@@ -14,6 +14,20 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v6.3 — 2026-11-13 · Outro Studio: hết giật và kéo dài khi dựng realtime
+
+**Mục tiêu:** video xuất ra (và đẩy lên MKT) luôn đúng thời lượng, không giật.
+
+- Nguyên nhân: video nào không dựng nhanh được (file không phải MP4 như WebM, codec lạ, máy quá tải khi xuất
+  song song) thì chuyển sang dựng realtime bằng MediaRecorder. Cách này gắn thời gian khung theo đồng hồ thật,
+  nên máy chậm là mất khung (giật), còn chuyển tab thì trình duyệt ngừng vẽ nhưng vẫn ghi: video đứng hình suốt
+  lúc tab ẩn và dài gấp nhiều lần. Thử lại: nguồn 8 giây + outro 3 giây, ẩn tab 20 giây, ra 25,4 giây, 164 khung.
+- Sửa: dựng realtime giờ nén mỗi 1/30 giây của dòng thời gian video đúng 1 khung (máy chậm thì lặp khung, không
+  kéo dài), tiếng trộn offline như dựng nhanh, ra MP4 chuẩn 30 fps. Chuyển tab thì tạm dừng, quay lại chạy tiếp.
+  Cùng bài thử ra 11,02 giây, 330 khung, không đứng hình.
+- Video phải dựng realtime chờ các video dựng nhanh xong rồi dựng lần lượt từng cái, để máy không bận việc khác.
+- Trình duyệt không có WebCodecs vẫn ghi bằng MediaRecorder như cũ, nhưng tạm dừng khi tab bị ẩn.
+
 ## v6.2 — 2026-11-12 · Lịch sử push lên MKT
 
 **Mục tiêu:** xem lại các bộ video đã đẩy lên MKT System theo ngày giờ.
