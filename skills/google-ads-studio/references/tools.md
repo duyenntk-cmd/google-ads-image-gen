@@ -73,6 +73,11 @@ phần 10MB thẳng lên S3 của MKT System qua presigned URL; nếu báo lỗi
 phép domain web này (cần mở PUT và expose header `ETag`). MKT System chỉ nhận MP4/MOV, nên xuất
 bằng Chrome/Edge (Safari/Firefox có thể ra WebM).
 
+**Tự cắt đoạn hướng dẫn (AI):** sau khi tìm outro và logo đối thủ, mỗi video được lấy mẫu ~1 khung/giây (ảnh 288px)
+gửi `/api/outro/tutorial` (GPT-4o-mini, detail low, ~85 token/khung) để chấm khung nào là đoạn quay điện thoại mở
+TikTok/CapCut, tay/bút bấm màn hình. Đoạn chạm cuối video được tick cắt sẵn (hiện trong "Đoạn cắt trong video",
+loại `kind:"tut"`), đoạn giữa video để người dùng tick. Công tắc `S.tut.on`.
+
 **Dựng nhanh / dựng realtime:** mặc định dựng nhanh bằng WebCodecs (đọc MP4/MOV bằng MP4Box, khung gắn thời gian
 chính xác). File không đọc được (WebM, codec lạ) hoặc máy quá tải thì dựng realtime: vẫn phát video để lấy hình nhưng
 nén khung theo thời gian video (không theo đồng hồ thật) và trộn tiếng offline, nên thời lượng luôn đúng; chuyển tab thì

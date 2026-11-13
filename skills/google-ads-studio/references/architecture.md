@@ -31,6 +31,7 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `/api/keywords`, `/api/adcopy`, `/api/localize` | Ad Copy Studio |
 | `/api/google-ads/*`, `/api/auth/google-ads/callback` | Launch Camp |
 | `/api/outro/app-info` | Outro Studio: tên app, icon, headline từ link store để tự tạo end card |
+| `/api/outro/tutorial` | Outro Studio: GPT-4o-mini chấm từng khung (ảnh nhỏ) có phải đoạn hướng dẫn quay điện thoại không |
 | `/api/outro/mkt/upload` | Outro Studio: ký các bước multipart (init/presign/complete/abort), thumbnail, tạo creative video trên MKT System |
 | `/api/usage-log` | ghi 1 dòng log sử dụng vào tab `UsageLog` (email lấy từ phiên đăng nhập) |
 
