@@ -1777,6 +1777,9 @@ export default function Home() {
   interface MktTemplate { id: string; name: string; adContents?: {headlines:string[];descriptions:string[]}[] }
   const [mkCode, setMkCode] = useState("");
   const [mkConn, setMkConn] = useState<{email:string;expiresAt:number;systemUrl?:string}|null>(null);
+  /** Personal Claude connector URL (chat creates ad templates); fetched on demand. */
+  const [mcpUrl, setMcpUrl] = useState("");
+  const [mcpMsg, setMcpMsg] = useState("");
   // Tag main of the batch just uploaded, for the "open in MKT System" link.
   const [mkBatchTag, setMkBatchTag] = useState("");
   const [mkTagCopied, setMkTagCopied] = useState(false);
@@ -2312,6 +2315,14 @@ export default function Home() {
   const [cbCopiedTpl, setCbCopiedTpl] = useState("");
   /** Gen of this set on MKT, fixed at the first push so a retry keeps the same names. */
   const cbGenRef = useRef<number | null>(null);
+  /**
+   * Gen handed over by the Claude connector's banner link (?page=aibanner&gen=N):
+   * the chat already created "Ad Template <day> Gen<N> <market>", so the banners
+   * pushed from here must carry the tag "<day> Gen<N>" to match. Survives the
+   * resets a new set does; cleared by the "Bỏ" button.
+   */
+  const [cbPresetGen, setCbPresetGen] = useState<number | null>(null);
+  const cbPresetGenRef = useRef<number | null>(null);
   /** "<lang>:<slot>" → bulk fields of a file already on S3. */
   const cbPreparedRef = useRef<Record<string, Record<string, unknown>>>({});
   /** "<lang>:<slot>" ids already created as creatives. */
@@ -2326,7 +2337,7 @@ export default function Home() {
   /** Forget what was pushed, for a new set (or for the given languages only). */
   const cbResetPush = (langs?: string[]) => {
     if (!langs) {
-      cbGenRef.current = null; cbPreparedRef.current = {}; cbBulkedRef.current = new Set();
+      cbGenRef.current = cbPresetGenRef.current; cbPreparedRef.current = {}; cbBulkedRef.current = new Set();
       cbTplDoneRef.current = {}; cbIdemRef.current = null; setCbPushLog([]);
       return;
     }
@@ -2553,6 +2564,21 @@ export default function Home() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem("banner_history") || "[]")); } catch {}
+  }, []);
+
+  // Banner link from the Claude connector: open Banner + Ad Copy on the app, market and Gen of the chat's batch.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("page") !== "aibanner") return;
+    setActivePage("aibanner");
+    const u = params.get("url");
+    if (u && /^https:\/\/(apps\.apple\.com|play\.google\.com)\//.test(u)) setAbUrl(u);
+    const mk = (params.get("market") || "").toUpperCase();
+    const country = Object.entries(COUNTRY_ISO).find(([, c]) => c === mk)?.[0];
+    if (country) setAbCountry(country);
+    const g = Math.floor(Number(params.get("gen")));
+    if (g >= 1 && g < 1000) { cbPresetGenRef.current = g; cbGenRef.current = g; setCbPresetGen(g); }
+    window.history.replaceState({}, "", "/");
   }, []);
 
   // Google sends the operator back here after the consent screen.
@@ -3867,6 +3893,13 @@ export default function Home() {
         {/* AUTO GEN PAGE */}
         {activePage === "aibanner" && (
           <div className="space-y-6 max-w-2xl">
+            {cbPresetGen !== null && (
+              <div className="text-xs rounded-xl px-3 py-2 flex items-center justify-between gap-2 border" style={{borderColor: "#7C3AED66", color: t.text, backgroundColor: "#7C3AED12"}}>
+                <span>🤖 Mở từ chat Claude: banner đẩy lên MKT sẽ mang tag <b>{mkToday()} Gen{cbPresetGen}</b> để khớp ad template đã tạo trong chat. Gen ảnh rồi đẩy như bình thường; không cần thêm ad copy ở đây.</span>
+                <button type="button" onClick={() => { cbPresetGenRef.current = null; cbGenRef.current = null; setCbPresetGen(null); }}
+                  className="flex-shrink-0 px-2 py-1 rounded-md border" style={{borderColor: t.border, color: t.textMuted}}>Bỏ</button>
+              </div>
+            )}
             <div className="flex items-center gap-2 text-xs" style={{color: t.textMuted}}>
               {(() => {
                 // 1 link + prompt · 2 mascot, scope, approval image + ad copy · 3 full set, localize, MKT
@@ -4531,6 +4564,13 @@ export default function Home() {
                       ) : (
                         <div className="text-[11px]" style={{color: t.textMuted}}>Tài khoản MKT: <b style={{color: t.text}}>{mkConn.email}</b></div>
                       )}
+                      {cbPresetGen !== null && (
+                        <div className="text-[11px] rounded-lg px-3 py-2 flex items-center justify-between gap-2" style={{backgroundColor: t.tabBg, color: t.text}}>
+                          <span>🤖 Dùng <b>Gen{cbPresetGen}</b> từ chat Claude: creative mang tag <b>{mkToday()} Gen{cbPresetGen}</b> để khớp ad template đã tạo trong chat. Không thêm khối ad copy ở đây thì template không bị ghi đè.</span>
+                          <button type="button" onClick={() => { cbPresetGenRef.current = null; cbGenRef.current = null; setCbPresetGen(null); }}
+                            className="flex-shrink-0 px-2 py-1 rounded-md border" style={{borderColor: t.border, color: t.textMuted}}>Bỏ</button>
+                        </div>
+                      )}
                       <button onClick={cbPushAll} disabled={!mkConn || !!cbPushBusy || abLocBusy !== "" || cbLocCopyBusy}
                         className="w-full text-sm font-semibold px-4 py-2.5 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed"
                         style={{background: "linear-gradient(135deg,#7C3AED,#EC4899)"}}>
@@ -4588,6 +4628,39 @@ export default function Home() {
               {mkError && <p className="text-amber-400 text-xs bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">{mkError}</p>}
               {mkNote && <p className="text-xs bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 whitespace-pre-wrap" style={{color:"#10B981"}}>{mkNote}</p>}
               {mkNote.includes("creative vào thư viện") && mkSystemLinkEl("")}
+            </div>
+
+            {/* Claude connector: the chat runs Banner + Ad Copy's template flow without this form. */}
+            <div className="p-5 border rounded-2xl space-y-3" style={cardStyle}>
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{color: t.textMuted}}>🤖 Tạo ad template bằng chat với Claude</div>
+              <p className="text-xs leading-relaxed" style={{color: t.textMuted}}>
+                Thêm connector này vào Claude một lần, sau đó chỉ cần gõ trong chat, ví dụ <b style={{color: t.text}}>@adtemp https://play.google.com/store/apps/details?id=… VN, US</b>.
+                Claude đọc app, viết và localize ad copy, cho bạn xem nháp, bạn gõ <b style={{color: t.text}}>ok</b> là tạo ad template trên MKT (tên theo Google++). Thêm chữ <b style={{color: t.text}}>banner</b> nếu muốn kèm link gen banner.
+              </p>
+              {!mcpUrl ? (
+                <button onClick={async () => {
+                    setMcpMsg("");
+                    try { const d = await fetch("/api/mcp-key").then(r => r.json()); if (!d.success) throw new Error(d.error || "Lỗi"); setMcpUrl(d.url); }
+                    catch (e) { setMcpMsg("❌ " + (e instanceof Error ? e.message : String(e))); }
+                  }}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500">Lấy link connector của tôi</button>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <input readOnly value={mcpUrl} onFocus={e => e.currentTarget.select()} aria-label="Link connector"
+                      className="flex-1 min-w-0 text-xs font-mono rounded-xl px-3 py-2.5 border focus:outline-none" style={inputStyle}/>
+                    <button onClick={() => { void navigator.clipboard.writeText(mcpUrl).then(() => { setMcpMsg("✓ Đã chép link"); setTimeout(() => setMcpMsg(""), 2000); }); }}
+                      className="flex-shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold border" style={{borderColor: t.border, color: t.text}}>Chép</button>
+                  </div>
+                  <ol className="text-xs list-decimal pl-5 space-y-1" style={{color: t.textMuted}}>
+                    <li>Mở Claude → <b>Settings → Connectors → Add custom connector</b>. Đặt tên <b>Google Ads Studio</b>, dán link trên, bấm Add.</li>
+                    <li>Trong khung chat, bật connector Google Ads Studio (nút ➕ hoặc biểu tượng công cụ).</li>
+                    <li>Gõ <b>@adtemp &lt;link store&gt; &lt;thị trường&gt;</b>. Lần đầu Claude sẽ xin mã kết nối MKT (Profile → <b>Kết nối Claude</b>, hiệu lực ~24h).</li>
+                  </ol>
+                  <p className="text-[11px]" style={{color: t.textMuted}}>Link này gắn với tài khoản của bạn, đừng gửi cho người khác. Tài khoản bị tắt trên web thì link cũng ngừng hoạt động.</p>
+                </div>
+              )}
+              {mcpMsg && <p className="text-xs" style={{color: mcpMsg.startsWith("❌") ? "#F59E0B" : "#10B981"}}>{mcpMsg}</p>}
             </div>
 
             {mkConn && (

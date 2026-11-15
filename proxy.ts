@@ -9,6 +9,10 @@ export async function proxy(req: NextRequest) {
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
+    // Claude connector: called by Claude's servers with the personal key in the URL, no web session
+    pathname.startsWith("/api/mcp/") ||
+    // Claude probes OAuth metadata when a connector is added; a plain 404 (not a redirect to /login) means "no OAuth"
+    pathname.startsWith("/.well-known/") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
   ) {
@@ -25,5 +29,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!login|api/auth|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!login|api/auth|api/mcp/|\\.well-known/|_next/static|_next/image|favicon.ico).*)"],
 };

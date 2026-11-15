@@ -21,7 +21,7 @@ không đưa khoá vào commit message hay PR.
 | 🚀 Launch Camp | Tạo App campaign thật trên tài khoản Google Ads | Google Ads API |
 | ▶️ YouTube Upload | Up hàng loạt video Unlisted, lấy link chạy ads | YouTube Data API |
 | 🎬 Outro Studio | Cắt outro cũ, resize 9:16, logo bay, gắn end card mới → xuất hàng loạt → push video lên thư viện creative MKT System | trang tĩnh `public/outro-studio`, dựng video trong trình duyệt |
-| 🔌 MKT System | Đẩy ad template + creative sang MKT System bằng mã kết nối | API MKT System |
+| 🔌 MKT System | Đẩy ad template + creative sang MKT System bằng mã kết nối; lấy link connector để tạo ad template bằng chat (`@adtemp`, skill `skills/adtemp`) | API MKT System, MCP `/api/mcp/<key>` |
 | 📊 Phân tích Camp | Report GG Ads + est ROAS (system) → gợi ý action trên từng camp | luật trong `lib/campDoctor.ts` |
 
 Chi tiết từng công cụ: `references/tools.md`.

@@ -14,6 +14,20 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v7.0 — 2026-11-15 · Tạo ad template bằng chat với Claude
+
+**Mục tiêu:** gõ một lệnh trong Claude là có ad template trên MKT, không phải đi qua các bước của trang Banner + Ad Copy.
+
+- Connector cho Claude (MCP, `/api/mcp/<khoá riêng>`): lấy link ở trang **MKT System** → "Lấy link connector của tôi", thêm vào
+  Claude (Settings → Connectors → Add custom connector) một lần.
+- Lệnh `@adtemp <link store> <thị trường> [góc] [banner]`: Claude đọc app, tự viết và localize ad copy, kiểm tra giới hạn Google,
+  lấy số Gen trên MKT, **hiện nháp**, người dùng gõ "ok" mới tạo "Ad Template <ngày> Gen<n> <thị trường>". Đẩy lại cùng Gen thì
+  cập nhật, không tạo trùng.
+- Có chữ `banner`: Claude đưa link mở sẵn trang Banner + Ad Copy với app, thị trường và cùng Gen, nên creative đẩy từ web khớp
+  template tạo trong chat (banner vẫn gen trên web vì chữ được vẽ lên ảnh trong trình duyệt).
+- Skill `adtemp` (thư mục `skills/adtemp`) để Claude nhận cú pháp `@adtemp`.
+- Khoá connector gắn với tài khoản web (ký bằng NEXTAUTH_SECRET); tài khoản bị tắt trong sheet Users thì khoá ngừng hoạt động.
+
 ## v6.5 — 2026-11-13 · Outro Studio: quét và push nhanh hơn
 
 **Mục tiêu:** rút ngắn thời gian từ lúc thả video vào tới lúc creative nằm trên MKT.
