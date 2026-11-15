@@ -33,6 +33,8 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `/api/outro/app-info` | Outro Studio: tên app, icon, headline từ link store để tự tạo end card |
 | `/api/outro/tutorial` | Outro Studio: GPT-4o-mini chấm từng khung (ảnh nhỏ) có phải đoạn hướng dẫn quay điện thoại không |
 | `/api/outro/mkt/upload` | Outro Studio: ký các bước multipart (init/presign/complete/abort), thumbnail, tạo creative video trên MKT System |
+| `/api/mcp/[key]` | Connector Claude (MCP, JSON-RPC qua HTTP, không giữ phiên): get_guide, app_info, check_ad_copy, mkt_status, mkt_next_gen, mkt_push_ad_templates, banner_link. Khoá trong URL (`lib/mcpKey.ts`), proxy bỏ qua đăng nhập web |
+| `/api/mcp-key` | Link connector của người đang đăng nhập (hiện ở trang MKT System) |
 | `/api/usage-log` | ghi 1 dòng log sử dụng vào tab `UsageLog` (email lấy từ phiên đăng nhập) |
 
 Mọi route đều gọi `requireSession()` ở dòng đầu. Ngoại lệ duy nhất là callback OAuth,
