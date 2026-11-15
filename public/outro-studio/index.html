@@ -1282,7 +1282,30 @@ async function grabFrames(it,times,each){
       for(let i=0;i<times.length;i++){if(it.skip)throw new Error("skip");await each(await src.frameAt(times[i]),i);}return;}
     catch(e){if(it.skip)throw e;}
     finally{if(src)src.close();}}
-  const v=it.el;for(let i=0;i<times.length;i++){if(it.skip)throw new Error("skip");await seek(v,times[i]);await each(v,i);}
+  const v=it._tv||(it._tv=makeVideo(it.url));await loaded(v);
+  for(let i=0;i<times.length;i++){if(it.skip)throw new Error("skip");await seek(v,times[i]);await each(v,i);}
+}
+// ảnh ở các khung chính (keyframe) gần mỗi mốc thời gian: mỗi ảnh chỉ giải mã đúng 1 khung, nên nhanh hơn nhiều so với
+// giải mã cả video. Keyframe thưa quá (trung bình >2,5 giây) hoặc video bị xoay thì báo lỗi để dùng cách thường.
+async function keyframeImages(it,times,W,H){
+  const d=await demuxFile(it.file);if(d.rot)throw new Error("video xoay");
+  const keys=d.samples.filter(s=>s.is_sync);if(keys.length<2)throw new Error("ít keyframe");
+  const t0=Math.min(...d.samples.slice(0,30).map(s=>s.cts/s.timescale)),kt=keys.map(s=>s.cts/s.timescale-t0);
+  if((kt[kt.length-1]-kt[0])/(kt.length-1)>2.5)throw new Error("keyframe thưa");
+  const pick=[...new Set(times.map(t=>{let b=0;for(let i=1;i<kt.length;i++)if(Math.abs(kt[i]-t)<Math.abs(kt[b]-t))b=i;return b;}))].sort((a,b)=>a-b);
+  const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");
+  const byTs=new Map(pick.map(i=>[Math.round(1e6*keys[i].cts/keys[i].timescale),i])),imgs=new Map();let err=null;
+  // vẽ và trả khung ngay trong output: bộ giải mã phần cứng chỉ có vài khung trống
+  const dec=new VideoDecoder({output:f=>{try{const i=byTs.get(f.timestamp);if(i!=null){x.drawImage(f,0,0,W,H);imgs.set(i,c.toDataURL("image/jpeg",0.7));}}finally{f.close();}},error:e=>{err=e;}});
+  try{dec.configure(d.cfg);
+    for(const i of pick){if(it.skip)throw new Error("skip");if(err)throw err;const s=keys[i];
+      dec.decode(new EncodedVideoChunk({type:"key",timestamp:Math.round(1e6*s.cts/s.timescale),duration:Math.round(1e6*s.duration/s.timescale),data:s.data}));
+      if(dec.decodeQueueSize>6)await new Promise(r=>{const to=setTimeout(r,200);dec.addEventListener("dequeue",()=>{clearTimeout(to);r();},{once:true});});}
+    let to;await Promise.race([dec.flush(),new Promise((_,j)=>{to=setTimeout(()=>j(new Error("Bộ giải mã không phản hồi")),15000);})]).finally(()=>clearTimeout(to));
+  }finally{try{dec.close();}catch(e){}}
+  if(err)throw err;
+  const ok=pick.filter(i=>imgs.has(i));if(ok.length<Math.min(3,pick.length))throw new Error("giải mã keyframe thiếu khung");
+  return {times:ok.map(i=>kt[i]),imgs:ok.map(i=>imgs.get(i))};
 }
 // điểm chuyển cảnh giữa a và b, dò ở 30 khung/giây. side "start" (vào đoạn hướng dẫn): trả về ngay sau khung cuối của
 // cảnh cũ, để không lọt khung nào của đoạn hướng dẫn; side "end" (ra khỏi đoạn): trả về khung đầu của cảnh mới.
@@ -1296,22 +1319,27 @@ async function tutBoundary(it,a,b,side){
   if(bd<=0.2)return (a+b)/2;
   return side==="start"?ts[bi-1]+0.001:ts[bi];
 }
-async function detectTutorial(it,onTick){
-  const dur=it.duration,n=Math.max(3,Math.min(TUT_MAX,Math.round(dur/TUT_STEP))),step=dur/n;
-  const times=Array.from({length:n},(_,i)=>Math.min(dur-0.05,(i+0.5)*step));
+// phần 1: lấy khung + hỏi AI. Không đụng tới trạng thái của video nên chạy song song được với bước tìm end card.
+async function tutorialLabels(it){
+  const dur=it.duration,n0=Math.max(3,Math.min(TUT_MAX,Math.round(dur/TUT_STEP))),step=dur/n0;
+  let times=Array.from({length:n0},(_,i)=>Math.min(dur-0.05,(i+0.5)*step));
   const W=TUT_W,H=Math.max(2,Math.round(it.el.videoHeight*W/it.el.videoWidth));
-  const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");
-  const imgs=new Array(n);
-  await grabFrames(it,times,async(f,i)=>{x.drawImage(f,0,0,W,H);imgs[i]=c.toDataURL("image/jpeg",0.7);
-    if(i%5===0){onTick&&onTick(0.5*i/n);await yieldNow();}});
-  onTick&&onTick(0.55);
+  let imgs=null;
+  if(FAST)try{const k=await keyframeImages(it,times,W,H);times=k.times;imgs=k.imgs;}
+    catch(e){if(it.skip)throw e;console.warn("Lấy khung từ keyframe không được, dùng cách thường:",e);}
+  if(!imgs){const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");imgs=new Array(times.length);
+    await grabFrames(it,times,async(f,i)=>{x.drawImage(f,0,0,W,H);imgs[i]=c.toDataURL("image/jpeg",0.7);if(i%5===0)await yieldNow();});}
   let r,d=null;
   try{r=await fetch("/api/outro/tutorial",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({frames:times.map((t,i)=>({t,img:imgs[i]}))})});d=await r.json().catch(()=>null);}
   catch(e){throw new Error("mất mạng, không gọi được AI");}
   if(!d)throw new Error(r.redirected||/\/login/.test(r.url)?"phiên đăng nhập web đã hết, tải lại trang":`server lỗi HTTP ${r.status}`);
   if(!r.ok||!d.success)throw new Error(d.error||`HTTP ${r.status}`);
-  const lab=times.map((_,i)=>!!(d.labels&&d.labels[i]));
+  return {times,labels:times.map((_,i)=>!!(d.labels&&d.labels[i])),note:String(d.note||"")};
+}
+// phần 2: gộp khung thành đoạn, dò điểm cắt, cập nhật danh sách đoạn cắt (chạy sau khi đã tìm xong end card)
+async function applyTutorial(it,{times,labels,note},onTick){
+  const dur=it.duration,n=times.length,lab=labels.slice();
   for(let i=1;i<n-1;i++)if(!lab[i]&&lab[i-1]&&lab[i+1])lab[i]=true; // 1 khung lẻ bị chấm sai giữa đoạn
   const runs=[];for(let i=0;i<n;i++){if(!lab[i])continue;let j=i;while(j+1<n&&lab[j+1])j++;runs.push([i,j]);i=j;}
   const out=[];
@@ -1327,7 +1355,7 @@ async function detectTutorial(it,onTick){
   it.tutWide=covered>dur*0.7;if(it.tutWide)out.forEach(g=>g.on=false); // gần như cả video: có thể là kiểu quảng cáo quay màn hình, không tự cắt
   for(const g of out)try{g.thumb=await thumbOf(it,(g.s+g.e)/2,90);}catch(e){}
   it.segs=(it.segs||[]).filter(g=>g.kind!=="tut").concat(out).sort((a,b)=>a.s-b.s);
-  it.tutScanned=true;it.tutErr=null;it.tutNote=out.length?String(d.note||""):"";
+  it.tutScanned=true;it.tutErr=null;it.tutNote=out.length?note:"";
   // đoạn hướng dẫn đã cắt tới hết video mà phần tìm end card còn đang hỏi chọn điểm cắt trong chính đoạn đó: khỏi hỏi nữa
   const endSeg=out.find(g=>g.on&&g.e>=dur-0.01);
   if(endSeg&&it.cutMode==="auto"&&it.outroStatus==="choose"&&it.cutAt==null&&it.cands.every(c=>c.cutAt>=endSeg.s-0.5))it.outroStatus="nooutro";
@@ -1405,12 +1433,19 @@ async function addFiles(files){
   }
 }
 // quét lần lượt từng video (không tranh nhau giải mã), video nào sẵn sàng là quét ngay
-let scanning=false;
-async function runScanQueue(){
-  if(scanning)return;scanning=true;
-  try{let it;while((it=items.find(x=>x.status==="analyzing"&&!x.busy&&!x.skip&&(x.cutMode!=="none"&&!x.outroScanned||needRival(x)||needTut(x))))){it.busy=true;if(sel===it)renderCut();await detect(it);it.busy=false;await crossFill();}}
-  finally{scanning=false;}
-  if(sel)previewAt(0);
+// quét song song tối đa 2 video (mỗi video một bộ giải mã riêng), theo số video xuất cùng lúc: máy yếu (1) thì quét lần lượt
+let scanning=0;
+const scanPar=()=>Math.max(1,Math.min(2,+S.resize.par||1));
+const nextToScan=()=>items.find(x=>x.status==="analyzing"&&!x.busy&&!x.skip&&(x.cutMode!=="none"&&!x.outroScanned||needRival(x)||needTut(x)));
+function runScanQueue(){
+  let it;
+  while(scanning<scanPar()&&(it=nextToScan())){
+    scanning++;it.busy=true;if(sel===it)renderCut();
+    const one=it;
+    detect(one).catch(e=>console.error(e)).finally(async()=>{
+      one.busy=false;scanning--;try{await crossFill();}catch(e){console.warn(e);}
+      if(nextToScan())runScanQueue();else if(!scanning&&sel)previewAt(0);});
+  }
 }
 // video cùng mẫu (khác kích thước) thường có cùng end card: video nào đã chắc chắn thì dùng để cắt cho video giống nó
 const sigSim=(a,b)=>0.5*Math.max(0,correl(a.hist,b.hist))+0.5*(1-Math.min(1,mad(a.small,b.small)/60));
@@ -1433,6 +1468,8 @@ async function crossFill(){
   }
 }
 async function detect(it){
+  // đoạn hướng dẫn: lấy khung và hỏi AI ngay từ đầu, chạy song song với tìm end card / logo đối thủ (AI trả lời mất vài giây)
+  const tutP=needTut(it)?tutorialLabels(it).then(r=>({r}),e=>({e})):null;
   try{
     if(it.cutMode!=="none"&&!it.outroScanned){
       it.phase="outro";it.prog=0;if(sel===it)renderCut();
@@ -1446,8 +1483,8 @@ async function detect(it){
     }
     if(needRival(it)){it.phase="rival";it.prog=0;if(sel===it)renderCut();
       try{await detectRivals(it,p=>{it.prog=p;if(sel===it)updateProg(it);});}catch(e){if(it.skip)throw e;console.warn("Tìm logo đối thủ lỗi:",e);it.rivalVer=rivalVer;}}
-    if(needTut(it)){it.phase="tut";it.prog=0;if(sel===it)renderCut();
-      try{await detectTutorial(it,p=>{it.prog=p;if(sel===it)updateProg(it);});}
+    if(tutP){it.phase="tut";it.prog=0;if(sel===it)renderCut();
+      try{const x=await tutP;if(x.e)throw x.e;await applyTutorial(it,x.r,p=>{it.prog=p;if(sel===it)updateProg(it);});}
       catch(e){if(it.skip)throw e;console.warn("Tìm đoạn hướng dẫn lỗi:",e);it.tutErr=String(e&&e.message||e).slice(0,160);it.tutScanned=true;}}
     it.status=it.outroScanned?it.outroStatus:"nooutro";
   }catch(e){if(it.skip){it.cands=[];it.conf="none";it.status="nooutro";it.outroScanned=true;it.outroStatus="nooutro";it.rivalVer=rivalVer;it.tutScanned=true;if(it.cutMode!=="none")it.cutMode="manual";it.cutAt=null;}else{console.error(e);it.status="nooutro";}}
@@ -2217,7 +2254,7 @@ function renderMkt(){
   $("mktMsg").textContent=mkt.note||(!mkt.checked?"Đang kiểm tra kết nối…"
     :!ok?"Dán mã kết nối MKT System ở trên để push. Tag và angle code bạn nhập vẫn được lưu cho lần sau."
     :mkt.failed?`Push lỗi ${mkt.failed} video${mkt.lastErr?` (${mkt.lastErr})`:""}. ${mkt.done.size?`Đã push ${mkt.done.size}/${done.length}. `:""}Bấm nút để push lại các video lỗi.`
-    :mkt.done.size?`Đã đưa ${mkt.done.size} video vào thư viện creative của MKT System.`:"");
+    :mkt.done.size?`Đã đưa ${mkt.done.size} video vào thư viện creative của MKT System${mkt.lastSec>=1?` (lần push vừa rồi mất ${mkt.lastSec} giây)`:""}.`:"");
 }
 // đọc độ dài và chụp 1 khung làm thumbnail từ chính video đã xuất
 async function mktProbe(blob){
@@ -2239,13 +2276,20 @@ async function mktUpload(rec,onProgress){
   if(!/^video\/(mp4|quicktime)$/.test(type))throw new Error("MKT System chỉ nhận MP4/MOV, video này là WebM. Xuất lại bằng Chrome hoặc Edge bản mới.");
   const name=rec.fname.replace(/\.[^.]+$/,"").slice(0,100),safe=mktSafe(name)+"-"+Date.now().toString(36);
   const fileName=safe+(type==="video/quicktime"?".mov":".mp4"),size=rec.blob.size;
-  const probe=await mktProbe(rec.blob);
-  const {uploadId,key,partSize}=await mktStep("Khởi tạo upload",mktApi({action:"init",fileName,contentType:type,size}));
+  const probeP=mktProbe(rec.blob); // đọc thời lượng + chụp thumbnail song song với bước khởi tạo
+  const init=await mktStep("Khởi tạo upload",mktApi({action:"init",fileName,contentType:type,size}));
+  const {uploadId,key,partSize}=init;
+  // thumbnail lên song song với video; lỗi thì creative vẫn vào thư viện, chỉ không có ảnh xem trước
+  const thumbP=probeP.then(p=>p.thumb?mktApi({action:"thumb",name:`thumb-${safe}.jpg`,dataUrl:p.thumb}).then(r=>r.url,()=>null):null);
   try{
     const n=Math.max(1,Math.ceil(size/partSize)),nums=Array.from({length:n},(_,i)=>i+1),parts=[];let sent=0;
-    for(let i=0;i<n;i+=3){ // xin presigned URL theo từng đợt 3 phần để URL không hết hạn khi mạng chậm
-      const {parts:urls}=await mktStep("Xin link upload",mktApi({action:"presign",uploadId,key,partNumbers:nums.slice(i,i+3)}));
-      await Promise.all(urls.map(async({partNumber,presignedUrl})=>{
+    const links=new Map((init.parts||[]).map(p=>[p.partNumber,p.presignedUrl])); // link có sẵn từ bước khởi tạo
+    for(let i=0;i<n;i+=3){ // các phần còn lại xin link theo từng đợt 3 phần để link không hết hạn khi mạng chậm
+      const batch=nums.slice(i,i+3),need=batch.filter(k=>!links.has(k));
+      if(need.length){const {parts:urls}=await mktStep("Xin link upload",mktApi({action:"presign",uploadId,key,partNumbers:need}));
+        for(const u of urls)links.set(u.partNumber,u.presignedUrl);}
+      await Promise.all(batch.map(async partNumber=>{const presignedUrl=links.get(partNumber);
+        if(!presignedUrl)throw new Error(`Xin link upload: thiếu link cho phần ${partNumber}`);
         const chunk=rec.blob.slice((partNumber-1)*partSize,partNumber*partSize);
         let res=null;
         for(let t=0;;t++){
@@ -2261,8 +2305,7 @@ async function mktUpload(rec,onProgress){
       }));
     }
     const {url}=await mktStep("Hoàn tất upload",mktApi({action:"complete",uploadId,key,parts}));
-    let thumbnail=null; // thiếu thumbnail thì creative vẫn vào thư viện, chỉ không có ảnh xem trước
-    if(probe.thumb)try{thumbnail=(await mktApi({action:"thumb",name:`thumb-${safe}.jpg`,dataUrl:probe.thumb})).url;}catch(e){}
+    const [probe,thumbnail]=await Promise.all([probeP,thumbP]);
     // thời lượng gửi số giây nguyên
     return {url,name,size,...(thumbnail&&{thumbnail}),...(probe.duration>0&&{duration:Math.max(1,Math.round(probe.duration))})};
   }catch(e){
@@ -2278,14 +2321,17 @@ $("mktPush").onclick=async()=>{
   const who=mkt.conn.email||"",tpl=mkt.conn.systemUrl||"";
   mkt.busy=true;mkt.failed=0;mkt.lastErr="";mkt.note="";renderMkt();const t0=Date.now();
   const fail=(id,e)=>{console.error(e);mkt.failed++;mkt.lastErr=String(e&&e.message||e).slice(0,240);mktRowChip(id,"bad","MKT: lỗi");};
-  let k=0;
-  for(const [id,rec] of list){
-    k++;if(mkt.prepared.has(id))continue; // đã lên S3 ở lần bấm trước, chỉ còn thiếu bước tạo creative
+  // đẩy 3 video cùng lúc (video đã lên S3 ở lần bấm trước thì chỉ còn thiếu bước tạo creative)
+  const queue=list.filter(([id])=>!mkt.prepared.has(id)),total=queue.length;let upDone=0;
+  const showUp=()=>{$("mktMsg").textContent=`Đang upload lên MKT System: xong ${upDone}/${total} video (3 video cùng lúc)…`;};
+  if(total)showUp();
+  const worker=async()=>{for(let e=queue.shift();e;e=queue.shift()){const [id,rec]=e;
     if(!mktConnected()){fail(id,new Error("Mã kết nối đã hết hạn. Dán mã mới."));continue;}
-    $("mktMsg").textContent=`Đang upload video ${k}/${list.length} lên MKT System…`;mktRowChip(id,"warn","MKT: 0%");
+    mktRowChip(id,"warn","MKT: 0%");
     try{mkt.prepared.set(id,await mktUpload(rec,p=>mktRowChip(id,"warn",`MKT: ${Math.round(p*100)}%`)));mktRowChip(id,"warn","MKT: đã lên S3");}
     catch(e){fail(id,e);}
-  }
+    upDone++;showUp();}};
+  await Promise.all(Array.from({length:Math.min(3,total)},worker));
   const ready=list.filter(([id])=>mkt.prepared.has(id));
   if(ready.length){
     $("mktMsg").textContent=`Đang tạo ${ready.length} creative trong thư viện MKT System…`;
@@ -2304,6 +2350,7 @@ $("mktPush").onclick=async()=>{
   fetch("/api/usage-log",{method:"POST",headers:{"Content-Type":"application/json"},keepalive:true,
     body:JSON.stringify({tool:"Outro Studio",action:"Push video lên MKT",images:pushed,durationSec:(Date.now()-t0)/1000,
       result:!mkt.failed?"ok":pushed?"partial":"error",note:[meta.tags.join(", "),meta.angleCodes[0]?"angle "+meta.angleCodes[0]:"",mkt.failed?"lỗi: "+mkt.lastErr:""].filter(Boolean).join(" · ")})}).catch(()=>{});
+  mkt.lastSec=Math.round((Date.now()-t0)/1000);
   mkt.busy=false;renderMkt();
 };
 

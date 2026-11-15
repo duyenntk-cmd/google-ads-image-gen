@@ -14,6 +14,18 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v6.5 — 2026-11-13 · Outro Studio: quét và push nhanh hơn
+
+**Mục tiêu:** rút ngắn thời gian từ lúc thả video vào tới lúc creative nằm trên MKT.
+
+- Quét: ảnh gửi AI tìm đoạn hướng dẫn lấy từ keyframe (giải mã ~30 khung thay vì cả video), và gửi AI ngay từ đầu,
+  chạy song song với bước tìm end card. Quét 2 video cùng lúc (máy yếu vẫn quét lần lượt).
+  Đo thử 3 video 30 giây: 55 giây → 25 giây.
+- Push: server giữ lại mã truy cập MKT giữa các lần gọi (trước đây lần gọi nào cũng xin lại), bước khởi tạo trả luôn
+  link upload, thumbnail tải song song với video, đẩy 3 video cùng lúc. Trang Banner + Ad Copy cũng nhanh hơn nhờ
+  phần giữ mã truy cập. Đo thử 5 video 27MB (mỗi lần gọi MKT trễ 0,3 giây): 27,5 giây → 7,7 giây, lần gọi MKT 53 → 33.
+- Báo thời gian của lần push vừa rồi.
+
 ## v6.4 — 2026-11-13 · Outro Studio: tự cắt đoạn hướng dẫn quay điện thoại
 
 **Mục tiêu:** bỏ đoạn cuối "hướng dẫn cách làm video/ảnh AI" (quay chiếc điện thoại mở TikTok/CapCut, tay hoặc bút bấm
