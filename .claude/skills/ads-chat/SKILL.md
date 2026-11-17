@@ -70,14 +70,15 @@ Mascot gen mới tính thêm 1 ảnh. Brief, dịch và tìm mascot dùng gpt-4o
 
 ## Thiết lập (người dùng làm một lần, trong cài đặt Environment của Claude Code, rồi mở phiên mới)
 
-- **Biến môi trường `OPENAI_API_KEY`**: khoá OpenAI. Nếu Environment có mục Network secrets, đặt khoá ở đó
-  cho `api.openai.com`.
+- **Khoá OpenAI**: nên đặt ở **Network secrets** (Allowed websites `api.openai.com`, Header `Authorization`,
+  Prefix `Bearer`): phiên không bao giờ thấy khoá, proxy tự gắn. Không có mục đó thì đặt biến `OPENAI_API_KEY`.
 - **Biến môi trường `MKT_CONNECT_CODE`**: mã `mktmcp_…` lấy ở MKT System > Profile > Kết nối Claude.
   Mã hết hạn sau khoảng 24 giờ: mỗi ngày làm việc phải thay mã mới và mở phiên mới.
 - **Network access**: chọn Full, hoặc Limited và thêm vào Allowed domains:
   `api.openai.com`, `play.google.com`, `play-lh.googleusercontent.com`, `apps.apple.com`, `itunes.apple.com`,
   `*.mzstatic.com`, `*.aperogroup.ai`, `*.amazonaws.com`.
   `doctor` in ra máy chủ backend MKT thật lấy từ mã; nếu máy chủ đó báo bị chặn thì thêm nó vào.
+  Đổi Network access có hiệu lực với cả phiên đang chạy sau khoảng 1 phút; đổi biến môi trường thì cần phiên mới.
 
 ## Lỗi hay gặp
 
