@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# chat toolkit (chat/studio.mjs): run outputs and local server state
+/chat/runs/
+/chat/.state/
