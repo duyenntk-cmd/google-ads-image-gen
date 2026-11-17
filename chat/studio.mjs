@@ -153,6 +153,10 @@ async function up({ quiet = false } = {}) {
       ...process.env,
       NEXTAUTH_SECRET: secret,
       NEXTAUTH_URL: `http://localhost:${PORT}`,
+      // With the key stored as a network secret for api.openai.com the session
+      // never sees it: the proxy sets the Authorization header on the way out.
+      // The routes still refuse to run without a value, so give them a placeholder.
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY || "proxy-injected",
       // Node's fetch ignores HTTPS_PROXY unless told; outbound calls must use it here.
       NODE_USE_ENV_PROXY: "1",
       NEXT_TELEMETRY_DISABLED: "1",
@@ -263,9 +267,28 @@ async function pickSlots(spec) {
 
 /* ───────────────────────── commands ───────────────────────── */
 
+/**
+ * Where the OpenAI key comes from. A network secret is invisible here, so ask
+ * OpenAI: a call carrying only the placeholder succeeds only if the proxy put
+ * the real key in its place, which is exactly what the local server relies on.
+ */
+async function checkOpenAiKey() {
+  const real = process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "proxy-injected";
+  try {
+    const code = execFileSync("curl", ["-sS", "-o", "/dev/null", "-m", "15", "-w", "%{http_code}",
+      "-H", `Authorization: Bearer ${real ? process.env.OPENAI_API_KEY : "proxy-injected"}`,
+      "https://api.openai.com/v1/models"], { stdio: ["ignore", "pipe", "pipe"] }).toString();
+    if (code === "200") return real ? "ok (biến môi trường OPENAI_API_KEY)" : "ok (Network secret cho api.openai.com)";
+    if (code === "401") return real ? "OPENAI_API_KEY sai hoặc đã bị thu hồi" : "THIẾU: chưa có Network secret cho api.openai.com (hoặc biến OPENAI_API_KEY)";
+    return `OpenAI trả HTTP ${code}`;
+  } catch (e) {
+    return /403/.test(String(e.stderr || e.message)) ? "BỊ CHẶN: api.openai.com chưa mở trong Network access" : `lỗi: ${String(e.stderr || e.message).trim().slice(0, 80)}`;
+  }
+}
+
 async function cmdDoctor(opt) {
   const report = {};
-  report.openaiKey = process.env.OPENAI_API_KEY ? (process.env.OPENAI_API_KEY === "proxy-injected" ? "network secret" : "biến môi trường") : "THIẾU";
+  report.openaiKey = await checkOpenAiKey();
   const code = mktCode(opt);
   if (!code) report.mkt = "THIẾU MKT_CONNECT_CODE";
   else {
@@ -275,7 +298,7 @@ async function cmdDoctor(opt) {
       report.mkt = { email: c.email, backend: new URL(c.backendUrl).host, expiresAt: new Date(c.expiresAt).toISOString(), hoursLeft: Math.round((c.expiresAt - Date.now()) / 36e5 * 10) / 10 };
     } catch (e) { report.mkt = `Mã lỗi: ${e.message}`; }
   }
-  const hosts = ["api.openai.com", "play.google.com", "play-lh.googleusercontent.com", "itunes.apple.com", "is1-ssl.mzstatic.com"];
+  const hosts = ["play.google.com", "play-lh.googleusercontent.com", "itunes.apple.com", "is1-ssl.mzstatic.com"];
   if (report.mkt?.backend) hosts.push(report.mkt.backend);
   report.network = {};
   await Promise.all(hosts.map(async (h) => {
