@@ -14,6 +14,23 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v7.1 — 2026-11-17 · Gen banner và đẩy MKT ngay trong chat Claude Code
+
+**Mục tiêu:** chat trong Claude Code là có banner và ad template trên MKT, không phải mở trang web.
+
+- Bộ lệnh `chat/studio.mjs`: bật server của chính repo trên máy chạy Claude Code rồi gọi đúng các API của web
+  (đọc store, brief, mascot, gen ảnh, dịch chữ banner, đẩy creative, connector ad template). Chữ được vẽ lên ảnh bằng
+  đúng code của trang Banner + Ad Copy trong Chromium không giao diện, nên ảnh, tên file, tag `<ngày> Gen<n>` và tên
+  template giống hệt khi làm trên web.
+- Skill `ads-chat` (`.claude/skills/ads-chat`): Claude nhận `@adbanner` / `@adtemp`. Claude làm nháp 3 ảnh và gửi
+  ảnh xem trước, người dùng gõ "ok" mới gen đủ bộ, dịch sang thị trường khác, rồi hiện nháp cuối (ad copy, số Gen, tag,
+  tên template). Chỉ khi người dùng gõ "ok" mới đẩy lên MKT.
+- Khoá OpenAI và mã MKT đặt trong biến môi trường của Environment Claude Code, không dán vào chat. Lệnh `doctor`
+  kiểm tra khoá, hạn mã MKT và các trang bị chặn mạng.
+- Phần vẽ chữ của AI Banner tách từ `app/page.tsx` sang `lib/abRender.ts`, không đổi hành vi trên web.
+
+---
+
 ## v7.0 — 2026-11-15 · Tạo ad template bằng chat với Claude
 
 **Mục tiêu:** gõ một lệnh trong Claude là có ad template trên MKT, không phải đi qua các bước của trang Banner + Ad Copy.

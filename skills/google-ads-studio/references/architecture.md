@@ -44,6 +44,12 @@ vì Google phải redirect vào được — nó nằm dưới `/api/auth/` nên
 
 - `app/page.tsx` — toàn bộ UI, một file lớn. Tên biến có tiền tố theo công cụ:
   `ab*` = AI Banner, `sd*` = Ad Copy Studio, `ads*` = Launch Camp, `yt*` = YouTube.
+- `lib/abRender.ts` — vẽ logo, headline, CTA, badge Google Play lên ảnh nền AI Banner (canvas, chạy trong trình duyệt).
+  Trang Banner + Ad Copy và bộ lệnh chat dùng chung file này.
+- `chat/studio.mjs` — bộ lệnh để Claude Code gen banner, tạo ad template và đẩy lên MKT ngay trong chat, không mở web:
+  bật server Next cục bộ, gọi đúng các route ở trên, vẽ chữ bằng `lib/abRender.ts` trong Chromium không giao diện.
+  Quy trình cho Claude ở `.claude/skills/ads-chat/SKILL.md`. Khoá đọc từ biến môi trường của Environment Claude Code
+  (`OPENAI_API_KEY`, `MKT_CONNECT_CODE`), không phải Vercel.
 - `lib/adFormats.ts` — 3 tỉ lệ, 20 slot, 7 góc nhìn, `planGenSize()` tính size hợp lệ.
 - `lib/abHistory.ts` — IndexedDB lưu lịch sử gen.
 - `lib/googleAdsClient.ts` — gọi Google Ads API.
