@@ -5,6 +5,7 @@ không bằng lời. Mọi con số "đã dùng" lấy từ tab `UsageLog` của
 
 ## Cách đọc bảng
 
+- **Một lần** = một dòng trong `UsageLog` (ví dụ một lượt push 10 video của Outro Studio).
 - **Phút làm tay:** thời gian một lần làm việc đó khi chưa có tool. **Ô `⟨điền⟩` là số bạn cần tự đo một lần**
   (bấm giờ một lần làm tay, hoặc lấy số designer/UA hay báo). Không có số này thì không tính được thời gian tiết kiệm.
 - **Phút còn lại:** thời gian người vẫn phải bỏ ra khi dùng tool (dán link, duyệt, nhập tag), không tính lúc máy chạy.
@@ -15,21 +16,20 @@ không bằng lời. Mọi con số "đã dùng" lấy từ tab `UsageLog` của
 
 | # | Đầu việc | Tần suất | Phút làm tay / lần | Phút còn lại / lần | % tự động | Công cụ | Log (`Công cụ` / `Hành động`) |
 |---|---|---|---|---|---|---|---|
-| 1 | Làm lại outro cho 1 loạt video ads (cắt outro, cắt đoạn hướng dẫn, 9:16, logo, end card mới) | Hằng ngày | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Outro Studio | `Outro Studio` / `Push video lên MKT` (cột Số ảnh = số video) |
-| 2 | Đưa loạt video lên MKT kèm tag, angle, thumbnail, thời lượng | Hằng ngày | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Outro Studio | như trên |
-| 3 | Làm bộ banner App campaign 20 ảnh, 3 tỉ lệ, cho 1 app / 1 thị trường | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adbanner` | `Banner + Ad Copy` hoặc `Chat Claude Code` / `Gen ảnh duyệt`, `Gen bộ ảnh`, `Gen lại ảnh` |
-| 4 | Làm bản banner cho thị trường khác | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adbanner` | `… / Localize`, `Localize lại` |
-| 5 | Viết ad copy và localize | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Ad Copy Studio, `@adtemp` | `Ad Copy Studio` / `Gen ad copy` |
-| 6 | Tạo ad template trên MKT đúng tên Google++ | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adtemp`, `@adbanner` | `… / Tạo ad template`, `Tạo ad template theo thị trường`; `Claude connector` |
-| 7 | Upload bộ banner lên MKT kèm tag | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adbanner` | `… / Đẩy lên MKT`, `MKT System / Upload creative` |
-| 8 | Ghép creative với ad template trên MKT | Mỗi đợt | ⟨điền⟩ | 0 | **100% (đã bỏ hẳn, v5.2)** | Đặt tên chuẩn Google++ | Không cần log: bước không còn tồn tại |
-| 9 | Đọc report, quyết budget/tROAS cho từng camp | Hằng ngày | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Phân tích Camp | `Phân tích Camp` / `Phân tích camp` |
-| 10 | Tạo App campaign mới | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Launch Camp | `Launch Camp` / `Tạo campaign` (có log từ v7.2) |
-| 11 | Up video YouTube unlisted lấy link chạy ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | YouTube Upload | `YouTube Upload` / `Up video unlisted` (có log từ v7.2) |
-| 12 | Ra ảnh tĩnh nhiều kích thước từ video ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Gen Banner | `Gen Banner` / `Gen ảnh từ video` (có log từ v7.2) |
-| 13 | ⟨đầu việc lặp lại khác chưa có tool⟩ | | | | 0% | chưa có | |
+| 1 | Làm lại outro cho 1 loạt video ads (cắt outro, cắt đoạn hướng dẫn, 9:16, logo, end card mới) và đưa lên MKT kèm tag, angle, thumbnail, thời lượng | Hằng ngày | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Outro Studio | `Outro Studio` / `Push video lên MKT` (cột Số ảnh = số video) |
+| 2 | Làm bộ banner App campaign 20 ảnh, 3 tỉ lệ, cho 1 app / 1 thị trường | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adbanner` | `Banner + Ad Copy` hoặc `Chat Claude Code` / `Gen ảnh duyệt`, `Gen bộ ảnh`, `Gen lại ảnh` |
+| 3 | Làm bản banner cho thị trường khác | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adbanner` | `… / Localize`, `Localize lại` |
+| 4 | Viết ad copy và localize | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Ad Copy Studio, `@adtemp` | `Ad Copy Studio` / `Gen ad copy` |
+| 5 | Tạo ad template trên MKT đúng tên Google++ | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adtemp`, `@adbanner` | `… / Tạo ad template`, `Tạo ad template theo thị trường`; `Claude connector` |
+| 6 | Upload bộ banner lên MKT kèm tag | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adbanner` | `… / Đẩy lên MKT`, `MKT System / Upload creative` |
+| 7 | Ghép creative với ad template trên MKT | Mỗi đợt | ⟨điền⟩ | 0 | **100% (đã bỏ hẳn, v5.2)** | Đặt tên chuẩn Google++ | Không cần log: bước không còn tồn tại |
+| 8 | Đọc report, quyết budget/tROAS cho từng camp | Hằng ngày | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Phân tích Camp | `Phân tích Camp` / `Phân tích camp` |
+| 9 | Tạo App campaign mới | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Launch Camp | `Launch Camp` / `Tạo campaign` (có log từ v7.2) |
+| 10 | Up video YouTube unlisted lấy link chạy ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | YouTube Upload | `YouTube Upload` / `Up video unlisted` (có log từ v7.2) |
+| 11 | Ra ảnh tĩnh nhiều kích thước từ video ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Gen Banner | `Gen Banner` / `Gen ảnh từ video` (có log từ v7.2) |
+| 12 | ⟨đầu việc lặp lại khác chưa có tool⟩ | | | | 0% | chưa có | |
 
-Dòng 13 trở đi: ghi cả những việc lặp lại **chưa** tự động. Tỉ lệ chung chỉ đúng khi danh mục đủ, kể cả việc chưa làm được.
+Dòng 12 trở đi: ghi cả những việc lặp lại **chưa** tự động. Tỉ lệ chung chỉ đúng khi danh mục đủ, kể cả việc chưa làm được.
 
 ## Tỉ lệ chung
 
@@ -37,7 +37,8 @@ Dòng 13 trở đi: ghi cả những việc lặp lại **chưa** tự động. 
 % tự động chung = Σ (số lần trong tuần × (phút làm tay − phút còn lại)) ÷ Σ (số lần trong tuần × phút làm tay)
 ```
 
-Tính theo tuần, số lần lấy từ `UsageLog`. Mốc của thang đánh giá: 60–70% là mức 3, 70–80% và không gãy khi dữ liệu
+Tính theo tuần, số lần lấy từ `UsageLog`. Tab **`DanhMuc`** trong sheet hệ thống đã có sẵn bảng này với công thức tự
+đếm số lần và số ảnh/video 7 ngày gần nhất từ `UsageLog`; chỉ cần điền hai cột phút, % tự động và phút tiết kiệm tự tính. Mốc của thang đánh giá: 60–70% là mức 3, 70–80% và không gãy khi dữ liệu
 bất thường là mức 4, trên 80% và đã bỏ hẳn một số đầu việc là mức 5.
 
 ## Số liệu đã có (UsageLog, 12–18/11/2026)
