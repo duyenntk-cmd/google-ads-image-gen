@@ -85,6 +85,11 @@ Route tiêu tiền thật hoặc đọc doanh thu gọi `requireCapability(...)`
 Model nhận WIDTHxHEIGHT tuỳ ý nhưng phải: mỗi cạnh chia hết 16, tỉ lệ trong khoảng
 1:3–3:1, cạnh ≤3840px, tổng pixel từ 655.360 đến 8.294.400. `planGenSize()` lo việc này.
 
+## Quy tắc nghiệp vụ
+
+Mỗi quy tắc có một nguồn duy nhất trong code; danh sách, tầng, chỗ nhắc lại và lịch sử đổi ở `docs/quy-tac.md`.
+Đổi một quy tắc thì sửa nguồn, sửa các chỗ nhắc lại, và thêm một dòng vào "Lịch sử đổi quy tắc" của file đó.
+
 ## Quy ước khi sửa code
 
 - Đây là Next.js bản mới, API có thể khác bản cũ: đọc `node_modules/next/dist/docs/`

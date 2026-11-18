@@ -19,6 +19,7 @@ Version hiện tại nằm trong `package.json` và ở cuối sidebar của web
 | File | Nội dung |
 |---|---|
 | [docs/quy-trinh.md](docs/quy-trinh.md) | Quy trình làm tay và quy trình hiện tại: bước nào AI làm, bước nào người làm, bước nào đã bỏ; các điểm duyệt |
+| [docs/quy-tac.md](docs/quy-tac.md) | Sổ quy tắc: mỗi quy tắc nằm ở đâu, ai dùng, đổi thế nào, lịch sử đổi, mâu thuẫn đang chờ quyết |
 | [docs/danh-muc-dau-viec.md](docs/danh-muc-dau-viec.md) | Danh mục đầu việc lặp lại, mức tự động hoá, cách đo thời gian tiết kiệm từ log |
 | [docs/du-lieu-va-bao-mat.md](docs/du-lieu-va-bao-mat.md) | Dữ liệu nào đi đâu, ai đọc được gì, phân quyền, quy trình khi có người nghỉ, lịch sử siết quyền |
 | [skills/google-ads-studio/](skills/google-ads-studio/SKILL.md) | Cách dùng từng công cụ, kiến trúc, API route, lỗi thường gặp |
