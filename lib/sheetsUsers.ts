@@ -1,103 +1,144 @@
-import { createSign, createHash } from "crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { getAccessToken, SPREADSHEET_ID } from "@/lib/sheetsLogger";
+import { parseRole, type Role } from "@/lib/roles";
 
-const SPREADSHEET_ID = "17KwfmFYVT9DuJIC4o5aRGzGRwKkkipGBXIEl011FONs";
+/**
+ * Accounts live in the "Users" tab of the system sheet:
+ *   A Username · B Password · C Name · D Active (no = turned off) · E Role (ua | creative)
+ *
+ * Passwords are stored as scrypt hashes ("scrypt$<salt>$<hash>"). An admin who
+ * creates or resets an account types the password in plain text; the first
+ * successful sign-in replaces it with the hash, so the sheet stops holding
+ * readable passwords.
+ */
 const USERS_SHEET = "Users";
-
-async function getAccessToken(): Promise<string> {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
-  const sa = JSON.parse(raw);
-  const now = Math.floor(Date.now() / 1000);
-  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({
-    iss: sa.client_email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  })).toString("base64url");
-  const sign = createSign("RSA-SHA256");
-  sign.update(`${header}.${payload}`);
-  const signature = sign.sign(sa.private_key, "base64url");
-  const jwt = `${header}.${payload}.${signature}`;
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }),
-  });
-  const data = await res.json();
-  if (!data.access_token) throw new Error(`Token error: ${JSON.stringify(data)}`);
-  return data.access_token;
-}
+const HEADER = ["Username", "Password", "Name", "Active", "Role"];
+const INTERNAL_DOMAIN = "@ads-gen.internal";
 
 export interface SheetUser {
   username: string;
-  password: string; // plaintext stored in sheet, compared with hash
+  password: string; // scrypt hash, or plain text / old SHA-256 until the next sign-in
   name: string;
   active: boolean;
+  role: Role;
+  row: number; // sheet row, for the hash upgrade
 }
 
 export async function getUsersFromSheet(): Promise<SheetUser[]> {
   const token = await getAccessToken();
+  const auth = { Authorization: `Bearer ${token}` };
 
-  // Ensure header row exists
+  // Header row: create it on an empty tab, add the Role column to an older one.
   const checkRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A1:D1`,
-    { headers: { Authorization: `Bearer ${token}` } }
+    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A1:E1`,
+    { headers: auth },
   );
-  const checkData = await checkRes.json();
-  const hasHeader = checkData.values && checkData.values.length > 0;
-
-  if (!hasHeader) {
+  if (!checkRes.ok) throw new Error(`Không đọc được tab ${USERS_SHEET}: HTTP ${checkRes.status}`);
+  const head = ((await checkRes.json()).values?.[0] || []) as string[];
+  if (!head.length || !head[4]) {
+    const range = head.length ? "E1" : "A1:E1";
     await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A1:D1?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!${range}?valueInputOption=RAW`,
       {
         method: "PUT",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ values: [["Username", "Password", "Name", "Active"]] }),
-      }
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ values: [head.length ? ["Role"] : HEADER] }),
+      },
     );
-    return [];
+    if (!head.length) return [];
   }
 
   const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A2:D1000`,
-    { headers: { Authorization: `Bearer ${token}` } }
+    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A2:E2000`,
+    { headers: auth },
   );
+  if (!res.ok) throw new Error(`Không đọc được tab ${USERS_SHEET}: HTTP ${res.status}`);
   const data = await res.json();
   if (!data.values) return [];
 
   return (data.values as string[][])
-    .filter(row => row[0] && row[1])
-    .map(row => ({
+    .map((row, i) => ({ row, n: i + 2 }))
+    .filter(({ row }) => row[0] && row[1])
+    .map(({ row, n }) => ({
       username: (row[0] || "").trim().toLowerCase(),
       password: (row[1] || "").trim(),
       name: (row[2] || "").trim() || row[0],
       active: (row[3] || "yes").trim().toLowerCase() !== "no",
+      role: parseRole(row[4]),
+      row: n,
     }));
 }
 
+/**
+ * The Users-sheet username behind a session or connector identity.
+ * Accounts without an email get "<username>@ads-gen.internal" as their email.
+ */
+export function userIdOf(emailOrName: string | null | undefined): string {
+  const s = String(emailOrName || "").trim().toLowerCase();
+  return s.endsWith(INTERNAL_DOMAIN) ? s.slice(0, -INTERNAL_DOMAIN.length) : s;
+}
+
+/* ───────────────────────── passwords ───────────────────────── */
+
+const SCRYPT_PREFIX = "scrypt$";
+
 export function hashPassword(password: string): string {
-  return createHash("sha256").update(password + "ads-gen-salt-2024").digest("hex");
+  const salt = randomBytes(16);
+  const hash = scryptSync(password, salt, 32);
+  return `${SCRYPT_PREFIX}${salt.toString("base64url")}$${hash.toString("base64url")}`;
+}
+
+const sha = (s: string) => createHash("sha256").update(s).digest();
+const sameText = (a: string, b: string) => timingSafeEqual(sha(a), sha(b));
+/** The hash format used before v7.2 (one fixed salt for everyone). Only read, never written. */
+const legacySha = (password: string) => createHash("sha256").update(password + "ads-gen-salt-2024").digest("hex");
+
+function checkPassword(stored: string, password: string): { ok: boolean; legacy: boolean } {
+  if (stored.startsWith(SCRYPT_PREFIX)) {
+    const [salt, hash] = stored.slice(SCRYPT_PREFIX.length).split("$");
+    if (!salt || !hash) return { ok: false, legacy: false };
+    const want = Buffer.from(hash, "base64url");
+    const got = scryptSync(password, Buffer.from(salt, "base64url"), want.length || 32);
+    return { ok: want.length === got.length && timingSafeEqual(want, got), legacy: false };
+  }
+  const ok = sameText(stored, password) || sameText(stored, legacySha(password));
+  return { ok, legacy: ok };
+}
+
+/** Replaces a plain-text or old-format password in the sheet with its scrypt hash. */
+async function upgradePassword(user: SheetUser, password: string) {
+  try {
+    const token = await getAccessToken();
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!B${user.row}?valueInputOption=RAW`,
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ values: [[hashPassword(password)]] }),
+      },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    console.error("password upgrade:", e instanceof Error ? e.message : e);
+  }
 }
 
 export async function verifyCredentials(
   username: string,
   password: string
-): Promise<{ id: string; name: string; email: string } | null> {
+): Promise<{ id: string; name: string; email: string; role: Role } | null> {
   const users = await getUsersFromSheet();
   const user = users.find(u => u.username === username.toLowerCase().trim() && u.active);
   if (!user) return null;
 
-  // Support both plaintext and hashed passwords in sheet
-  const passwordMatches =
-    user.password === password ||
-    user.password === hashPassword(password);
-  if (!passwordMatches) return null;
+  const { ok, legacy } = checkPassword(user.password, password);
+  if (!ok) return null;
+  if (legacy) await upgradePassword(user, password);
 
   return {
     id: user.username,
     name: user.name,
-    email: user.username.includes("@") ? user.username : `${user.username}@ads-gen.internal`,
+    email: user.username.includes("@") ? user.username : `${user.username}${INTERNAL_DOMAIN}`,
+    role: user.role,
   };
 }

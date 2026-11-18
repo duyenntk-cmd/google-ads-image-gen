@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSign } from "crypto";
-import { requireSession } from "@/lib/apiAuth";
+import { requireCapability } from "@/lib/apiAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -34,7 +34,7 @@ async function serviceToken(): Promise<{ token: string; email: string }> {
 }
 
 export async function POST(req: NextRequest) {
-  const unauth = await requireSession();
+  const unauth = await requireCapability("camp_report");
   if (unauth) return unauth;
   try {
     const { url } = await req.json();

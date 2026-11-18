@@ -14,7 +14,12 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `GOOGLE_ADS_DEVELOPER_TOKEN` | Google Ads API |
 | `GOOGLE_ADS_MCC_CUSTOMER_ID` | tài khoản MCC |
 | `NEXTAUTH_URL` | URL gốc, dùng dựng redirect URI |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | đọc/ghi Google Sheets: user, log đăng nhập, log sử dụng (`UsageLog`), đọc report Phân tích Camp |
+| `NEXTAUTH_SECRET` | ký phiên đăng nhập và link connector Claude; đổi = đăng xuất tất cả, mọi link connector cũ hết hiệu lực |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | đọc/ghi Google Sheets: user (`Users`), log đăng nhập (`LoginLog`), log sử dụng (`UsageLog`), đọc report Phân tích Camp |
+| `SYSTEM_SHEET_ID` | (nên có) ID sheet hệ thống; bỏ trống thì dùng sheet của team gốc (`lib/sheetsLogger.ts`) |
+| `NEXT_PUBLIC_BASE_URL` | URL gốc cho OAuth YouTube |
+| `SENSORTOWER_API_KEY` | (tuỳ chọn) Competitor Ads |
+| `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` / `KEYCLOAK_ISSUER` | (tuỳ chọn) SSO Keycloak; trang đăng nhập hiện chỉ dùng tài khoản trong sheet |
 | `MKT_SYSTEM_URL` | (tuỳ chọn) thay mẫu link nút "Mở MKT System" (mặc định: trang Creative của `mktpro.aperogroup.ai` lọc theo tag, xem `lib/mktLink.ts`); được chứa `{tag}`, `{from}`, `{to}` |
 
 ## API route
@@ -33,12 +38,23 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `/api/outro/app-info` | Outro Studio: tên app, icon, headline từ link store để tự tạo end card |
 | `/api/outro/tutorial` | Outro Studio: GPT-4o-mini chấm từng khung (ảnh nhỏ) có phải đoạn hướng dẫn quay điện thoại không |
 | `/api/outro/mkt/upload` | Outro Studio: ký các bước multipart (init/presign/complete/abort), thumbnail, tạo creative video trên MKT System |
-| `/api/mcp/[key]` | Connector Claude (MCP, JSON-RPC qua HTTP, không giữ phiên): get_guide, app_info, check_ad_copy, mkt_status, mkt_next_gen, mkt_push_ad_templates, banner_link. Khoá trong URL (`lib/mcpKey.ts`), proxy bỏ qua đăng nhập web |
+| `/api/mcp/[key]` | Connector Claude (MCP, JSON-RPC qua HTTP, không giữ phiên): get_guide, app_info, check_ad_copy, mkt_status, mkt_next_gen, mkt_push_ad_templates, log_usage, banner_link. Khoá trong URL (`lib/mcpKey.ts`), proxy bỏ qua đăng nhập web; người bị tắt trong tab `Users` thì khoá ngừng chạy (`lib/userAccess.ts`) |
 | `/api/mcp-key` | Link connector của người đang đăng nhập (hiện ở trang MKT System) |
 | `/api/usage-log` | ghi 1 dòng log sử dụng vào tab `UsageLog` (email lấy từ phiên đăng nhập) |
 
 Mọi route đều gọi `requireSession()` ở dòng đầu. Ngoại lệ duy nhất là callback OAuth,
 vì Google phải redirect vào được — nó nằm dưới `/api/auth/` nên được proxy bỏ qua.
+Route tiêu tiền thật hoặc đọc doanh thu gọi `requireCapability(...)` thay cho `requireSession()`:
+`/api/google-ads/*` (`launch_camp`), `/api/camp-sheets` (`camp_report`). Luật vai trò ở `lib/roles.ts`.
+
+## Tài khoản, phiên đăng nhập, phân quyền
+
+- Tab `Users` của sheet hệ thống: `Username | Password | Name | Active | Role`. Mật khẩu là mã băm scrypt
+  (`scrypt$<salt>$<hash>`); ô chữ thường được tự thay bằng mã băm ở lần đăng nhập đúng kế tiếp (`lib/sheetsUsers.ts`).
+- Phiên là JWT của NextAuth. Callback `jwt` (`lib/authOptions.ts`) đọc lại tab `Users` mỗi 5 phút
+  (`lib/userAccess.ts`, có cache): người bị tắt thì token mang cờ `revoked`, session không còn `user`, mọi API trả 401,
+  `proxy.ts` chuyển về `/login`, trang tự đăng xuất. Role cũng được cập nhật theo cách này.
+- Phân loại dữ liệu, quy trình khi có người nghỉ, lịch sử siết quyền: `docs/du-lieu-va-bao-mat.md`.
 
 ## File quan trọng
 
@@ -54,6 +70,7 @@ vì Google phải redirect vào được — nó nằm dưới `/api/auth/` nên
 - `lib/abHistory.ts` — IndexedDB lưu lịch sử gen.
 - `lib/googleAdsClient.ts` — gọi Google Ads API.
 - `proxy.ts` — cổng đăng nhập (Next 16 đổi tên `middleware.ts` thành `proxy.ts`).
+- `lib/roles.ts`, `lib/userAccess.ts`, `lib/sheetsUsers.ts`, `lib/authOptions.ts` — vai trò, tra tab `Users`, mật khẩu, phiên.
 
 ## Ràng buộc kích thước của model tạo ảnh
 

@@ -77,6 +77,14 @@ trước khi gửi. Đừng bỏ lớp kiểm tra này.
   tag đầu tiên. Mẫu link nằm ở `lib/mktLink.ts`; env `MKT_SYSTEM_URL` trên Vercel (tuỳ chọn) thay được mẫu này,
   có thể chứa `{tag}`, `{from}`, `{to}`.
 
+## Tài khoản và phân quyền
+
+Tài khoản nằm ở tab `Users` của sheet hệ thống (`Username | Password | Name | Active | Role`), đổi là có hiệu lực
+trong 5 phút. Active = `no` thì phiên web và link connector của người đó ngừng chạy. Role `creative` không dùng được
+Launch Camp và Phân tích Camp; để trống hoặc `ua` là đủ quyền. Mật khẩu tự chuyển sang mã băm ở lần đăng nhập đầu.
+Người dùng báo "không thấy Launch Camp / Phân tích Camp" hoặc lỗi 403 "không có quyền": kiểm tra cột Role.
+Chi tiết: `docs/du-lieu-va-bao-mat.md`. Quy trình và các điểm duyệt: `docs/quy-trinh.md`.
+
 ## Version và log sử dụng
 
 - Mỗi version ghi trong `CHANGELOG.md` (mục tiêu, ngày, thay đổi) và có git tag cùng tên (`v5.3`…).
@@ -84,8 +92,9 @@ trước khi gửi. Đừng bỏ lớp kiểm tra này.
   rồi gắn tag.
 - Log sử dụng: mỗi việc chạy xong ghi 1 dòng vào tab `UsageLog` của sheet hệ thống (cùng file với log đăng nhập).
   Cột gồm: thời gian, ngày, email, công cụ, hành động, app, thị trường, số ảnh, số template, thời gian chạy,
-  kết quả (ok/partial/error), ghi chú, version. Gọi qua `logUsage()` ở `app/page.tsx`. Lỗi ghi log không bao giờ
-  làm hỏng công cụ.
+  kết quả (ok/partial/error), ghi chú, version. Gọi qua `logUsage()` ở `app/page.tsx`; bộ lệnh chat ghi qua tool
+  `log_usage` của connector. Lỗi ghi log không bao giờ làm hỏng công cụ. Danh mục đầu việc và cách tính mức tự động
+  từ log: `docs/danh-muc-dau-viec.md`.
 
 ## Ba điều hay bị hỏi nhất
 

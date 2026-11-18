@@ -1,4 +1,4 @@
-import { getAccessToken, SPREADSHEET_ID } from "@/lib/sheetsLogger";
+import { getAccessToken, ensureTab, SPREADSHEET_ID } from "@/lib/sheetsLogger";
 
 /**
  * Usage log: one row per finished action, in the "UsageLog" tab of the same
@@ -26,31 +26,9 @@ export interface UsageEvent {
 
 const clip = (v: unknown, n = 300) => String(v ?? "").slice(0, n);
 
-async function ensureTab(token: string) {
-  const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  const head = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USAGE_TAB}!A1:M1`,
-    { headers: auth },
-  );
-  if (head.ok) {
-    const d = await head.json();
-    if (d.values?.length) return;
-  } else {
-    // Missing tab answers 400; create it.
-    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}:batchUpdate`, {
-      method: "POST", headers: auth,
-      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: USAGE_TAB } } }] }),
-    });
-  }
-  await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USAGE_TAB}!A1:M1?valueInputOption=RAW`,
-    { method: "PUT", headers: auth, body: JSON.stringify({ values: [USAGE_HEADER] }) },
-  );
-}
-
 export async function logUsage(email: string, ev: UsageEvent, version: string) {
   const token = await getAccessToken();
-  await ensureTab(token);
+  await ensureTab(token, USAGE_TAB, USAGE_HEADER);
   const now = new Date();
   const time = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
   const day = now.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });

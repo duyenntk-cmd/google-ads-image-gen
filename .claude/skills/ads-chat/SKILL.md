@@ -58,6 +58,11 @@ cùng ảnh, chỉ dịch chữ. Thiếu thị trường thì hỏi.
    cập nhật, không tạo trùng.
 9. Báo kết quả: số creative mỗi thị trường, template tạo/cập nhật, link `open` để mở đúng bộ trên MKT.
 
+**Log sử dụng:** `gen`, `localize`, `mkt push-templates` và `mkt push-creatives` tự ghi một dòng vào tab `UsageLog`
+(công cụ "Chat Claude Code", đúng tên người dùng) qua link connector `GAIC_CONNECTOR_URL`. Chưa có biến này hoặc web
+không vào được thì dòng log nằm tạm ở `chat/runs/usage-pending.jsonl` và được gửi kèm lần ghi thành công sau.
+Lệnh in "! chưa ghi được log sử dụng" thì nhắc người dùng một câu ở cuối, không dừng việc.
+
 ## Chi phí ảnh (giá OpenAI, mỗi ảnh)
 
 | Chất lượng | Mỗi ảnh |
@@ -72,11 +77,14 @@ Mascot gen mới tính thêm 1 ảnh. Brief, dịch và tìm mascot dùng gpt-4o
 
 - **Khoá OpenAI**: nên đặt ở **Network secrets** (Allowed websites `api.openai.com`, Header `Authorization`,
   Prefix `Bearer`): phiên không bao giờ thấy khoá, proxy tự gắn. Không có mục đó thì đặt biến `OPENAI_API_KEY`.
+- **Biến môi trường `GAIC_CONNECTOR_URL`**: link connector của chính người dùng (web → trang **MKT System** →
+  "Lấy link connector của tôi"). Dùng để ghi log sử dụng đúng tên người làm; thiếu thì việc làm trong chat không được tính.
+  Link này là khoá cá nhân: không dán vào chat, không chia sẻ.
 - **Biến môi trường `MKT_CONNECT_CODE`**: mã `mktmcp_…` lấy ở MKT System > Profile > Kết nối Claude.
   Mã hết hạn sau khoảng 24 giờ: mỗi ngày làm việc phải thay mã mới và mở phiên mới.
 - **Network access**: chọn Full, hoặc Limited và thêm vào Allowed domains:
   `api.openai.com`, `play.google.com`, `play-lh.googleusercontent.com`, `apps.apple.com`, `itunes.apple.com`,
-  `*.mzstatic.com`, `*.aperogroup.ai`, `*.amazonaws.com`.
+  `*.mzstatic.com`, `*.aperogroup.ai`, `*.amazonaws.com`, `google-ads-image-gen.vercel.app` (log sử dụng).
   `doctor` in ra máy chủ backend MKT thật lấy từ mã; nếu máy chủ đó báo bị chặn thì thêm nó vào.
   Đổi Network access có hiệu lực với cả phiên đang chạy sau khoảng 1 phút; đổi biến môi trường thì cần phiên mới.
 

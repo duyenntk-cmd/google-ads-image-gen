@@ -11,6 +11,9 @@
  * Credentials come from the environment, never from the chat:
  *   OPENAI_API_KEY       image + brief generation (or "proxy-injected" network secret)
  *   MKT_CONNECT_CODE     mktmcp_… from MKT System > Profile > Kết nối Claude (24h)
+ *   GAIC_CONNECTOR_URL   the person's own connector link (web > MKT System > "Lấy link
+ *                        connector của tôi"): names who is working and sends usage rows
+ *                        to the team's UsageLog through the deployed web
  *
  * Usage: node chat/studio.mjs <command> [options]   (see `help`)
  */
@@ -92,6 +95,68 @@ function mktCode(opt = {}) {
   return (process.env.MKT_CONNECT_CODE || "").trim();
 }
 
+/* ───────────────────────── who is working, usage log ───────────────────────── */
+
+const connectorUrl = () => (process.env.GAIC_CONNECTOR_URL || "").trim();
+
+/** The web account behind the connector link (its key is "gaic_<username, base64url>.<signature>"). */
+function chatUser() {
+  const m = connectorUrl().match(/\/api\/mcp\/(?:gaic_|gaic%5F)([A-Za-z0-9_-]+)\./i);
+  if (m) {
+    try {
+      const u = Buffer.from(m[1], "base64url").toString("utf8").trim().toLowerCase();
+      if (u) return u;
+    } catch { /* fall through */ }
+  }
+  return "chat";
+}
+const chatEmail = (u = chatUser()) => (u.includes("@") ? u : `${u}@ads-gen.internal`);
+
+const PENDING_LOG = path.join(RUNS_DIR, "usage-pending.jsonl");
+
+/** One tools/call to the DEPLOYED web's connector, through curl so the environment's proxy applies. */
+function callConnector(name, args) {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  const raw = execFileSync("curl", ["-sS", "-m", "20", "-X", "POST", "-H", "content-type: application/json",
+    "-H", "accept: application/json, text/event-stream", "--data-binary", "@-", connectorUrl()],
+  { input: body, stdio: ["pipe", "pipe", "pipe"] }).toString();
+  const data = JSON.parse(raw);
+  if (data.error) throw new Error(data.error.message);
+  if (data.result?.isError) throw new Error(data.result.content?.[0]?.text || "Lỗi tool.");
+  return data.result?.structuredContent;
+}
+
+/**
+ * Same UsageLog as the web (tool "Chat Claude Code"), so work done in chat is
+ * counted. Without GAIC_CONNECTOR_URL, or when the web cannot be reached, the
+ * row waits in chat/runs/usage-pending.jsonl and is sent with the next row
+ * that goes through. Logging never stops the work.
+ */
+async function logUsage(ev) {
+  const row = { tool: "Chat Claude Code", ...ev, duration_sec: Math.round(ev.duration_sec || 0) };
+  if (connectorUrl()) {
+    try {
+      callConnector("log_usage", row);
+      if (fs.existsSync(PENDING_LOG)) {
+        const left = [];
+        for (const line of fs.readFileSync(PENDING_LOG, "utf8").split("\n").filter(Boolean)) {
+          try { const { at, ...r } = JSON.parse(line); callConnector("log_usage", { ...r, note: `${r.note || ""} (chạy lúc ${at})`.trim() }); }
+          catch { left.push(line); }
+        }
+        if (left.length) fs.writeFileSync(PENDING_LOG, left.join("\n") + "\n");
+        else fs.unlinkSync(PENDING_LOG);
+      }
+      return;
+    } catch (e) {
+      console.error(`! chưa ghi được log sử dụng (${String(e.stderr || e.message).trim().slice(0, 120)}), lưu tạm để gửi sau`);
+    }
+  } else {
+    console.error("! chưa có GAIC_CONNECTOR_URL: log sử dụng lưu tạm trong chat/runs/usage-pending.jsonl");
+  }
+  fs.mkdirSync(RUNS_DIR, { recursive: true });
+  fs.appendFileSync(PENDING_LOG, JSON.stringify({ at: new Date().toISOString(), ...row }) + "\n");
+}
+
 /* ───────────────────────── local server ───────────────────────── */
 
 function readState() {
@@ -159,6 +224,9 @@ async function up({ quiet = false } = {}) {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY || "proxy-injected",
       // Node's fetch ignores HTTPS_PROXY unless told; outbound calls must use it here.
       NODE_USE_ENV_PROXY: "1",
+      // The local server never writes to the team's sheet; usage rows go through
+      // the deployed web (logUsage above), so nothing is counted twice.
+      GOOGLE_SERVICE_ACCOUNT_JSON: "",
       NEXT_TELEMETRY_DISABLED: "1",
     },
   });
@@ -187,7 +255,9 @@ function down() {
 
 async function sessionCookie(secret) {
   const { encode } = require("next-auth/jwt");
-  const token = await encode({ token: { name: "chat", email: "chat@localhost", sub: "chat" }, secret, maxAge: 12 * 3600 });
+  const user = chatUser();
+  // checkedAt: fresh token per call, so the server does not look the person up in the Users sheet.
+  const token = await encode({ token: { name: user, email: chatEmail(user), sub: user, provider: "chat", checkedAt: Date.now() }, secret, maxAge: 12 * 3600 });
   return `next-auth.session-token=${token}`;
 }
 
@@ -221,7 +291,7 @@ async function mcpTool(name, args) {
   const st = await up({ quiet: true });
   process.env.NEXTAUTH_SECRET = st.secret; // mcpKey signs with it
   const { mcpKeyFor } = await lib("mcpKey");
-  const r = await fetch(`${BASE}/api/mcp/${encodeURIComponent(mcpKeyFor("chat"))}`, {
+  const r = await fetch(`${BASE}/api/mcp/${encodeURIComponent(mcpKeyFor(chatEmail()))}`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
@@ -298,7 +368,16 @@ async function cmdDoctor(opt) {
       report.mkt = { email: c.email, backend: new URL(c.backendUrl).host, expiresAt: new Date(c.expiresAt).toISOString(), hoursLeft: Math.round((c.expiresAt - Date.now()) / 36e5 * 10) / 10 };
     } catch (e) { report.mkt = `Mã lỗi: ${e.message}`; }
   }
+  if (!connectorUrl()) report.usageLog = "THIẾU GAIC_CONNECTOR_URL: việc làm trong chat không được tính vào log sử dụng";
+  else {
+    try {
+      callConnector("get_guide", {});
+      report.usageLog = `ok (ghi log dưới tên ${chatUser()})`;
+    } catch (e) { report.usageLog = `Link connector lỗi: ${String(e.stderr || e.message).trim().slice(0, 120)}`; }
+  }
+  if (fs.existsSync(PENDING_LOG)) report.usagePending = fs.readFileSync(PENDING_LOG, "utf8").split("\n").filter(Boolean).length;
   const hosts = ["play.google.com", "play-lh.googleusercontent.com", "itunes.apple.com", "is1-ssl.mzstatic.com"];
+  if (connectorUrl()) { try { hosts.push(new URL(connectorUrl()).host); } catch { /* reported above */ } }
   if (report.mkt?.backend) hosts.push(report.mkt.backend);
   report.network = {};
   await Promise.all(hosts.map(async (h) => {
@@ -409,6 +488,12 @@ async function cmdGen(opt) {
     console.error(`  ✓ ${slot.key} (${data.model})`);
     return { key: slot.key, file: path.relative(ROOT, f), model: data.model };
   });
+  const okN = res.filter((r) => r.ok).length;
+  await logUsage({
+    action: opt.slots === "all" ? "Gen bộ ảnh" : opt.slots && opt.slots !== "core" ? "Gen lại ảnh" : "Gen ảnh duyệt",
+    app: app.appName, markets: app.market, images: okN, duration_sec: (Date.now() - t0) / 1000,
+    result: okN === slots.length ? "ok" : okN ? "partial" : "error", note: `${quality} · ${opt.slots || "core"}`,
+  });
   out({
     seconds: Math.round((Date.now() - t0) / 1000),
     ok: res.filter((r) => r.ok).map((r) => r.value),
@@ -444,6 +529,7 @@ async function cmdLocalize(opt) {
   const targets = String(opt.to || "").split(",").map((s) => marketCode(s.trim())).filter(Boolean);
   if (!targets.length) die("Thiếu --to US,TH,…");
   const done = [];
+  const t0 = Date.now();
   for (const mk of targets) {
     if (!MARKETS[mk]) die(`Mã thị trường lạ: ${mk}`);
     const r = await api("POST", "/api/banner-localize", {
@@ -457,6 +543,7 @@ async function cmdLocalize(opt) {
     writeJson(f, { ...src, ...r.copy });
     done.push({ market: mk, file: path.relative(ROOT, f), copy: r.copy });
   }
+  await logUsage({ action: opt.note ? "Localize lại" : "Localize", app: src.app_name || app.appName, markets: targets.join(", "), duration_sec: (Date.now() - t0) / 1000, note: opt.note || "" });
   out(done);
 }
 
@@ -551,7 +638,17 @@ async function cmdMkt(sub, opt) {
     case "push-templates": {
       const t = readJson(path.resolve(opt.file || die("Thiếu --file templates.json")));
       if (!opt.gen) die("Thiếu --gen (lấy từ mkt next-gen).");
-      return out(await mcpTool("mkt_push_ad_templates", { mkt_code: code, gen: Number(opt.gen), app_name: opt.app || "", templates: t.templates || t }));
+      const t0 = Date.now();
+      const tpls = t.templates || t;
+      const res = await mcpTool("mkt_push_ad_templates", { mkt_code: code, gen: Number(opt.gen), app_name: opt.app || "", templates: tpls });
+      const okN = (res?.results || []).filter((r) => r.action !== "error").length;
+      if (res?.pushed !== undefined) {
+        await logUsage({
+          action: "Tạo ad template", app: opt.app || "", markets: tpls.map((x) => x.market).join(", "), templates: okN,
+          duration_sec: (Date.now() - t0) / 1000, result: okN && okN === tpls.length ? "ok" : okN ? "partial" : "error", note: `${res.date || ""} Gen${opt.gen}`,
+        });
+      }
+      return out(res);
     }
     case "push-creatives":
       return pushCreatives(opt);
@@ -572,6 +669,7 @@ async function pushCreatives(opt) {
   const folder = path.join(dir, "final", set);
   if (!fs.existsSync(folder)) die(`Chưa có final/${set}.`);
   const files = fs.readdirSync(folder).filter((f) => f.endsWith(".png")).sort();
+  const t0 = Date.now();
 
   // Same name, tags and thumbnail as the web's push (cbPushAll), so a batch
   // from the chat is indistinguishable from one pushed on the Banner page.
@@ -607,13 +705,17 @@ async function pushCreatives(opt) {
     open: fillMktLink(process.env.MKT_SYSTEM_URL || MKT_CREATIVE_URL, tags[0]),
   };
   writeJson(path.join(dir, `push-${set}.json`), { at: new Date().toISOString(), ...report });
+  await logUsage({
+    action: "Đẩy lên MKT", app: app.appName, markets: market, images: ok.length, duration_sec: (Date.now() - t0) / 1000,
+    result: failed.length || res.errors?.length ? "partial" : "ok", note: tags[0],
+  });
   out(report);
 }
 
 /* ───────────────────────── main ───────────────────────── */
 
 const HELP = `node chat/studio.mjs <lệnh>
-  doctor                                   kiểm tra khoá, mã MKT, mạng
+  doctor                                   kiểm tra khoá, mã MKT, link connector (log sử dụng), mạng
   guide                                    luật viết ad copy + đặt tên Google++ (giống @adtemp)
   up | down                                bật / tắt server cục bộ (lệnh khác tự bật)
   store <link store> --market VN [--lang Vietnamese] [--run dir]

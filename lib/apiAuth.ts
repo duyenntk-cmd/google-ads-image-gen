@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth/next";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/authOptions";
+import { can, CAPABILITY_LABEL, type Capability } from "@/lib/roles";
 
 /**
  * Per-route auth check, layered behind proxy.ts.
@@ -31,5 +32,27 @@ export async function requireSession(): Promise<NextResponse | null> {
   return NextResponse.json(
     { success: false, error: "Chưa đăng nhập. Vui lòng đăng nhập lại." },
     { status: 401 },
+  );
+}
+
+/**
+ * requireSession plus a role check (Role column of the Users sheet, see lib/roles.ts).
+ * Use it instead of requireSession on routes that spend real budget or read revenue.
+ *
+ * @returns 401 when unauthenticated, 403 when the role lacks the capability, or null to continue.
+ */
+export async function requireCapability(cap: Capability): Promise<NextResponse | null> {
+  let role: string | undefined;
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) return requireSession();
+    role = session.role;
+  } catch {
+    return requireSession();
+  }
+  if (can(role, cap)) return null;
+  return NextResponse.json(
+    { success: false, error: `Tài khoản của bạn không có quyền dùng ${CAPABILITY_LABEL[cap]}. Nhờ admin đổi cột Role trong sheet Users.` },
+    { status: 403 },
   );
 }

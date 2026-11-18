@@ -5,12 +5,43 @@ Mỗi version ghi **mục tiêu**, **thời gian** và **thay đổi chính**. V
 - **Số lớn** (v4 → v5): đổi cách làm việc của cả quy trình, thêm một công cụ mới, hoặc gộp công cụ.
 - **Số nhỏ** (v5.1 → v5.2): sửa, cải tiến trong cùng quy trình.
 
-Mỗi version có một git tag cùng tên (`v5.2`…). Muốn mở lại một version cũ, có 2 cách:
+Mỗi version có một git tag cùng tên (`v1.0` … `v7.1`), gắn lên commit cuối của version đó trên `main`.
+Từ v1.0 tới v5.2, tag được gắn lại sau (ngày 18/11/2026) theo ngày trong log commit, vì lúc đó chưa có quy ước version.
 
-- **Xem code:** `git checkout v4.0`.
+Muốn mở lại một version cũ, có 2 cách:
+
+- **Xem code:** `git fetch --tags` rồi `git checkout v4.0`. Danh sách tag: `git tag --list 'v*'`.
 - **Chạy lại trên web:** vào Vercel → Deployments, chọn bản deploy của commit có tag đó, bấm **Promote to Production**.
 
+Ra version mới: tăng `version` trong `package.json`, viết mục ở đầu file này, merge vào `main`, rồi gắn tag lên đúng
+commit đã merge (PR được squash nên commit trên nhánh làm việc không phải commit trên `main`):
+
+```bash
+git fetch origin main && git tag v7.2 origin/main && git push origin v7.2
+```
+
 Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log sử dụng (Google Sheet, tab `UsageLog`) cũng ghi version.
+
+---
+
+## v7.2 — 2026-11-18 · Siết quyền, log đủ, hướng dẫn dựng lại
+
+**Mục tiêu:** đạt các tiêu chí kiểm soát, đóng gói và dùng thật: tắt người là thu hồi ngay, có phân quyền, mọi việc
+làm bằng tool đều có log, người khác tự dựng lại được.
+
+- Mật khẩu trong tab `Users` lưu bằng mã băm scrypt. Mật khẩu chữ thường hoặc dạng cũ tự chuyển ở lần đăng nhập kế
+  tiếp; admin tạo hoặc đặt lại mật khẩu vẫn gõ chữ thường như trước.
+- Log đăng nhập ghi vào tab `LoginLog` (tự tạo; tab `Sheet1` cũ không còn nên trước đây log bị mất), ghi cả lần đăng
+  nhập thất bại, ghi kiểu RAW.
+- Tắt người (Active = `no` hoặc xoá dòng) thì phiên web đang mở bị đăng xuất trong vòng 5 phút, không phải chờ 30 ngày.
+- Phân quyền bằng cột Role: `creative` không dùng được Launch Camp và Phân tích Camp (API trả 403, sidebar ẩn).
+- Connector Claude: so đúng username với tài khoản không có email; khi đọc tab `Users` lỗi thì dùng bản gần nhất.
+- Log sử dụng thêm Launch Camp, YouTube Upload, Gen Banner. Bộ lệnh chat ghi log đúng tên người qua link connector
+  (`GAIC_CONNECTOR_URL`, tool `log_usage` mới của connector); chưa gửi được thì lưu tạm, gửi kèm lần sau.
+- ID sheet hệ thống đọc từ biến `SYSTEM_SHEET_ID` (mặc định vẫn là sheet hiện tại). README viết lại thành hướng dẫn
+  dựng lại từ đầu, thêm `.env.example`.
+- Tài liệu mới trong `docs/`: quy trình trước/sau và các điểm duyệt, danh mục đầu việc lặp lại, dữ liệu và bảo mật.
+- Gắn git tag `v1.0` … `v7.1` cho các version cũ.
 
 ---
 
