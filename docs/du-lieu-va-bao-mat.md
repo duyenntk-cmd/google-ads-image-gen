@@ -19,6 +19,7 @@ Ba câu hỏi file này trả lời: dữ liệu nào được đưa ra công c�
 | Creative direction, brief, ảnh banner | Nội bộ | OpenAI (để gen ảnh); MKT System khi đẩy | IndexedDB của trình duyệt người dùng; thư mục `chat/runs/` (không commit) |
 | Video ads | Nội bộ | Khung ảnh nhỏ 288px gửi OpenAI để tìm đoạn hướng dẫn; video lên S3 của MKT System | Dựng trong trình duyệt, không qua server |
 | Ad copy | Nội bộ | Anthropic / Claude (viết, localize); MKT System | MKT System |
+| Lời người sửa (vòng học) và bài học đã duyệt | Nội bộ | Lời sửa gửi OpenAI (gpt-4o-mini) khi bấm "Tìm bài học mới"; bài học đã duyệt đi vào prompt gen ảnh, brief, localize, ad copy | Tab `Feedback`, `BaiHoc` của sheet hệ thống |
 | Report Google Ads, est ROAS, doanh thu (Phân tích Camp) | Nhạy cảm | **Không gửi cho AI.** Đọc bằng service account, xử lý bằng luật trong `lib/campDoctor.ts` | Google Sheet của người dùng; lịch sử 14 ngày trong trình duyệt |
 | Danh sách tài khoản, mật khẩu | Bí mật | Không | Tab `Users` của sheet hệ thống. Mật khẩu là mã băm scrypt từ v7.2 |
 | Log đăng nhập (email, IP, user agent), log sử dụng | Nội bộ | Không | Tab `LoginLog`, `UsageLog` của sheet hệ thống |
@@ -39,8 +40,8 @@ Quyền nằm ở cột **Role** (cột E) của tab `Users`, đổi trong sheet
 
 | Role | Dùng được | Không dùng được | Vì sao |
 |---|---|---|---|
-| `ua` hoặc để trống | Mọi công cụ | | |
-| `creative` | Gen Banner, Banner + Ad Copy, Ad Copy Studio, Outro Studio, MKT System, YouTube Upload | Launch Camp, Phân tích Camp | Launch Camp tạo campaign thật (tiêu tiền); Phân tích Camp đọc doanh thu, ROAS |
+| `ua` hoặc để trống | Mọi công cụ, duyệt bài học | | |
+| `creative` | Gen Banner, Banner + Ad Copy, Ad Copy Studio, Outro Studio, MKT System, YouTube Upload, xem trang Bài học | Launch Camp, Phân tích Camp, duyệt bài học | Launch Camp tạo campaign thật (tiêu tiền); Phân tích Camp đọc doanh thu, ROAS; bài học đã duyệt đổi prompt của cả team |
 
 Chặn ở hai lớp: API trả 403 (`requireCapability` trong `lib/apiAuth.ts`), sidebar ẩn công cụ không có quyền.
 Luật nằm ở `lib/roles.ts`.

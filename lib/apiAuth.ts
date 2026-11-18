@@ -52,7 +52,7 @@ export async function requireCapability(cap: Capability): Promise<NextResponse |
   }
   if (can(role, cap)) return null;
   return NextResponse.json(
-    { success: false, error: `Tài khoản của bạn không có quyền dùng ${CAPABILITY_LABEL[cap]}. Nhờ admin đổi cột Role trong sheet Users.` },
+    { success: false, error: `Tài khoản của bạn không có quyền ${CAPABILITY_LABEL[cap]}. Nhờ admin đổi cột Role trong sheet Users.` },
     { status: 403 },
   );
 }

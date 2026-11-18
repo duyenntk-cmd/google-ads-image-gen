@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { requireSession } from "@/lib/apiAuth";
+import { lessonsBlock } from "@/lib/learning";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -32,6 +33,8 @@ export async function POST(req: NextRequest) {
     }
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    // Lessons a person approved from past re-localizations (lib/learning.ts).
+    const teamRules = await lessonsBlock("chu", "Bài học từ các lần localize lại trước (team đã duyệt):");
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       max_tokens: 300,
@@ -49,6 +52,7 @@ export async function POST(req: NextRequest) {
             `- Giữ nguyên tên app "${appName || ""}" nếu nó xuất hiện — thương hiệu không dịch.\n` +
             `- Viết TOÀN BỘ bằng ${language}, đúng chữ viết của ngôn ngữ đó (VD tiếng Hindi dùng chữ Devanagari). KHÔNG trộn tiếng Anh (không Taglish, Hinglish…) và KHÔNG phiên âm sang chữ Latin. Chỉ tên app và chữ "AI" được giữ nguyên.\n` +
             `- Trả về DUY NHẤT JSON với đúng các key: headline, subheadline, cta_text, tagline.` +
+            (teamRules ? `\n\n${teamRules}` : "") +
             (note ? `\n\nYêu cầu thêm của marketer (làm theo, trong giới hạn các quy tắc trên): ${note}` : ""),
         },
         { role: "user", content: JSON.stringify(copy) },

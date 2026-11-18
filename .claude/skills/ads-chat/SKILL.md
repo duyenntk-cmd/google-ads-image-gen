@@ -35,8 +35,10 @@ cùng ảnh, chỉ dịch chữ. Thiếu thị trường thì hỏi.
 3. **Nháp 3 ảnh:** `gen --run <dir> --slots core` (landscape-1, square-1, portrait-1; tự tìm hoặc gen mascot
    lần đầu), rồi `compose --run <dir> --set <MK>` và `sheet --run <dir> --set <MK>`.
    Gửi `preview-<MK>.png` bằng SendUserFile (display render) và hỏi: **ok** hay cần sửa gì.
-   - Sửa chữ: sửa brief rồi `compose` lại (miễn phí, vài giây).
-   - Sửa ảnh: `gen --slots <key> --prompt "<yêu cầu>"` chỉ cho ảnh cần sửa (tốn tiền ảnh đó).
+   - Sửa chữ: sửa brief rồi `compose` lại (miễn phí, vài giây), và chạy
+     `feedback --run <dir> --reason "<lời người dùng>"` để ghi lần sửa.
+   - Sửa ảnh: `gen --slots <key> --prompt "<yêu cầu>"` chỉ cho ảnh cần sửa (tốn tiền ảnh đó). Đưa **đúng lời
+     người dùng** vào `--prompt`: lệnh tự ghi lần sửa đó cho vòng học.
 4. **Bộ đầy đủ** (khi người dùng muốn 20 ảnh): báo chi phí trước, đợi đồng ý, rồi `gen --slots all`
    và `compose`. 20 ảnh mất khoảng 5–10 phút, vì chạy 2 ảnh cùng lúc.
 5. **Thị trường khác:** `localize --run <dir> --to US,TH` → `brief.US.json`… rồi `compose --set US` và `sheet`
@@ -57,6 +59,11 @@ cùng ảnh, chỉ dịch chữ. Thiếu thị trường thì hỏi.
    Cùng Gen cho cả template lẫn creative thì Google++ mới ghép được. Đẩy lại cùng Gen: template được
    cập nhật, không tạo trùng.
 9. Báo kết quả: số creative mỗi thị trường, template tạo/cập nhật, link `open` để mở đúng bộ trên MKT.
+
+**Vòng học:** mọi lần sửa (gen lại ảnh, localize lại có `--note`, lệnh `feedback`) và lần duyệt nháp lên đủ bộ được
+ghi vào tab `Feedback`. Trên web, trang **🧠 Bài học** gom các lỗi lặp lại thành bài học; bài học được duyệt tự vào
+prompt của web và của chat (server cục bộ lấy bài học qua connector lúc khởi động; bài học mới duyệt thì chạy `down`
+rồi chạy lại lệnh để lấy).
 
 **Log sử dụng:** `gen`, `localize`, `mkt push-templates` và `mkt push-creatives` tự ghi một dòng vào tab `UsageLog`
 (công cụ "Chat Claude Code", đúng tên người dùng) qua link connector `GAIC_CONNECTOR_URL`. Chưa có biến này hoặc web

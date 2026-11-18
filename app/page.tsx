@@ -8,10 +8,12 @@ import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 import CampDoctor from "@/components/CampDoctor";
 import ChangePasswordModal from "@/components/ChangePasswordModal";
+import LessonsPage from "@/components/LessonsPage";
 import { abSaveRun, abListRuns, abLoadArt, abDeleteRun, AbRunMeta } from "@/lib/abHistory";
 import { fillMktLink } from "@/lib/mktLink";
 import { abRenderBanner, abLoadImg } from "@/lib/abRender";
 import { can } from "@/lib/roles";
+import { FEEDBACK_KIND } from "@/lib/learningShared";
 
 interface Brief {
   app_name: string; tagline?: string; headline: string; subheadline: string; cta_text: string;
@@ -346,7 +348,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio"|"mkt"|"campdoctor">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio"|"mkt"|"campdoctor"|"lessons">("home");
 
   // ── AI Banner ──
   type AbStep = "input" | "generating" | "preview";
@@ -528,6 +530,14 @@ export default function Home() {
     const body = JSON.stringify({ ...rest, durationSec: startedAt ? (Date.now() - startedAt) / 1000 : 0 });
     void fetch("/api/usage-log", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
   };
+  /**
+   * One correction or approval for the learning loop (Feedback tab, lib/learning.ts):
+   * what the person asked the AI to change, in their words. Fire and forget.
+   */
+  const logFeedback = (ev: { kind: string; app?: string; markets?: string; slot?: string; reason?: string }) => {
+    void fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "Banner + Ad Copy", ...ev }), keepalive: true }).catch(() => {});
+  };
 
   const handleAbGenerate = async (
     mode: "one"|"core"|"full" = abMode, reuse = false, onlyKeys?: string[], revisionOverride?: string,
@@ -538,6 +548,21 @@ export default function Home() {
     const partial = Boolean(onlyKeys?.length);
     const scoped = revisionOverride !== undefined;
     const revText = (scoped ? revisionOverride! : abRevision).trim();
+    // Learning loop: every rerun of a finished draft is either a correction or the
+    // approval to go full. A retry of images that failed for technical reasons is neither.
+    if (reuse) {
+      const failedRetry = partial && !scoped && onlyKeys!.every(k => abFailed.includes(k));
+      const approving = !partial && mode === "full" && abLastMode !== "full";
+      const kind = approving ? FEEDBACK_KIND.approve
+        : failedRetry ? null
+        : partial ? (scoped ? FEEDBACK_KIND.fixOne : FEEDBACK_KIND.redoOne)
+        : revText ? FEEDBACK_KIND.fixSet : FEEDBACK_KIND.redoSet;
+      if (kind) logFeedback({
+        kind, app: abRun.current?.brief?.app_name || cbAppName(), markets: COUNTRY_ISO[abCountry] || "GLOBAL",
+        slot: partial ? onlyKeys!.join(", ") : "",
+        reason: kind === FEEDBACK_KIND.fixOne || kind === FEEDBACK_KIND.fixSet ? revText : "",
+      });
+    }
     // A partial retry stays on the results screen: switching to the progress
     // view would hide the very images being compared against.
     if (partial) setAbBusyKey(onlyKeys!.length === 1 ? onlyKeys![0] : AB_BUSY_BATCH);
@@ -832,6 +857,9 @@ export default function Home() {
     if (!Object.keys(bases).length) { setAbError("❌ Không còn ảnh gốc để vẽ lại. Gen lại bộ ảnh trước."); return; }
     setAbError("");
     const t0 = Date.now();
+    // "↻ Localize lại" on a finished market is a correction for the learning loop.
+    if (only) logFeedback({ kind: FEEDBACK_KIND.relocalize, app: abBrief.app_name,
+      markets: langs.map(l => COUNTRY_ISO[locCountry(l)] || l).join(", "), reason: note || "" });
     // The ad copy goes into the same languages, in parallel with the redraw.
     const copyDone = cbLocalizeCopy(langs, note);
     cbResetPush(langs);
@@ -2773,6 +2801,7 @@ export default function Home() {
             ["launch",   "🚀", "Launch Camp"],
             ["campdoctor", "📊", "Phân tích Camp"],
             ["mkt",      "🔌", "MKT System"],
+            ["lessons",  "🧠", "Bài học"],
           ] as const).filter(([page]) =>
             // Role column of the Users sheet (lib/roles.ts); the API routes enforce the same rule.
             page === "launch" ? can(session?.role, "launch_camp") : page === "campdoctor" ? can(session?.role, "camp_report") : true,
@@ -2837,7 +2866,7 @@ export default function Home() {
               </div>
               <div className="grid grid-cols-2 gap-1.5">
                 <button onClick={() => setPwOpen(true)}
-                  className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
+                  className="w-full text-[10px] px-1 py-1 rounded-md border transition-colors text-center whitespace-nowrap"
                   style={{borderColor: t.border, color: t.textMuted}}>
                   Đổi mật khẩu
                 </button>
@@ -2864,7 +2893,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "🚀 Banner + Ad Copy" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="campdoctor" ? "📊 Phân tích Camp" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "🚀 Banner + Ad Copy" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="campdoctor" ? "📊 Phân tích Camp" : activePage==="lessons" ? "🧠 Bài học" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -4320,6 +4349,7 @@ export default function Home() {
         {activePage === "studio" && renderStudio(false)}
 
         {activePage === "campdoctor" && <CampDoctor t={t} onMakeCreatives={() => setActivePage("aibanner")} />}
+        {activePage === "lessons" && <LessonsPage t={t} canManage={can(session?.role, "manage_lessons")} />}
 
         {/* COMPETITOR PAGE */}
         {activePage === "competitor" && (

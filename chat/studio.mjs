@@ -127,34 +127,67 @@ function callConnector(name, args) {
 }
 
 /**
- * Same UsageLog as the web (tool "Chat Claude Code"), so work done in chat is
- * counted. Without GAIC_CONNECTOR_URL, or when the web cannot be reached, the
- * row waits in chat/runs/usage-pending.jsonl and is sent with the next row
- * that goes through. Logging never stops the work.
+ * Rows for the team's sheet, sent through the deployed web's connector:
+ *   log_usage     UsageLog, same as the web (tool "Chat Claude Code"), so chat work is counted
+ *   log_feedback  Feedback, what the user asked to fix: the learning loop's input
+ * Without GAIC_CONNECTOR_URL, or when the web cannot be reached, a row waits in
+ * chat/runs/usage-pending.jsonl and is sent with the next one that goes through.
+ * Reporting never stops the work.
  */
-async function logUsage(ev) {
-  const row = { tool: "Chat Claude Code", ...ev, duration_sec: Math.round(ev.duration_sec || 0) };
+function report(tool, args) {
   if (connectorUrl()) {
     try {
-      callConnector("log_usage", row);
+      callConnector(tool, args);
       if (fs.existsSync(PENDING_LOG)) {
         const left = [];
         for (const line of fs.readFileSync(PENDING_LOG, "utf8").split("\n").filter(Boolean)) {
-          try { const { at, ...r } = JSON.parse(line); callConnector("log_usage", { ...r, note: `${r.note || ""} (chạy lúc ${at})`.trim() }); }
-          catch { left.push(line); }
+          try {
+            // Lines from before log_feedback existed carry no tool: they are usage rows.
+            const { at, tool: t = "log_usage", args: a, ...legacy } = JSON.parse(line);
+            const row = a || legacy;
+            const note = t === "log_usage" ? { note: `${row.note || ""} (chạy lúc ${at})`.trim() } : {};
+            callConnector(t, { ...row, ...note });
+          } catch { left.push(line); }
         }
         if (left.length) fs.writeFileSync(PENDING_LOG, left.join("\n") + "\n");
         else fs.unlinkSync(PENDING_LOG);
       }
       return;
     } catch (e) {
-      console.error(`! chưa ghi được log sử dụng (${String(e.stderr || e.message).trim().slice(0, 120)}), lưu tạm để gửi sau`);
+      console.error(`! chưa ghi được ${tool === "log_usage" ? "log sử dụng" : "lần sửa"} (${String(e.stderr || e.message).trim().slice(0, 120)}), lưu tạm để gửi sau`);
     }
   } else {
-    console.error("! chưa có GAIC_CONNECTOR_URL: log sử dụng lưu tạm trong chat/runs/usage-pending.jsonl");
+    console.error("! chưa có GAIC_CONNECTOR_URL: log lưu tạm trong chat/runs/usage-pending.jsonl");
   }
   fs.mkdirSync(RUNS_DIR, { recursive: true });
-  fs.appendFileSync(PENDING_LOG, JSON.stringify({ at: new Date().toISOString(), ...row }) + "\n");
+  fs.appendFileSync(PENDING_LOG, JSON.stringify({ at: new Date().toISOString(), tool, args }) + "\n");
+}
+
+async function logUsage(ev) {
+  report("log_usage", { tool: "Chat Claude Code", ...ev, duration_sec: Math.round(ev.duration_sec || 0) });
+}
+
+/** Kinds as in lib/learningShared.ts (FEEDBACK_KIND). */
+const FEEDBACK = {
+  fixOne: "Sửa 1 ảnh", fixSet: "Sửa cả bộ", redoOne: "Gen lại 1 ảnh (không ghi lý do)",
+  redoSet: "Gen lại cả bộ (không ghi lý do)", relocalize: "Localize lại", approve: "Duyệt bản nháp",
+};
+async function logFeedback(ev) {
+  report("log_feedback", { tool: "Chat Claude Code", ...ev });
+}
+
+/**
+ * Lessons the team approved (web → Bài học), passed to the local server so chat
+ * generations follow them like the web does. The local server cannot read the sheet.
+ */
+function teamLessons() {
+  if (!connectorUrl()) return "";
+  try {
+    return JSON.stringify(callConnector("get_lessons", {}) || {});
+  } catch (e) {
+    console.error(`! chưa lấy được bài học đã duyệt (${String(e.stderr || e.message).trim().slice(0, 120)}); gen tiếp không kèm bài học`);
+    return "";
+  }
 }
 
 /* ───────────────────────── local server ───────────────────────── */
@@ -225,8 +258,10 @@ async function up({ quiet = false } = {}) {
       // Node's fetch ignores HTTPS_PROXY unless told; outbound calls must use it here.
       NODE_USE_ENV_PROXY: "1",
       // The local server never writes to the team's sheet; usage rows go through
-      // the deployed web (logUsage above), so nothing is counted twice.
+      // the deployed web (report above), so nothing is counted twice.
       GOOGLE_SERVICE_ACCOUNT_JSON: "",
+      // Approved lessons from the learning loop (lib/learning.ts reads this when it has no sheet).
+      TEAM_LESSONS_JSON: teamLessons(),
       NEXT_TELEMETRY_DISABLED: "1",
     },
   });
@@ -465,6 +500,8 @@ async function cmdGen(opt) {
     if (fs.existsSync(m)) characterFile = m;
   }
   const character = characterFile ? fileToDataUrl(characterFile) : undefined;
+  // Images already on disk: this run is a redo, or the approval to go from the draft to the full set.
+  const before = fs.existsSync(path.join(dir, "base")) ? fs.readdirSync(path.join(dir, "base")).filter((f) => f.endsWith(".png")).length : 0;
   const t0 = Date.now();
   console.error(`… gen ${slots.length} ảnh nền (${quality}), 2 ảnh cùng lúc`);
   const res = await pool(slots, Number(opt.concurrency || 2), async (slot) => {
@@ -489,8 +526,20 @@ async function cmdGen(opt) {
     return { key: slot.key, file: path.relative(ROOT, f), model: data.model };
   });
   const okN = res.filter((r) => r.ok).length;
+  // Learning loop: redoing chosen images is a correction (with the user's words in
+  // --prompt); going from the draft to the full set is the approval.
+  const picked = opt.slots && opt.slots !== "core" && opt.slots !== "all";
+  const reason = String(opt.prompt || "").trim();
+  const fb = { app: app.appName, markets: app.market };
+  if (picked) {
+    await logFeedback({ ...fb, kind: reason ? FEEDBACK.fixOne : FEEDBACK.redoOne, slot: slots.map((s) => s.key).join(", "), reason });
+  } else if (before > 0 && opt.slots === "all" && before < slots.length) {
+    await logFeedback({ ...fb, kind: FEEDBACK.approve, reason: "" });
+  } else if (before > 0) {
+    await logFeedback({ ...fb, kind: reason ? FEEDBACK.fixSet : FEEDBACK.redoSet, reason });
+  }
   await logUsage({
-    action: opt.slots === "all" ? "Gen bộ ảnh" : opt.slots && opt.slots !== "core" ? "Gen lại ảnh" : "Gen ảnh duyệt",
+    action: opt.slots === "all" ? "Gen bộ ảnh" : picked ? "Gen lại ảnh" : "Gen ảnh duyệt",
     app: app.appName, markets: app.market, images: okN, duration_sec: (Date.now() - t0) / 1000,
     result: okN === slots.length ? "ok" : okN ? "partial" : "error", note: `${quality} · ${opt.slots || "core"}`,
   });
@@ -543,6 +592,7 @@ async function cmdLocalize(opt) {
     writeJson(f, { ...src, ...r.copy });
     done.push({ market: mk, file: path.relative(ROOT, f), copy: r.copy });
   }
+  if (opt.note) await logFeedback({ kind: FEEDBACK.relocalize, app: src.app_name || app.appName, markets: targets.join(", "), reason: String(opt.note) });
   await logUsage({ action: opt.note ? "Localize lại" : "Localize", app: src.app_name || app.appName, markets: targets.join(", "), duration_sec: (Date.now() - t0) / 1000, note: opt.note || "" });
   out(done);
 }
@@ -712,6 +762,20 @@ async function pushCreatives(opt) {
   out(report);
 }
 
+/**
+ * A correction that did not go through gen/localize, e.g. the user changed the
+ * banner text and Claude edited brief.<MK>.json. Logged for the learning loop.
+ */
+async function cmdFeedback(opt) {
+  const dir = runDir(opt);
+  const app = readJson(path.join(dir, "app.json"));
+  const reason = String(opt.reason || "").trim();
+  if (!reason) die('Thiếu --reason "<lời người dùng>".');
+  const slot = typeof opt.slot === "string" ? opt.slot : "";
+  await logFeedback({ app: app.appName, markets: opt.set || app.market, kind: slot ? FEEDBACK.fixOne : FEEDBACK.fixSet, slot, reason });
+  out({ logged: true, kind: slot ? FEEDBACK.fixOne : FEEDBACK.fixSet });
+}
+
 /* ───────────────────────── main ───────────────────────── */
 
 const HELP = `node chat/studio.mjs <lệnh>
@@ -724,6 +788,7 @@ const HELP = `node chat/studio.mjs <lệnh>
   localize --run dir [--from VN] --to US,TH [--note "ghi chú dịch"]
   compose --run dir --set VN [--brief brief.VN.json] [--slots ..]
   sheet --run dir --set VN                 ảnh xem trước cả bộ
+  feedback --run dir --reason "lời người dùng" [--slot square-2] [--set US]   ghi một lần sửa không qua gen/localize (vd sửa chữ trong brief)
   mkt status | next-gen --markets VN,US | check-copy --file t.json | push-templates --file t.json --gen N
   mkt push-creatives --run dir --set VN --gen N [--market VN] [--angle A01] [--product id]`;
 
@@ -741,6 +806,7 @@ try {
     case "localize": await cmdLocalize(opt); break;
     case "compose": await cmdCompose(opt); break;
     case "sheet": await cmdSheet(opt); break;
+    case "feedback": await cmdFeedback(opt); break;
     case "mkt": await cmdMkt(pos[0], opt); break;
     default: out(HELP);
   }

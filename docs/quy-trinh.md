@@ -88,11 +88,23 @@ tự kiểm tra và tự chặn.
 | Mã MKT hết hạn: dừng và báo lấy mã mới, không thử lại bằng mã cũ | `ConnectCodeExpiredError` |
 | Tài khoản bị tắt hoặc không đủ quyền: chặn ở mọi API route | `requireSession`, `requireCapability` (`lib/apiAuth.ts`) |
 
-## 5. Bước tiếp theo
+## 5. Vòng học: tool tự tốt lên từ các lần người sửa
+
+Mỗi điểm duyệt ở trên vừa chặn lỗi, vừa là dữ liệu để lần sau không mắc lại lỗi đó.
+
+| Bước | Ai | Ở đâu |
+|---|---|---|
+| 1. Ghi lại mỗi lần người sửa (sửa 1 ảnh, sửa cả bộ, gen lại không lý do, localize lại) và mỗi lần duyệt nháp, kèm **lời người sửa** | 🤖 tự động, cả web lẫn chat | Tab `Feedback` của sheet hệ thống |
+| 2. Đọc các lần sửa 60 ngày gần nhất, gom lỗi **lặp lại ít nhất 2 lần** thành bài học, mỗi bài học là một câu lệnh cho đúng bước (ảnh, brief, chữ localize, ad copy) | 🤖 AI, khi bấm **🤖 Tìm bài học mới** | Trang **🧠 Bài học**, tab `BaiHoc` (trạng thái *Chờ duyệt*) |
+| 3. Đọc, sửa câu chữ nếu cần, **Áp dụng** hoặc **Bỏ** | 👤 checkpoint, chỉ role `ua` | Trang **🧠 Bài học** |
+| 4. Bài học *Áp dụng* tự thêm vào prompt của bước tương ứng ở mọi lần chạy sau, trên web và trong chat | 🤖 | `lib/learning.ts` → các route `banner-generate`, `banner-concept`, `banner-localize`, `adcopy`, `get_guide` của connector |
+| 5. Đo **số lần sửa trên 100 ảnh theo từng version**: bài học có làm giảm số lần sửa không; không giảm thì **Ngừng áp dụng** | 🤖 đo, 👤 quyết | Trang **🧠 Bài học**, bảng đầu trang |
+
+AI không tự đổi prompt: mọi thay đổi đi qua bước 3. Lời yêu cầu sửa riêng của một lần (ô "Muốn sửa gì") vẫn được ưu
+tiên hơn bài học chung. Các bài học viết tay từ trước nằm ở `skills/google-ads-studio/references/troubleshooting.md`.
+
+## 6. Bước tiếp theo
 
 - **Chạy theo mục tiêu:** một lệnh như `@adbanner <link> VN auto` tự đi hết các bước. Các điểm duyệt 1–4 thay bằng
   kiểm tra tự động (đúng app, chữ không đè nhân vật, đúng ngôn ngữ, ad copy qua kiểm tra), chỉ dừng hỏi người khi có
   ngoại lệ, như cách Outro Studio đang làm với đoạn hướng dẫn.
-- **Học từ lần duyệt:** ghi lại mỗi lần người gen lại hoặc sửa ảnh kèm lý do, thống kê tỉ lệ duyệt theo version, rồi
-  cập nhật prompt và quy tắc từ đó. Hiện các bài học này đang được ghi tay trong
-  `skills/google-ads-studio/references/troubleshooting.md`.

@@ -87,6 +87,14 @@ thường) vào ô Password. Đổi hoặc đặt lại mật khẩu thì mọi 
 Người dùng báo "không thấy Launch Camp / Phân tích Camp" hoặc lỗi 403 "không có quyền": kiểm tra cột Role.
 Chi tiết: `docs/du-lieu-va-bao-mat.md`. Quy trình và các điểm duyệt: `docs/quy-trinh.md`.
 
+## Vòng học (trang 🧠 Bài học)
+
+Mỗi lần người sửa ảnh / gen lại / localize lại / duyệt nháp được ghi vào tab `Feedback` kèm lời người sửa. Nút
+**🤖 Tìm bài học mới** cho AI gom lỗi lặp lại thành bài học (*Chờ duyệt*); role `ua` duyệt thì bài học tự vào prompt
+của bước tương ứng ở mọi lần chạy sau (web và chat). Bảng đầu trang đo số lần sửa trên 100 ảnh theo version.
+Người dùng hỏi "sao AI vẫn lặp lỗi X": xem bài học về X đã *Áp dụng* chưa; chưa có thì bấm Tìm bài học mới.
+Code: `lib/learning.ts`. Quy trình: `docs/quy-trinh.md` mục 5.
+
 ## Version và log sử dụng
 
 - Mỗi version ghi trong `CHANGELOG.md` (mục tiêu, ngày, thay đổi) và có git tag cùng tên (`v5.3`…).
