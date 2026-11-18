@@ -46,3 +46,8 @@ next-env.d.ts
 
 # MKT report (scripts/mkt-report): local snapshot history
 /.mkt-report-state/
+
+# Khoá, token, credential: chỉ để LOCAL, không bao giờ commit hay upload (luật trong CLAUDE.md).
+# Không có "/" ở đầu nên chặn cả thư mục cùng tên nằm sâu bên trong repo.
+secrets/
+credentials/

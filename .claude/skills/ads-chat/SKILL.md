@@ -24,9 +24,12 @@ cùng ảnh, chỉ dịch chữ. Thiếu thị trường thì hỏi.
 ## Quy trình
 
 0. **`doctor`** trước tiên. Thiếu thứ gì thì dừng và nói rõ người dùng cần làm gì (mục "Thiết lập" bên dưới).
-   **Không bao giờ xin dán khoá OpenAI hay mã MKT vào chat**: chúng là biến môi trường của Environment.
-   Nếu người dùng tự dán mã `mktmcp_…` vào chat: ghi vào file trong scratchpad, dùng `--code-file <file>`,
-   và nhắc họ lần sau đặt `MKT_CONNECT_CODE` trong Environment.
+   **Không bao giờ xin dán khoá OpenAI hay mã MKT vào chat** (luật key trong `CLAUDE.md`): trên cloud chúng là
+   biến môi trường của Environment; chạy trên máy local thì người dùng tự lưu mã vào `secrets/mkt_code.txt` và
+   dùng `--code-file secrets/mkt_code.txt`.
+   Nếu người dùng tự dán mã `mktmcp_…` vào chat: ghi vào `secrets/mkt_code.txt` (local) hoặc file trong
+   scratchpad (cloud), dùng `--code-file <file>`, và nhắc họ mã này coi như đã lộ, lần sau đặt
+   `MKT_CONNECT_CODE` trong Environment hoặc để trong `secrets/`.
 1. **`store <link> --market <chính>`**: in ra thư mục lượt chạy, tên app, nhà phát triển, mô tả.
    Báo lại tên app để người dùng chắc đúng app.
 2. **`concept --run <dir> [--prompt "<góc>"]`** → `brief.<MK>.json` (headline ≤30, subheadline ≤45, CTA ≤12,
