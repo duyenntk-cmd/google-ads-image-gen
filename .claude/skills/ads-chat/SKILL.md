@@ -17,6 +17,7 @@ Lệnh: `node chat/studio.mjs <lệnh>` (chạy `help` để xem đủ tham số
 ```
 @adbanner <link store> <thị trường chính>[, thị trường khác…] [góc: …] [20 ảnh] [chất lượng cao]
 @adtemp   <link store> <thị trường…> [góc: …]        ← chỉ ad template, không banner
+@adbanner <link store> <thị trường…> auto [tối đa $X] [chất lượng] [góc: …]   ← chế độ auto (mục cuối)
 ```
 Thị trường đầu tiên là thị trường chính (gen ảnh theo ngôn ngữ của nó); các thị trường sau dùng
 cùng ảnh, chỉ dịch chữ. Thiếu thị trường thì hỏi.
@@ -35,8 +36,12 @@ cùng ảnh, chỉ dịch chữ. Thiếu thị trường thì hỏi.
 3. **Nháp 3 ảnh:** `gen --run <dir> --slots core` (landscape-1, square-1, portrait-1; tự tìm hoặc gen mascot
    lần đầu), rồi `compose --run <dir> --set <MK>` và `sheet --run <dir> --set <MK>`.
    Gửi `preview-<MK>.png` bằng SendUserFile (display render) và hỏi: **ok** hay cần sửa gì.
-   - Sửa chữ: sửa brief rồi `compose` lại (miễn phí, vài giây).
-   - Sửa ảnh: `gen --slots <key> --prompt "<yêu cầu>"` chỉ cho ảnh cần sửa (tốn tiền ảnh đó).
+   - Sửa chữ: sửa brief rồi `compose` lại (miễn phí, vài giây), và chạy
+     `feedback --run <dir> --reason "<lời người dùng>"` để ghi lần sửa.
+   - Sửa ảnh: `gen --slots <key> --revision "<yêu cầu>"` chỉ cho ảnh cần sửa (tốn tiền ảnh đó). Đưa **đúng lời
+     người dùng** vào `--revision`: lệnh tự ghi lần sửa đó cho vòng học.
+   - Muốn AI soi lỗi trước khi gửi người xem: `qa --run <dir> --set <MK>` (chữ đè mặt/tay/điện thoại, chữ bị cắt,
+     hai nhân vật, tay dị dạng, chữ lạ trong tranh, sai ngôn ngữ; ~$0,003/ảnh).
 4. **Bộ đầy đủ** (khi người dùng muốn 20 ảnh): báo chi phí trước, đợi đồng ý, rồi `gen --slots all`
    và `compose`. 20 ảnh mất khoảng 5–10 phút, vì chạy 2 ảnh cùng lúc.
 5. **Thị trường khác:** `localize --run <dir> --to US,TH` → `brief.US.json`… rồi `compose --set US` và `sheet`
@@ -58,6 +63,16 @@ cùng ảnh, chỉ dịch chữ. Thiếu thị trường thì hỏi.
    cập nhật, không tạo trùng.
 9. Báo kết quả: số creative mỗi thị trường, template tạo/cập nhật, link `open` để mở đúng bộ trên MKT.
 
+**Vòng học:** mọi lần sửa (gen lại ảnh, localize lại có `--note`, lệnh `feedback`) và lần duyệt nháp lên đủ bộ được
+ghi vào tab `Feedback`. Trên web, trang **🧠 Bài học** gom các lỗi lặp lại thành bài học; bài học được duyệt tự vào
+prompt của web và của chat (server cục bộ lấy bài học qua connector lúc khởi động; bài học mới duyệt thì chạy `down`
+rồi chạy lại lệnh để lấy).
+
+**Log sử dụng:** `gen`, `localize`, `mkt push-templates` và `mkt push-creatives` tự ghi một dòng vào tab `UsageLog`
+(công cụ "Chat Claude Code", đúng tên người dùng) qua link connector `GAIC_CONNECTOR_URL`. Chưa có biến này hoặc web
+không vào được thì dòng log nằm tạm ở `chat/runs/usage-pending.jsonl` và được gửi kèm lần ghi thành công sau.
+Lệnh in "! chưa ghi được log sử dụng" thì nhắc người dùng một câu ở cuối, không dừng việc.
+
 ## Chi phí ảnh (giá OpenAI, mỗi ảnh)
 
 | Chất lượng | Mỗi ảnh |
@@ -72,11 +87,14 @@ Mascot gen mới tính thêm 1 ảnh. Brief, dịch và tìm mascot dùng gpt-4o
 
 - **Khoá OpenAI**: nên đặt ở **Network secrets** (Allowed websites `api.openai.com`, Header `Authorization`,
   Prefix `Bearer`): phiên không bao giờ thấy khoá, proxy tự gắn. Không có mục đó thì đặt biến `OPENAI_API_KEY`.
+- **Biến môi trường `GAIC_CONNECTOR_URL`**: link connector của chính người dùng (web → trang **MKT System** →
+  "Lấy link connector của tôi"). Dùng để ghi log sử dụng đúng tên người làm; thiếu thì việc làm trong chat không được tính.
+  Link này là khoá cá nhân: không dán vào chat, không chia sẻ.
 - **Biến môi trường `MKT_CONNECT_CODE`**: mã `mktmcp_…` lấy ở MKT System > Profile > Kết nối Claude.
   Mã hết hạn sau khoảng 24 giờ: mỗi ngày làm việc phải thay mã mới và mở phiên mới.
 - **Network access**: chọn Full, hoặc Limited và thêm vào Allowed domains:
   `api.openai.com`, `play.google.com`, `play-lh.googleusercontent.com`, `apps.apple.com`, `itunes.apple.com`,
-  `*.mzstatic.com`, `*.aperogroup.ai`, `*.amazonaws.com`.
+  `*.mzstatic.com`, `*.aperogroup.ai`, `*.amazonaws.com`, `google-ads-image-gen.vercel.app` (log sử dụng).
   `doctor` in ra máy chủ backend MKT thật lấy từ mã; nếu máy chủ đó báo bị chặn thì thêm nó vào.
   Đổi Network access có hiệu lực với cả phiên đang chạy sau khoảng 1 phút; đổi biến môi trường thì cần phiên mới.
 
@@ -88,3 +106,26 @@ Mascot gen mới tính thêm 1 ảnh. Brief, dịch và tìm mascot dùng gpt-4o
   Người dùng cần đặt mã mới trong Environment rồi mở phiên mới.
 - Server cục bộ không lên: xem `chat/.state/server.log`; `down` rồi chạy lại lệnh.
   Code của repo đổi thì lệnh tự build lại (1–2 phút).
+
+## Chế độ auto
+
+Chỉ dùng khi người dùng gõ chữ **auto** trong chính lệnh đó. Không tự suy ra từ câu khác, không tự bật cho lệnh sau.
+Ở chế độ này AI tự kiểm tra ảnh thay cho bước người duyệt nháp, và tự đẩy lên MKT khi mọi cổng kiểm tra đều qua.
+
+1. `doctor` như thường. Thiếu mã MKT, hết hạn, hoặc thiếu khoá OpenAI: dừng và nói rõ, không chạy auto.
+2. `auto <link> --market <chính> [--to <khác,…>] [--prompt "<góc>"] [--quality …] [--max-usd <X>]`
+   (mặc định chất lượng medium, trần $3). Không hỏi lại chi phí: lệnh tự dừng trước khi gen nếu chi phí xấu nhất
+   (mọi ảnh gen lại 1 lần) vượt trần. Lệnh chạy: brief → 3 ảnh nháp → AI kiểm tra → AI tự gen lại ảnh trượt 1 lần
+   → 17 ảnh còn lại → kiểm tra → tự sửa → localize → kiểm tra từng thị trường. 20 ảnh mất khoảng 10–15 phút.
+3. Kết quả `ready: false`: **dừng ở đây, đây là ngoại lệ cần người.** Gửi ảnh xem trước nếu có (`sheet`), nói lý do
+   (`stop`) và từng ảnh trượt kèm lỗi AI thấy, rồi hỏi người dùng muốn làm gì: sửa ảnh đó bằng `gen --revision`,
+   bỏ qua lỗi, hay dừng. Từ đây làm như chế độ thường (có bước "ok").
+4. Kết quả `ready: true`: gửi `previews` bằng SendUserFile để người dùng xem, **không hỏi ok**. Viết ad copy theo
+   `guide` cho từng thị trường, `mkt check-copy` và tự sửa tới khi hết lỗi (tối đa 3 vòng; vẫn lỗi thì dừng và hỏi).
+5. `mkt next-gen`, rồi `mkt push-templates` và `mkt push-creatives` cho từng thị trường, cùng một Gen.
+6. Báo cáo: các bước trong `auto-report.json` (`steps`), số ảnh mỗi thị trường, AI đã tự sửa mấy ảnh, template tạo /
+   cập nhật, tag, link `open`, chi phí ảnh `spentUsd` (ước tính). Nhắc: muốn sửa sau khi đã đẩy thì sửa rồi đẩy lại
+   cùng Gen, template được cập nhật, không tạo trùng.
+
+Lỗi AI bắt được tự ghi vào tab `Feedback` (loại "AI kiểm tra thấy lỗi") để vòng học gom thành bài học.
+

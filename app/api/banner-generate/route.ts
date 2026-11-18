@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI, { toFile } from "openai";
 import { planGenSize, shapeOf, ShapeKey } from "@/lib/adFormats";
 import { requireSession } from "@/lib/apiAuth";
+import { lessonsBlock } from "@/lib/learning";
 
 export const runtime = "nodejs";
 // One image per request so 20 sizes fan out across 20 invocations instead of
@@ -93,6 +94,7 @@ function buildPrompt(
   uiLanguage: string,
   revision: string,
   removals: string[],
+  teamRules: string,
 ): string {
   const shape = shapeOf(targetW, targetH);
   const moodStyle = MOOD_STYLES[brief?.mood] || MOOD_STYLES.playful;
@@ -206,6 +208,7 @@ ${angle || "Classic hero shot: the subject front and centre, confident and welco
 
 ART DIRECTION: ${moodStyle}
 ${userPrompt ? `CLIENT BRIEF: ${userPrompt}` : ""}
+${teamRules}
 
 ${bgMode}
 Brand palette: ${primary} as the dominant colour, ${secondary} as the supporting
@@ -361,7 +364,11 @@ export async function POST(req: NextRequest) {
     if (hasCharacter) refFiles.push(await dataUrlToFile(characterImage, "character.png"));
     if (hasScreenshot) refFiles.push(await dataUrlToFile(shots[0], "screenshot.png"));
 
-    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android", typeof uiLanguage === "string" ? uiLanguage : "", typeof revision === "string" ? revision : "", Array.isArray(removals) ? removals : []);
+    // Lessons a person approved from past corrections (lib/learning.ts). Below the
+    // client brief, and the REVISION block at the top still wins over them.
+    const teamRules = await lessonsBlock("anh",
+      "TEAM RULES — learned from what reviewers kept correcting (written in Vietnamese). Follow them unless the REVISION above says otherwise:");
+    const prompt = buildPrompt(brief, userPrompt, targetW, targetH, plan.cropKeep, hasCharacter, hasScreenshot, typeof angle === "string" ? angle : "", platform === "ios" ? "ios" : "android", typeof uiLanguage === "string" ? uiLanguage : "", typeof revision === "string" ? revision : "", Array.isArray(removals) ? removals : [], teamRules);
     const chain = precise ? PRECISE_CHAIN : MODEL_CHAIN;
 
     let b64: string | undefined;

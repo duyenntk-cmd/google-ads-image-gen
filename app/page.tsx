@@ -7,9 +7,13 @@ import { AD_SIZES } from "@/lib/adSizes";
 import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 import CampDoctor from "@/components/CampDoctor";
+import ChangePasswordModal from "@/components/ChangePasswordModal";
+import LessonsPage from "@/components/LessonsPage";
 import { abSaveRun, abListRuns, abLoadArt, abDeleteRun, AbRunMeta } from "@/lib/abHistory";
 import { fillMktLink } from "@/lib/mktLink";
 import { abRenderBanner, abLoadImg } from "@/lib/abRender";
+import { can } from "@/lib/roles";
+import { FEEDBACK_KIND } from "@/lib/learningShared";
 
 interface Brief {
   app_name: string; tagline?: string; headline: string; subheadline: string; cta_text: string;
@@ -309,6 +313,11 @@ const locLabel = (key: string) => {
 
 export default function Home() {
   const { data: session } = useSession();
+  const [pwOpen, setPwOpen] = useState(false);
+  // Account turned off in the Users sheet after signing in: leave right away.
+  useEffect(() => {
+    if (session?.revoked) void signOut({ callbackUrl: "/login" });
+  }, [session?.revoked]);
   const [step, setStep] = useState<Step>("upload");
   const [niche, setNiche] = useState<"photo"|"tool"|"office">("photo");
   const [language, setLanguage] = useState("English");
@@ -339,7 +348,7 @@ export default function Home() {
   const [activeSidebarTool, setActiveSidebarTool] = useState<"competitor"|"history"|"adcopy"|null>(null);
   void sidebarOpen; void setSidebarOpen; void activeSidebarTool; void setActiveSidebarTool;
 
-  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio"|"mkt"|"campdoctor">("home");
+  const [activePage, setActivePage] = useState<"home"|"generate"|"adcopy"|"competitor"|"history"|"youtube"|"keywords"|"aibanner"|"localize"|"launch"|"studio"|"mkt"|"campdoctor"|"lessons">("home");
 
   // ── AI Banner ──
   type AbStep = "input" | "generating" | "preview";
@@ -521,6 +530,14 @@ export default function Home() {
     const body = JSON.stringify({ ...rest, durationSec: startedAt ? (Date.now() - startedAt) / 1000 : 0 });
     void fetch("/api/usage-log", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
   };
+  /**
+   * One correction or approval for the learning loop (Feedback tab, lib/learning.ts):
+   * what the person asked the AI to change, in their words. Fire and forget.
+   */
+  const logFeedback = (ev: { kind: string; app?: string; markets?: string; slot?: string; reason?: string }) => {
+    void fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "Banner + Ad Copy", ...ev }), keepalive: true }).catch(() => {});
+  };
 
   const handleAbGenerate = async (
     mode: "one"|"core"|"full" = abMode, reuse = false, onlyKeys?: string[], revisionOverride?: string,
@@ -531,6 +548,21 @@ export default function Home() {
     const partial = Boolean(onlyKeys?.length);
     const scoped = revisionOverride !== undefined;
     const revText = (scoped ? revisionOverride! : abRevision).trim();
+    // Learning loop: every rerun of a finished draft is either a correction or the
+    // approval to go full. A retry of images that failed for technical reasons is neither.
+    if (reuse) {
+      const failedRetry = partial && !scoped && onlyKeys!.every(k => abFailed.includes(k));
+      const approving = !partial && mode === "full" && abLastMode !== "full";
+      const kind = approving ? FEEDBACK_KIND.approve
+        : failedRetry ? null
+        : partial ? (scoped ? FEEDBACK_KIND.fixOne : FEEDBACK_KIND.redoOne)
+        : revText ? FEEDBACK_KIND.fixSet : FEEDBACK_KIND.redoSet;
+      if (kind) logFeedback({
+        kind, app: abRun.current?.brief?.app_name || cbAppName(), markets: COUNTRY_ISO[abCountry] || "GLOBAL",
+        slot: partial ? onlyKeys!.join(", ") : "",
+        reason: kind === FEEDBACK_KIND.fixOne || kind === FEEDBACK_KIND.fixSet ? revText : "",
+      });
+    }
     // A partial retry stays on the results screen: switching to the progress
     // view would hide the very images being compared against.
     if (partial) setAbBusyKey(onlyKeys!.length === 1 ? onlyKeys![0] : AB_BUSY_BATCH);
@@ -825,6 +857,9 @@ export default function Home() {
     if (!Object.keys(bases).length) { setAbError("❌ Không còn ảnh gốc để vẽ lại. Gen lại bộ ảnh trước."); return; }
     setAbError("");
     const t0 = Date.now();
+    // "↻ Localize lại" on a finished market is a correction for the learning loop.
+    if (only) logFeedback({ kind: FEEDBACK_KIND.relocalize, app: abBrief.app_name,
+      markets: langs.map(l => COUNTRY_ISO[locCountry(l)] || l).join(", "), reason: note || "" });
     // The ad copy goes into the same languages, in parallel with the redraw.
     const copyDone = cbLocalizeCopy(langs, note);
     cbResetPush(langs);
@@ -949,7 +984,7 @@ export default function Home() {
     setYtVideos(prev => [...prev, ...newVids]);
   };
 
-  const uploadSingleVideo = async (video: YtVideo, index: number, token: string): Promise<void> => {
+  const uploadSingleVideo = async (video: YtVideo, index: number, token: string): Promise<boolean> => {
     setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "uploading", progress: 0} : v));
     try {
       const metadata = {
@@ -992,20 +1027,26 @@ export default function Home() {
         setYtVideos(prev => prev.map((v, i) => i === index ? {...v, progress: pct} : v));
       }
       setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "done", progress: 100} : v));
+      return true;
     } catch (e) {
       setYtVideos(prev => prev.map((v, i) => i === index ? {...v, status: "error", errorMsg: String(e)} : v));
+      return false;
     }
   };
 
   const handleYtUploadAll = async () => {
     if (!ytAccessToken) return;
     setYtUploading(true);
+    const t0 = Date.now();
+    let tried = 0, ok = 0;
     for (let i = 0; i < ytVideos.length; i++) {
       if (ytVideos[i].status === "idle" || ytVideos[i].status === "error") {
-        await uploadSingleVideo(ytVideos[i], i, ytAccessToken);
+        tried++;
+        if (await uploadSingleVideo(ytVideos[i], i, ytAccessToken)) ok++;
       }
     }
     setYtUploading(false);
+    if (tried) logUsage({ tool: "YouTube Upload", action: "Up video unlisted", images: ok, startedAt: t0, result: ok === tried ? "ok" : ok ? "partial" : "error", note: `${ok}/${tried} video` });
   };
 
   const ytLogout = async () => {
@@ -1073,6 +1114,7 @@ export default function Home() {
   const handleAdsLaunch = async () => {
     if (!adsSelectedAccount || !adsCampaignName || !adsAppId) return;
     setAdsLaunching(true); setAdsResult(null);
+    const t0 = Date.now();
     try {
       const res = await fetch("/api/google-ads/campaigns", {
         method: "POST",
@@ -1090,8 +1132,13 @@ export default function Home() {
       });
       const data = await res.json();
       setAdsResult(data);
+      logUsage({ tool: "Launch Camp", action: "Tạo campaign", app: adsAppId, images: adsSelectedBanners.length, startedAt: t0,
+        result: data.success ? "ok" : "error", note: data.success ? adsCampaignName : String(data.error || "") });
       if (data.success) loadAdsCampaigns(adsSelectedAccount);
-    } catch (e) { setAdsResult({ success: false, error: String(e) }); }
+    } catch (e) {
+      setAdsResult({ success: false, error: String(e) });
+      logUsage({ tool: "Launch Camp", action: "Tạo campaign", app: adsAppId, startedAt: t0, result: "error", note: String(e) });
+    }
     setAdsLaunching(false);
   };
 
@@ -2205,6 +2252,7 @@ export default function Home() {
 
   const handleGenerate = async () => {
     setStep("generating"); setError("");
+    const t0 = Date.now();
     try {
       const bestIdx = Math.min(brief.best_frame_index ?? 0, frames.length - 1);
       const bgDataUrl = frames[bestIdx]?.dataUrl || null;
@@ -2231,7 +2279,11 @@ export default function Home() {
       };
       reader.readAsDataURL(blob);
       setStep("preview");
-    } catch(e) { setError(String(e)); setStep("brief"); }
+      logUsage({ tool: "Gen Banner", action: "Gen ảnh từ video", app: brief.app_name, images: generated.length, startedAt: t0 });
+    } catch(e) {
+      setError(String(e)); setStep("brief");
+      logUsage({ tool: "Gen Banner", action: "Gen ảnh từ video", app: brief.app_name, startedAt: t0, result: "error", note: String(e) });
+    }
   };
 
   const handleDownloadAll = () => { const a=document.createElement("a"); a.href=`data:application/zip;base64,${zipBase64}`; a.download=`google-ads-${brief.app_name||"banners"}.zip`; a.click(); };
@@ -2749,7 +2801,11 @@ export default function Home() {
             ["launch",   "🚀", "Launch Camp"],
             ["campdoctor", "📊", "Phân tích Camp"],
             ["mkt",      "🔌", "MKT System"],
-          ] as const).map(([page, icon, label]) => (
+            ["lessons",  "🧠", "Bài học"],
+          ] as const).filter(([page]) =>
+            // Role column of the Users sheet (lib/roles.ts); the API routes enforce the same rule.
+            page === "launch" ? can(session?.role, "launch_camp") : page === "campdoctor" ? can(session?.role, "camp_report") : true,
+          ).map(([page, icon, label]) => (
             <button key={page} onClick={() => { setActivePage(page); if (page==="generate") { setStep("upload"); } if (page==="launch") { checkAdsConnection(); } }}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
               style={activePage===page
@@ -2808,11 +2864,18 @@ export default function Home() {
                   <div className="text-[10px] truncate" style={{color: t.textMuted}}>{session.user.email}</div>
                 </div>
               </div>
-              <button onClick={() => signOut({ callbackUrl: "/login" })}
-                className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
-                style={{borderColor: t.border, color: t.textMuted}}>
-                Đăng xuất
-              </button>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button onClick={() => setPwOpen(true)}
+                  className="w-full text-[10px] px-1 py-1 rounded-md border transition-colors text-center whitespace-nowrap"
+                  style={{borderColor: t.border, color: t.textMuted}}>
+                  Đổi mật khẩu
+                </button>
+                <button onClick={() => signOut({ callbackUrl: "/login" })}
+                  className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
+                  style={{borderColor: t.border, color: t.textMuted}}>
+                  Đăng xuất
+                </button>
+              </div>
             </div>
           )}
           <button onClick={() => setDarkMode(d => !d)}
@@ -2830,7 +2893,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b px-6 py-3.5 flex items-center justify-between" style={{borderColor: t.border}}>
         <div className="text-sm font-semibold" style={{color: t.text}}>
-          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "🚀 Banner + Ad Copy" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="campdoctor" ? "📊 Phân tích Camp" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
+          {activePage==="home" ? "👋 Dashboard" : activePage==="generate" ? "🎨 Gen Banner" : activePage==="aibanner" ? "🚀 Banner + Ad Copy" : activePage==="competitor" ? "🔍 Competitor Ads" : activePage==="youtube" ? "▶️ YouTube Upload" : activePage==="studio" ? "🎯 Ad Copy Studio" : activePage==="mkt" ? "🔌 MKT System" : activePage==="campdoctor" ? "📊 Phân tích Camp" : activePage==="lessons" ? "🧠 Bài học" : activePage==="launch" ? "🚀 Launch Campaign" : "🕐 Lịch sử"}
         </div>
         <div className="flex items-center gap-2">
           {activePage==="generate" && step !== "upload" && (
@@ -4286,6 +4349,7 @@ export default function Home() {
         {activePage === "studio" && renderStudio(false)}
 
         {activePage === "campdoctor" && <CampDoctor t={t} onMakeCreatives={() => setActivePage("aibanner")} />}
+        {activePage === "lessons" && <LessonsPage t={t} canManage={can(session?.role, "manage_lessons")} />}
 
         {/* COMPETITOR PAGE */}
         {activePage === "competitor" && (
@@ -4868,6 +4932,8 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {pwOpen && <ChangePasswordModal t={t} onClose={() => setPwOpen(false)} />}
 
       {/* Lightbox */}
       {selectedPreview && (

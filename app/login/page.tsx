@@ -1,6 +1,6 @@
 "use client";
 import { signIn } from "next-auth/react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
@@ -9,6 +9,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  // Sent here after changing the password (components/ChangePasswordModal.tsx).
+  // Read from the URL on the client only; the server render has no query string.
+  const pwChanged = useSyncExternalStore(
+    () => () => {},
+    () => new URLSearchParams(window.location.search).get("pw") === "changed",
+    () => false,
+  );
+  const notice = pwChanged ? "Đã đổi mật khẩu. Đăng nhập bằng mật khẩu mới." : "";
 
   const bg = "#F8FAFC";
   const card = "#FFFFFF";
@@ -109,6 +117,11 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
+            {notice && !error && (
+              <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: "#10B98115", color: "#059669" }}>
+                {notice}
+              </div>
+            )}
             {error && (
               <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: "#EF444415", color: "#EF4444" }}>
                 {error}

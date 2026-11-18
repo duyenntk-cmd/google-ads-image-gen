@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { requireSession } from "@/lib/apiAuth";
+import { lessonsBlock } from "@/lib/learning";
 
 export const maxDuration = 30;
 
@@ -33,11 +34,13 @@ Rules:
 - descriptions: exactly 5 items, each MAX 90 characters. Expand on the headline value proposition.
 - All text must be in ${language || "English"}.
 - Make them compelling and relevant to ${country || "global"} users.`;
+    // Lessons a person approved from past corrections (lib/learning.ts).
+    const teamRules = await lessonsBlock("adcopy", "Team rules learned from past reviews (written in Vietnamese, follow them):");
 
     const response = await client.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 800,
-      messages: [{ role: "user", content: prompt }],
+      messages: [{ role: "user", content: teamRules ? `${prompt}\n\n${teamRules}` : prompt }],
     });
 
     const text = response.content[0].type === "text" ? response.content[0].text : "";

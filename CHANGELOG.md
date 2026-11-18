@@ -5,12 +5,70 @@ Mỗi version ghi **mục tiêu**, **thời gian** và **thay đổi chính**. V
 - **Số lớn** (v4 → v5): đổi cách làm việc của cả quy trình, thêm một công cụ mới, hoặc gộp công cụ.
 - **Số nhỏ** (v5.1 → v5.2): sửa, cải tiến trong cùng quy trình.
 
-Mỗi version có một git tag cùng tên (`v5.2`…). Muốn mở lại một version cũ, có 2 cách:
+Mỗi version có một git tag cùng tên, gắn lên commit cuối của version đó trên `main`. Bảng version → commit và lệnh
+gắn tag nằm ở [`scripts/tag-versions.sh`](scripts/tag-versions.sh): chạy `bash scripts/tag-versions.sh` trên máy có
+quyền push repo, tag nào đã có thì bỏ qua. Từ v1.0 tới v5.2, commit được chọn lại sau (ngày 18/11/2026) theo ngày
+trong log commit, vì lúc đó chưa có quy ước version.
 
-- **Xem code:** `git checkout v4.0`.
+Muốn mở lại một version cũ, có 2 cách:
+
+- **Xem code:** `git fetch --tags` rồi `git checkout v4.0`. Danh sách tag: `git tag --list 'v*'`.
 - **Chạy lại trên web:** vào Vercel → Deployments, chọn bản deploy của commit có tag đó, bấm **Promote to Production**.
 
+Ra version mới: tăng `version` trong `package.json`, viết mục ở đầu file này, merge vào `main`, rồi thêm một dòng vào
+`scripts/tag-versions.sh` với commit đã merge (PR được squash nên commit trên nhánh làm việc không phải commit trên
+`main`) và chạy lại script.
+
 Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log sử dụng (Google Sheet, tab `UsageLog`) cũng ghi version.
+
+---
+
+## v8.0 — 2026-11-18 · Vòng học, chế độ auto, siết quyền
+
+**Mục tiêu:** tool tự tốt lên từ những gì người dùng phải sửa, tự chạy hết quy trình khi mọi cổng kiểm tra đều qua và
+chỉ dừng hỏi người khi có ngoại lệ; tắt người là thu hồi quyền ngay, có phân quyền; mọi việc làm bằng tool đều có log;
+người khác tự dựng lại được.
+
+**Vòng học** (công cụ mới: trang 🧠 Bài học)
+- Mỗi lần người sửa 1 ảnh, sửa cả bộ, gen lại không lý do, localize lại, duyệt nháp (web và chat) được ghi vào tab
+  `Feedback` kèm lời người sửa.
+- Nút **🤖 Tìm bài học mới**: AI gom lỗi lặp lại (≥2 lần trong 60 ngày) thành bài học *Chờ duyệt* (tab `BaiHoc`).
+  Role `ua` áp dụng, sửa câu hoặc bỏ. Bài học đã áp dụng tự vào prompt gen ảnh, brief, localize, ad copy (web, chat,
+  connector).
+- Bảng số lần sửa trên 100 ảnh theo từng version, để biết bài học có làm giảm lỗi thật không.
+
+**Chế độ auto** (`@adbanner … auto`, bộ lệnh chat)
+- Route `/api/banner-qa`: AI xem từng banner đã vẽ chữ, bắt chữ đè mặt/tay/điện thoại, chữ bị cắt, hai nhân vật, tay
+  dị dạng, chữ lạ trong tranh, sai ngôn ngữ; trả lại một câu lệnh sửa.
+- Lệnh `auto`: brief → nháp → AI kiểm tra → AI tự gen lại ảnh trượt 1 lần → đủ bộ → localize → kiểm tra; dừng hỏi người
+  khi ảnh vẫn trượt, chữ sai giới hạn, hoặc chi phí xấu nhất vượt trần. Qua hết thì skill tự viết, tự kiểm tra ad copy
+  và đẩy lên MKT không cần "ok". Lệnh `qa` dùng riêng cổng kiểm tra; lỗi AI bắt được cũng vào `Feedback`.
+- Lệnh `gen --revision` cho yêu cầu sửa (ưu tiên hơn creative direction), lệnh `feedback` cho lần sửa chữ.
+
+**Tài khoản và bảo mật**
+- Mật khẩu trong tab `Users` lưu bằng mã băm scrypt. Mật khẩu chữ thường hoặc dạng cũ tự chuyển ở lần đăng nhập kế
+  tiếp; admin tạo hoặc đặt lại mật khẩu vẫn gõ chữ thường như trước.
+- Tự đổi mật khẩu trên web (nút **Đổi mật khẩu** ở cuối sidebar). Đổi trên web hoặc admin đặt lại trong sheet thì mọi
+  phiên đăng nhập bằng mật khẩu cũ kết thúc trong vòng 5 phút. Sai mật khẩu hiện tại 5 lần thì chờ 15 phút.
+- Tắt người (Active = `no` hoặc xoá dòng) thì phiên web đang mở bị đăng xuất trong vòng 5 phút, không phải chờ 30 ngày.
+- Phân quyền bằng cột Role: `creative` không dùng được Launch Camp, Phân tích Camp, không duyệt được bài học
+  (API trả 403, giao diện ẩn).
+- Log đăng nhập ghi vào tab `LoginLog` (tự tạo; tab `Sheet1` cũ không còn nên trước đây log bị mất), ghi cả lần đăng
+  nhập thất bại, ghi kiểu RAW.
+- Connector Claude: so đúng username với tài khoản không có email; khi đọc tab `Users` lỗi thì dùng bản gần nhất.
+
+**Log và đo**
+- Log sử dụng thêm Launch Camp, YouTube Upload, Gen Banner. Bộ lệnh chat ghi log đúng tên người qua link connector
+  (`GAIC_CONNECTOR_URL`, tool `log_usage`, `log_feedback`, `get_lessons` mới của connector); chưa gửi được thì lưu tạm,
+  gửi kèm lần sau.
+- Tab `DanhMuc` trong sheet hệ thống tự đếm số lần dùng 7 ngày cho từng đầu việc.
+
+**Đóng gói và tài liệu**
+- ID sheet hệ thống đọc từ biến `SYSTEM_SHEET_ID` (mặc định vẫn là sheet hiện tại). README viết lại thành hướng dẫn
+  dựng lại từ đầu, thêm `.env.example`.
+- Tài liệu mới trong `docs/`: quy trình trước/sau và các điểm duyệt, danh mục đầu việc lặp lại, dữ liệu và bảo mật,
+  sổ quy tắc theo tầng.
+- `scripts/tag-versions.sh`: bảng version → commit cho v1.0 … v7.1 và lệnh gắn tag, để mở lại được mọi version cũ.
 
 ---
 

@@ -19,8 +19,9 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Redirect to login if not authenticated
-  if (!token) {
+  // Redirect to login if not authenticated, or if the account was turned off
+  // in the Users sheet after signing in (lib/authOptions.ts marks the token).
+  if (!token || token.revoked) {
     const loginUrl = new URL("/login", req.url);
     return NextResponse.redirect(loginUrl);
   }

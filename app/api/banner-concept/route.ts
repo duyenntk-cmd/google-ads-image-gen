@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { requireSession } from "@/lib/apiAuth";
+import { lessonsBlock } from "@/lib/learning";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -70,6 +71,10 @@ export async function POST(req: NextRequest) {
       `Màu sắc PHẢI trích từ screenshots thật, không đoán.\n` +
       `hero_subject và key_visual phải bám SÁT chức năng thật của app — đọc kỹ mô tả để biết app làm gì, ` +
       `đừng suy diễn từ tên app.\n\n${BRIEF_SCHEMA}`;
+    // Lessons a person approved from past corrections (lib/learning.ts).
+    const teamRules = await lessonsBlock("brief",
+      "BÀI HỌC TỪ CÁC LẦN DUYỆT TRƯỚC (team đã duyệt; làm theo, trừ khi creative direction nói khác):");
+    const systemWithRules = teamRules ? `${system}\n\n${teamRules}` : system;
 
     const shots: string[] = Array.isArray(screenshots) ? screenshots.slice(0, 3) : [];
     const userContent: any[] = [
@@ -95,7 +100,7 @@ export async function POST(req: NextRequest) {
       temperature: 0.7,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: system },
+        { role: "system", content: systemWithRules },
         { role: "user", content: userContent },
       ],
     });

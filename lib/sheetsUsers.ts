@@ -1,103 +1,195 @@
-import { createSign, createHash } from "crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { getAccessToken, SPREADSHEET_ID } from "@/lib/sheetsLogger";
+import { parseRole, type Role } from "@/lib/roles";
 
-const SPREADSHEET_ID = "17KwfmFYVT9DuJIC4o5aRGzGRwKkkipGBXIEl011FONs";
+/**
+ * Accounts live in the "Users" tab of the system sheet:
+ *   A Username · B Password · C Name · D Active (no = turned off) · E Role (ua | creative)
+ *
+ * Passwords are stored as scrypt hashes ("scrypt$<salt>$<hash>"). An admin who
+ * creates or resets an account types the password in plain text; the first
+ * successful sign-in replaces it with the hash, so the sheet stops holding
+ * readable passwords.
+ */
 const USERS_SHEET = "Users";
-
-async function getAccessToken(): Promise<string> {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
-  const sa = JSON.parse(raw);
-  const now = Math.floor(Date.now() / 1000);
-  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({
-    iss: sa.client_email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  })).toString("base64url");
-  const sign = createSign("RSA-SHA256");
-  sign.update(`${header}.${payload}`);
-  const signature = sign.sign(sa.private_key, "base64url");
-  const jwt = `${header}.${payload}.${signature}`;
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }),
-  });
-  const data = await res.json();
-  if (!data.access_token) throw new Error(`Token error: ${JSON.stringify(data)}`);
-  return data.access_token;
-}
+const HEADER = ["Username", "Password", "Name", "Active", "Role"];
+const INTERNAL_DOMAIN = "@ads-gen.internal";
 
 export interface SheetUser {
   username: string;
-  password: string; // plaintext stored in sheet, compared with hash
+  password: string; // scrypt hash, or plain text / old SHA-256 until the next sign-in
   name: string;
   active: boolean;
+  role: Role;
+  row: number; // sheet row, for the hash upgrade
 }
 
 export async function getUsersFromSheet(): Promise<SheetUser[]> {
   const token = await getAccessToken();
+  const auth = { Authorization: `Bearer ${token}` };
 
-  // Ensure header row exists
+  // Header row: create it on an empty tab, add the Role column to an older one.
   const checkRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A1:D1`,
-    { headers: { Authorization: `Bearer ${token}` } }
+    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A1:E1`,
+    { headers: auth },
   );
-  const checkData = await checkRes.json();
-  const hasHeader = checkData.values && checkData.values.length > 0;
-
-  if (!hasHeader) {
+  if (!checkRes.ok) throw new Error(`Không đọc được tab ${USERS_SHEET}: HTTP ${checkRes.status}`);
+  const head = ((await checkRes.json()).values?.[0] || []) as string[];
+  if (!head.length || !head[4]) {
+    const range = head.length ? "E1" : "A1:E1";
     await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A1:D1?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!${range}?valueInputOption=RAW`,
       {
         method: "PUT",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ values: [["Username", "Password", "Name", "Active"]] }),
-      }
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ values: [head.length ? ["Role"] : HEADER] }),
+      },
     );
-    return [];
+    if (!head.length) return [];
   }
 
   const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A2:D1000`,
-    { headers: { Authorization: `Bearer ${token}` } }
+    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!A2:E2000`,
+    { headers: auth },
   );
+  if (!res.ok) throw new Error(`Không đọc được tab ${USERS_SHEET}: HTTP ${res.status}`);
   const data = await res.json();
   if (!data.values) return [];
 
   return (data.values as string[][])
-    .filter(row => row[0] && row[1])
-    .map(row => ({
+    .map((row, i) => ({ row, n: i + 2 }))
+    .filter(({ row }) => row[0] && row[1])
+    .map(({ row, n }) => ({
       username: (row[0] || "").trim().toLowerCase(),
       password: (row[1] || "").trim(),
       name: (row[2] || "").trim() || row[0],
       active: (row[3] || "yes").trim().toLowerCase() !== "no",
+      role: parseRole(row[4]),
+      row: n,
     }));
 }
 
+/**
+ * The Users-sheet username behind a session or connector identity.
+ * Accounts without an email get "<username>@ads-gen.internal" as their email.
+ */
+export function userIdOf(emailOrName: string | null | undefined): string {
+  const s = String(emailOrName || "").trim().toLowerCase();
+  return s.endsWith(INTERNAL_DOMAIN) ? s.slice(0, -INTERNAL_DOMAIN.length) : s;
+}
+
+/* ───────────────────────── passwords ───────────────────────── */
+
+const SCRYPT_PREFIX = "scrypt$";
+
 export function hashPassword(password: string): string {
-  return createHash("sha256").update(password + "ads-gen-salt-2024").digest("hex");
+  const salt = randomBytes(16);
+  const hash = scryptSync(password, salt, 32);
+  return `${SCRYPT_PREFIX}${salt.toString("base64url")}$${hash.toString("base64url")}`;
+}
+
+const sha = (s: string) => createHash("sha256").update(s).digest();
+const sameText = (a: string, b: string) => timingSafeEqual(sha(a), sha(b));
+/** The hash format used before v8.0 (one fixed salt for everyone). Only read, never written. */
+const legacySha = (password: string) => createHash("sha256").update(password + "ads-gen-salt-2024").digest("hex");
+
+function checkPassword(stored: string, password: string): { ok: boolean; legacy: boolean } {
+  if (stored.startsWith(SCRYPT_PREFIX)) {
+    const [salt, hash] = stored.slice(SCRYPT_PREFIX.length).split("$");
+    if (!salt || !hash) return { ok: false, legacy: false };
+    const want = Buffer.from(hash, "base64url");
+    const got = scryptSync(password, Buffer.from(salt, "base64url"), want.length || 32);
+    return { ok: want.length === got.length && timingSafeEqual(want, got), legacy: false };
+  }
+  const ok = sameText(stored, password) || sameText(stored, legacySha(password));
+  return { ok, legacy: ok };
+}
+
+/**
+ * Short fingerprint of a stored password cell. It changes whenever the
+ * password is changed on the web or reset in the sheet, which is how a
+ * session learns that it was signed in with an old password (lib/authOptions.ts).
+ */
+export function passwordStamp(stored: string): string {
+  return createHash("sha256").update(`pw:${stored}`).digest("base64url").slice(0, 16);
+}
+
+/** Writes a password hash into column B of one Users row. */
+async function writePasswordHash(row: number, hash: string): Promise<boolean> {
+  try {
+    const token = await getAccessToken();
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!B${row}?valueInputOption=RAW`,
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ values: [[hash]] }),
+      },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return true;
+  } catch (e) {
+    console.error("password write:", e instanceof Error ? e.message : e);
+    return false;
+  }
 }
 
 export async function verifyCredentials(
   username: string,
   password: string
-): Promise<{ id: string; name: string; email: string } | null> {
+): Promise<{ id: string; name: string; email: string; role: Role; pwStamp: string } | null> {
   const users = await getUsersFromSheet();
   const user = users.find(u => u.username === username.toLowerCase().trim() && u.active);
   if (!user) return null;
 
-  // Support both plaintext and hashed passwords in sheet
-  const passwordMatches =
-    user.password === password ||
-    user.password === hashPassword(password);
-  if (!passwordMatches) return null;
+  const { ok, legacy } = checkPassword(user.password, password);
+  if (!ok) return null;
+  // Plain text or the old format: store the scrypt hash instead.
+  let stored = user.password;
+  if (legacy) {
+    const hash = hashPassword(password);
+    if (await writePasswordHash(user.row, hash)) stored = hash;
+  }
 
   return {
     id: user.username,
     name: user.name,
-    email: user.username.includes("@") ? user.username : `${user.username}@ads-gen.internal`,
+    email: user.username.includes("@") ? user.username : `${user.username}${INTERNAL_DOMAIN}`,
+    role: user.role,
+    pwStamp: passwordStamp(stored),
   };
+}
+
+/* ───────────────────────── changing a password on the web ───────────────────────── */
+
+export const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 128;
+
+/** Why a new password is refused, or null when it is fine. Checked before the current password. */
+export function newPasswordProblem(username: string, current: string, next: string): string | null {
+  if (next.length < PASSWORD_MIN) return `Mật khẩu mới cần ít nhất ${PASSWORD_MIN} ký tự.`;
+  if (next.length > PASSWORD_MAX) return `Mật khẩu mới dài quá ${PASSWORD_MAX} ký tự.`;
+  if (next === current) return "Mật khẩu mới phải khác mật khẩu hiện tại.";
+  if (next.trim().toLowerCase() === username.trim().toLowerCase()) return "Mật khẩu không được trùng tên đăng nhập.";
+  return null;
+}
+
+export type ChangePasswordResult =
+  | { ok: true }
+  | { ok: false; reason: "invalid" | "not_found" | "wrong_current" | "write_failed"; message: string };
+
+/** The signed-in person changes their own password: checks the current one, stores the new one as a hash. */
+export async function changePassword(username: string, current: string, next: string): Promise<ChangePasswordResult> {
+  const problem = newPasswordProblem(username, current, next);
+  if (problem) return { ok: false, reason: "invalid", message: problem };
+  const users = await getUsersFromSheet();
+  const user = users.find(u => u.username === username.trim().toLowerCase() && u.active);
+  if (!user) {
+    return { ok: false, reason: "not_found", message: "Tài khoản này không có trong sheet Users hoặc đã bị tắt, không đổi mật khẩu trên web được." };
+  }
+  if (!checkPassword(user.password, current).ok) return { ok: false, reason: "wrong_current", message: "Mật khẩu hiện tại không đúng." };
+  if (!(await writePasswordHash(user.row, hashPassword(next)))) {
+    return { ok: false, reason: "write_failed", message: "Chưa lưu được mật khẩu mới vào sheet Users. Thử lại sau ít phút." };
+  }
+  return { ok: true };
 }

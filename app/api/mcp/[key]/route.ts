@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { userFromMcpKey } from "@/lib/mcpKey";
-import { getUsersFromSheet } from "@/lib/sheetsUsers";
+import { accessOf } from "@/lib/userAccess";
 import { getStoreMeta } from "@/lib/storeMeta";
 import { mostlyLatin, scriptOf } from "@/lib/adCopyCheck";
 import { MARKETS, marketCode, todayVN, normTplName, templateName, genOf } from "@/lib/adTemplates";
 import { parseConnectCode, createMktClient, validateAdContents, normaliseAdContents, ConnectCodeExpiredError, type AdContent, type MktClient } from "@/lib/mktClient";
 import { logUsage } from "@/lib/usageLog";
+import { approvedLessonsAll, lessonsBlock, logFeedback } from "@/lib/learning";
+import { FEEDBACK_KIND } from "@/lib/learningShared";
 import pkg from "@/package.json";
 
 export const runtime = "nodejs";
@@ -30,20 +32,15 @@ const TPL_BASE = "automation-facebook/ad-templates";
 
 /* ───────────────────────── auth ───────────────────────── */
 
-let usersCache: { at: number; active: Set<string> } | null = null;
-/** A key is honoured while its user is active in the Users sheet (cached 5 min; a sheet outage does not lock people out). */
+/**
+ * A key is honoured while its user has an active row in the Users sheet
+ * (lib/userAccess.ts: cached 1 min, last good copy on a sheet outage).
+ * Keys carry the session email, "<username>@ads-gen.internal" for accounts
+ * without one; userAccess maps it back to the sheet's username.
+ */
 async function userActive(user: string): Promise<boolean> {
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) return true;
-  if (!usersCache || Date.now() - usersCache.at > 5 * 60_000) {
-    try {
-      const users = await getUsersFromSheet();
-      usersCache = { at: Date.now(), active: new Set(users.filter(u => u.active).map(u => u.username)) };
-    } catch {
-      return true;
-    }
-  }
-  // An empty sheet means the old Google-login setup: nobody to check against.
-  return !usersCache.active.size || usersCache.active.has(user.toLowerCase());
+  const access = await accessOf(user);
+  return !access || access.active;
 }
 
 /* ───────────────────────── guide ───────────────────────── */
@@ -169,7 +166,11 @@ const TOOLS: Tool[] = [
     description: "Read FIRST when the user asks to create Google ad templates / ad copy / '@adtemp' for an app and push them to MKT System. Returns the step-by-step flow (draft → user says ok → push), copy rules, Google++ naming and market languages.",
     inputSchema: { type: "object", properties: {} },
     annotations: { readOnlyHint: true, title: "Hướng dẫn tạo ad template" },
-    run: async () => GUIDE,
+    // Plus the ad copy lessons the team approved from past corrections (lib/learning.ts).
+    run: async () => {
+      const rules = await lessonsBlock("adcopy", "## Bài học từ các lần duyệt trước (team đã duyệt, làm theo khi viết ad copy)");
+      return rules ? `${GUIDE}\n\n${rules}` : GUIDE;
+    },
   },
   {
     name: "app_info",
@@ -274,6 +275,75 @@ const TOOLS: Tool[] = [
       }, pkg.version).catch(() => {});
       return { pushed: okN > 0, date, gen, creativeTags: [`${date} Gen${gen}`], results };
     },
+  },
+  {
+    name: "log_usage",
+    description: "Record one finished piece of work in the team's usage log (UsageLog tab of the system Google Sheet), under the owner of this connector link. The Claude Code chat toolkit (chat/studio.mjs) calls it after generating banners, localizing or pushing to MKT, so work done in chat counts like work done on the web. Do not call it for drafts the user threw away.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tool: { type: "string", description: "Where the work was done, e.g. 'Chat Claude Code'" },
+        action: { type: "string", description: "Same wording as the web where possible: 'Gen ảnh duyệt', 'Gen bộ ảnh', 'Localize', 'Tạo ad template', 'Đẩy lên MKT'" },
+        app: { type: "string" },
+        markets: { type: "string", description: "Comma-separated ISO codes" },
+        images: { type: "integer", minimum: 0 },
+        templates: { type: "integer", minimum: 0 },
+        duration_sec: { type: "number", minimum: 0 },
+        result: { type: "string", enum: ["ok", "partial", "error"] },
+        note: { type: "string" },
+      },
+      required: ["action"],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, title: "Ghi log sử dụng" },
+    run: async (a, user) => {
+      if (!str(a.action).trim()) throw new Error("Thiếu action.");
+      const result = str(a.result);
+      await logUsage(user, {
+        tool: str(a.tool).trim() || "Chat Claude Code",
+        action: str(a.action).trim(),
+        app: str(a.app),
+        markets: str(a.markets),
+        images: Number(a.images) || 0,
+        templates: Number(a.templates) || 0,
+        durationSec: Number(a.duration_sec) || 0,
+        result: result === "partial" || result === "error" ? result : "ok",
+        note: str(a.note),
+      }, pkg.version);
+      return { logged: true, user };
+    },
+  },
+  {
+    name: "log_feedback",
+    description: "Record one human correction of the AI's work (or an approval) in the team's Feedback log, under the owner of this connector link. The learning loop turns recurring corrections into lessons. The Claude Code chat toolkit calls it when the user asks to fix an image, regenerates one without a reason, re-localizes with a note, or approves the draft set. Put the user's own words in reason.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tool: { type: "string", description: "Where, e.g. 'Chat Claude Code'" },
+        kind: { type: "string", enum: Object.values(FEEDBACK_KIND) },
+        app: { type: "string" },
+        markets: { type: "string" },
+        slot: { type: "string", description: "Image slot(s), e.g. square-2" },
+        reason: { type: "string", description: "What the user asked to change, in their words" },
+      },
+      required: ["kind"],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, title: "Ghi lần sửa" },
+    run: async (a, user) => {
+      const kind = str(a.kind);
+      if (!(Object.values(FEEDBACK_KIND) as string[]).includes(kind)) throw new Error(`kind không hợp lệ: ${kind}`);
+      await logFeedback(user, {
+        tool: str(a.tool).trim() || "Chat Claude Code", kind, app: str(a.app), markets: str(a.markets),
+        slot: str(a.slot), reason: str(a.reason),
+      }, pkg.version);
+      return { logged: true };
+    },
+  },
+  {
+    name: "get_lessons",
+    description: "Lessons the team approved from past corrections, by step: anh (image prompt), brief, chu (banner text localization), adcopy. The Claude Code chat toolkit passes them to its local server so chat runs follow the same lessons as the web.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, title: "Bài học đã duyệt" },
+    run: async () => ({ ...(await approvedLessonsAll()) }),
   },
   {
     name: "banner_link",

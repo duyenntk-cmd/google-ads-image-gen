@@ -1,7 +1,13 @@
 import { createSign } from "crypto";
 
-export const SPREADSHEET_ID = "17KwfmFYVT9DuJIC4o5aRGzGRwKkkipGBXIEl011FONs";
-const SHEET_NAME = "Sheet1";
+/**
+ * The system spreadsheet: Users (accounts), LoginLog and UsageLog tabs.
+ * Set SYSTEM_SHEET_ID to run the app against another team's sheet; the
+ * fallback is this team's sheet so existing deployments keep working.
+ */
+export const SPREADSHEET_ID = process.env.SYSTEM_SHEET_ID || "17KwfmFYVT9DuJIC4o5aRGzGRwKkkipGBXIEl011FONs";
+const LOGIN_TAB = "LoginLog";
+const LOGIN_HEADER = ["Thời gian", "Email", "Tên", "IP", "User Agent", "Kết quả"];
 
 export async function getAccessToken(): Promise<string> {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -38,48 +44,60 @@ export async function getAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+const colLetter = (n: number) => String.fromCharCode(64 + n); // 1 → A, fine up to Z
+
+/** Creates the tab and its header row when missing. Safe to call before every write. */
+export async function ensureTab(token: string, tab: string, header: string[]) {
+  const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const range = `${tab}!A1:${colLetter(header.length)}1`;
+  const head = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}`, { headers: auth });
+  if (head.ok) {
+    const d = await head.json();
+    if (d.values?.length) return;
+  } else {
+    // A missing tab answers 400: create it.
+    const add = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}:batchUpdate`, {
+      method: "POST", headers: auth,
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] }),
+    });
+    if (!add.ok) throw new Error(`Không tạo được tab ${tab}: HTTP ${add.status}`);
+  }
+  const put = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}?valueInputOption=RAW`,
+    { method: "PUT", headers: auth, body: JSON.stringify({ values: [header] }) },
+  );
+  if (!put.ok) throw new Error(`Không ghi được tiêu đề tab ${tab}: HTTP ${put.status}`);
+}
+
+/**
+ * One row per sign-in attempt in the LoginLog tab. Written RAW so a crafted
+ * user agent or username cannot become a formula in the sheet.
+ */
 export async function logLoginToSheet(params: {
   email: string;
   name: string;
   ip: string;
   userAgent: string;
+  result?: string;
 }) {
   try {
     const token = await getAccessToken();
-
-    // Check if header row exists
-    const checkRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${SHEET_NAME}!A1:E1`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const checkData = await checkRes.json();
-    const hasHeader = checkData.values && checkData.values.length > 0;
-
-    if (!hasHeader) {
-      // Add header row
-      await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${SHEET_NAME}!A1:E1?valueInputOption=USER_ENTERED`,
-        {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ values: [["Thời gian", "Email", "Tên", "IP", "User Agent"]] }),
-        }
-      );
-    }
-
-    // Append login row
+    await ensureTab(token, LOGIN_TAB, LOGIN_HEADER);
     const timestamp = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${SHEET_NAME}!A:E:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    const clip = (v: string, n = 300) => String(v ?? "").slice(0, n);
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${LOGIN_TAB}!A:F:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          values: [[timestamp, params.email, params.name, params.ip, params.userAgent]],
+          values: [[timestamp, clip(params.email), clip(params.name), clip(params.ip, 60), clip(params.userAgent), clip(params.result || "ok", 40)]],
         }),
       }
     );
+    if (!res.ok) throw new Error(`Sheets append HTTP ${res.status}`);
   } catch (err) {
-    console.error("sheetsLogger error:", err);
+    // Never block a sign-in on the log, but say so in the server log.
+    console.error("sheetsLogger error:", err instanceof Error ? err.message : err);
   }
 }

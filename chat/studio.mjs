@@ -11,6 +11,9 @@
  * Credentials come from the environment, never from the chat:
  *   OPENAI_API_KEY       image + brief generation (or "proxy-injected" network secret)
  *   MKT_CONNECT_CODE     mktmcp_… from MKT System > Profile > Kết nối Claude (24h)
+ *   GAIC_CONNECTOR_URL   the person's own connector link (web > MKT System > "Lấy link
+ *                        connector của tôi"): names who is working and sends usage rows
+ *                        to the team's UsageLog through the deployed web
  *
  * Usage: node chat/studio.mjs <command> [options]   (see `help`)
  */
@@ -49,7 +52,13 @@ function parseArgs(argv) {
 }
 
 const die = (msg) => { console.error(`✗ ${msg}`); process.exit(1); };
-const out = (v) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
+// Commands print their result as JSON and return it; `auto` runs several of them
+// quietly and prints one report at the end.
+let QUIET = false;
+const out = (v) => {
+  if (!QUIET) console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
+  return v;
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readJson = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
 const writeJson = (p, v) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(v, null, 2)); };
@@ -90,6 +99,102 @@ const lib = async (name) => import(path.join(ROOT, "lib", `${name}.ts`));
 function mktCode(opt = {}) {
   if (opt["code-file"]) return fs.readFileSync(opt["code-file"], "utf8").trim();
   return (process.env.MKT_CONNECT_CODE || "").trim();
+}
+
+/* ───────────────────────── who is working, usage log ───────────────────────── */
+
+const connectorUrl = () => (process.env.GAIC_CONNECTOR_URL || "").trim();
+
+/** The web account behind the connector link (its key is "gaic_<username, base64url>.<signature>"). */
+function chatUser() {
+  const m = connectorUrl().match(/\/api\/mcp\/(?:gaic_|gaic%5F)([A-Za-z0-9_-]+)\./i);
+  if (m) {
+    try {
+      const u = Buffer.from(m[1], "base64url").toString("utf8").trim().toLowerCase();
+      if (u) return u;
+    } catch { /* fall through */ }
+  }
+  return "chat";
+}
+const chatEmail = (u = chatUser()) => (u.includes("@") ? u : `${u}@ads-gen.internal`);
+
+const PENDING_LOG = path.join(RUNS_DIR, "usage-pending.jsonl");
+
+/** One tools/call to the DEPLOYED web's connector, through curl so the environment's proxy applies. */
+function callConnector(name, args) {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  const raw = execFileSync("curl", ["-sS", "-m", "20", "-X", "POST", "-H", "content-type: application/json",
+    "-H", "accept: application/json, text/event-stream", "--data-binary", "@-", connectorUrl()],
+  { input: body, stdio: ["pipe", "pipe", "pipe"] }).toString();
+  const data = JSON.parse(raw);
+  if (data.error) throw new Error(data.error.message);
+  if (data.result?.isError) throw new Error(data.result.content?.[0]?.text || "Lỗi tool.");
+  return data.result?.structuredContent;
+}
+
+/**
+ * Rows for the team's sheet, sent through the deployed web's connector:
+ *   log_usage     UsageLog, same as the web (tool "Chat Claude Code"), so chat work is counted
+ *   log_feedback  Feedback, what the user asked to fix: the learning loop's input
+ * Without GAIC_CONNECTOR_URL, or when the web cannot be reached, a row waits in
+ * chat/runs/usage-pending.jsonl and is sent with the next one that goes through.
+ * Reporting never stops the work.
+ */
+function report(tool, args) {
+  if (connectorUrl()) {
+    try {
+      callConnector(tool, args);
+      if (fs.existsSync(PENDING_LOG)) {
+        const left = [];
+        for (const line of fs.readFileSync(PENDING_LOG, "utf8").split("\n").filter(Boolean)) {
+          try {
+            // Lines from before log_feedback existed carry no tool: they are usage rows.
+            const { at, tool: t = "log_usage", args: a, ...legacy } = JSON.parse(line);
+            const row = a || legacy;
+            const note = t === "log_usage" ? { note: `${row.note || ""} (chạy lúc ${at})`.trim() } : {};
+            callConnector(t, { ...row, ...note });
+          } catch { left.push(line); }
+        }
+        if (left.length) fs.writeFileSync(PENDING_LOG, left.join("\n") + "\n");
+        else fs.unlinkSync(PENDING_LOG);
+      }
+      return;
+    } catch (e) {
+      console.error(`! chưa ghi được ${tool === "log_usage" ? "log sử dụng" : "lần sửa"} (${String(e.stderr || e.message).trim().slice(0, 120)}), lưu tạm để gửi sau`);
+    }
+  } else {
+    console.error("! chưa có GAIC_CONNECTOR_URL: log lưu tạm trong chat/runs/usage-pending.jsonl");
+  }
+  fs.mkdirSync(RUNS_DIR, { recursive: true });
+  fs.appendFileSync(PENDING_LOG, JSON.stringify({ at: new Date().toISOString(), tool, args }) + "\n");
+}
+
+async function logUsage(ev) {
+  report("log_usage", { tool: "Chat Claude Code", ...ev, duration_sec: Math.round(ev.duration_sec || 0) });
+}
+
+/** Kinds as in lib/learningShared.ts (FEEDBACK_KIND). */
+const FEEDBACK = {
+  fixOne: "Sửa 1 ảnh", fixSet: "Sửa cả bộ", redoOne: "Gen lại 1 ảnh (không ghi lý do)",
+  redoSet: "Gen lại cả bộ (không ghi lý do)", relocalize: "Localize lại", approve: "Duyệt bản nháp",
+  aiQa: "AI kiểm tra thấy lỗi",
+};
+async function logFeedback(ev) {
+  report("log_feedback", { tool: "Chat Claude Code", ...ev });
+}
+
+/**
+ * Lessons the team approved (web → Bài học), passed to the local server so chat
+ * generations follow them like the web does. The local server cannot read the sheet.
+ */
+function teamLessons() {
+  if (!connectorUrl()) return "";
+  try {
+    return JSON.stringify(callConnector("get_lessons", {}) || {});
+  } catch (e) {
+    console.error(`! chưa lấy được bài học đã duyệt (${String(e.stderr || e.message).trim().slice(0, 120)}); gen tiếp không kèm bài học`);
+    return "";
+  }
 }
 
 /* ───────────────────────── local server ───────────────────────── */
@@ -159,6 +264,11 @@ async function up({ quiet = false } = {}) {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY || "proxy-injected",
       // Node's fetch ignores HTTPS_PROXY unless told; outbound calls must use it here.
       NODE_USE_ENV_PROXY: "1",
+      // The local server never writes to the team's sheet; usage rows go through
+      // the deployed web (report above), so nothing is counted twice.
+      GOOGLE_SERVICE_ACCOUNT_JSON: "",
+      // Approved lessons from the learning loop (lib/learning.ts reads this when it has no sheet).
+      TEAM_LESSONS_JSON: teamLessons(),
       NEXT_TELEMETRY_DISABLED: "1",
     },
   });
@@ -187,7 +297,9 @@ function down() {
 
 async function sessionCookie(secret) {
   const { encode } = require("next-auth/jwt");
-  const token = await encode({ token: { name: "chat", email: "chat@localhost", sub: "chat" }, secret, maxAge: 12 * 3600 });
+  const user = chatUser();
+  // checkedAt: fresh token per call, so the server does not look the person up in the Users sheet.
+  const token = await encode({ token: { name: user, email: chatEmail(user), sub: user, provider: "chat", checkedAt: Date.now() }, secret, maxAge: 12 * 3600 });
   return `next-auth.session-token=${token}`;
 }
 
@@ -221,7 +333,7 @@ async function mcpTool(name, args) {
   const st = await up({ quiet: true });
   process.env.NEXTAUTH_SECRET = st.secret; // mcpKey signs with it
   const { mcpKeyFor } = await lib("mcpKey");
-  const r = await fetch(`${BASE}/api/mcp/${encodeURIComponent(mcpKeyFor("chat"))}`, {
+  const r = await fetch(`${BASE}/api/mcp/${encodeURIComponent(mcpKeyFor(chatEmail()))}`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
@@ -298,7 +410,16 @@ async function cmdDoctor(opt) {
       report.mkt = { email: c.email, backend: new URL(c.backendUrl).host, expiresAt: new Date(c.expiresAt).toISOString(), hoursLeft: Math.round((c.expiresAt - Date.now()) / 36e5 * 10) / 10 };
     } catch (e) { report.mkt = `Mã lỗi: ${e.message}`; }
   }
+  if (!connectorUrl()) report.usageLog = "THIẾU GAIC_CONNECTOR_URL: việc làm trong chat không được tính vào log sử dụng";
+  else {
+    try {
+      callConnector("get_guide", {});
+      report.usageLog = `ok (ghi log dưới tên ${chatUser()})`;
+    } catch (e) { report.usageLog = `Link connector lỗi: ${String(e.stderr || e.message).trim().slice(0, 120)}`; }
+  }
+  if (fs.existsSync(PENDING_LOG)) report.usagePending = fs.readFileSync(PENDING_LOG, "utf8").split("\n").filter(Boolean).length;
   const hosts = ["play.google.com", "play-lh.googleusercontent.com", "itunes.apple.com", "is1-ssl.mzstatic.com"];
+  if (connectorUrl()) { try { hosts.push(new URL(connectorUrl()).host); } catch { /* reported above */ } }
   if (report.mkt?.backend) hosts.push(report.mkt.backend);
   report.network = {};
   await Promise.all(hosts.map(async (h) => {
@@ -345,7 +466,7 @@ async function cmdStore(url, opt) {
     rating: data.rating, description: data.description, icon, shots, via: data.via,
   };
   writeJson(path.join(dir, "app.json"), info);
-  out({ run: path.relative(ROOT, dir), ...info, description: info.description?.slice(0, 300) + "…" });
+  return out({ run: path.relative(ROOT, dir), ...info, description: info.description?.slice(0, 300) + "…" });
 }
 
 async function cmdConcept(opt) {
@@ -365,8 +486,11 @@ async function cmdConcept(opt) {
   });
   const file = path.join(dir, opt.out || `brief.${mk}.json`);
   writeJson(file, brief);
-  out({ file: path.relative(ROOT, file), brief });
+  return out({ file: path.relative(ROOT, file), brief });
 }
+
+/** Images generated by this process (auto mode reports the cost from it). */
+let generatedImages = 0;
 
 async function cmdGen(opt) {
   const dir = runDir(opt);
@@ -386,6 +510,8 @@ async function cmdGen(opt) {
     if (fs.existsSync(m)) characterFile = m;
   }
   const character = characterFile ? fileToDataUrl(characterFile) : undefined;
+  // Images already on disk: this run is a redo, or the approval to go from the draft to the full set.
+  const before = fs.existsSync(path.join(dir, "base")) ? fs.readdirSync(path.join(dir, "base")).filter((f) => f.endsWith(".png")).length : 0;
   const t0 = Date.now();
   console.error(`… gen ${slots.length} ảnh nền (${quality}), 2 ảnh cùng lúc`);
   const res = await pool(slots, Number(opt.concurrency || 2), async (slot) => {
@@ -398,6 +524,8 @@ async function cmdGen(opt) {
       width: slot.width,
       height: slot.height,
       angle: slot.angle,
+      // A redo with a reason: the user's words (--revision) or, in auto mode, the AI review's fix for that image.
+      revision: (opt.revisions && opt.revisions[slot.key]) || opt.revision || "",
       platform: app.platform,
       uiLanguage: app.language,
       referenceImages: shot ? [fileToDataUrl(path.join(dir, shot))] : [],
@@ -409,7 +537,28 @@ async function cmdGen(opt) {
     console.error(`  ✓ ${slot.key} (${data.model})`);
     return { key: slot.key, file: path.relative(ROOT, f), model: data.model };
   });
-  out({
+  const okN = res.filter((r) => r.ok).length;
+  // Learning loop: redoing chosen images is a correction (with the user's words in
+  // --prompt); going from the draft to the full set is the approval.
+  const picked = opt.slots && opt.slots !== "core" && opt.slots !== "all";
+  const reason = String(opt.revision || opt.prompt || "").trim();
+  const fb = { app: app.appName, markets: app.market };
+  if (opt.byAi) {
+    // Auto mode: redone because the AI review failed it, already logged by cmdQa. Not a person's correction.
+  } else if (picked) {
+    await logFeedback({ ...fb, kind: reason ? FEEDBACK.fixOne : FEEDBACK.redoOne, slot: slots.map((s) => s.key).join(", "), reason });
+  } else if (before > 0 && opt.slots === "all" && before < slots.length) {
+    await logFeedback({ ...fb, kind: FEEDBACK.approve, reason: "" });
+  } else if (before > 0) {
+    await logFeedback({ ...fb, kind: reason ? FEEDBACK.fixSet : FEEDBACK.redoSet, reason });
+  }
+  await logUsage({
+    action: opt.action || (opt.slots === "all" ? "Gen bộ ảnh" : picked ? "Gen lại ảnh" : "Gen ảnh duyệt"),
+    app: app.appName, markets: app.market, images: okN, duration_sec: (Date.now() - t0) / 1000,
+    result: okN === slots.length ? "ok" : okN ? "partial" : "error", note: `${quality} · ${opt.slots || "core"}`,
+  });
+  generatedImages += okN;
+  return out({
     seconds: Math.round((Date.now() - t0) / 1000),
     ok: res.filter((r) => r.ok).map((r) => r.value),
     failed: res.map((r, i) => (r.ok ? null : { key: slots[i].key, error: r.error })).filter(Boolean),
@@ -444,6 +593,7 @@ async function cmdLocalize(opt) {
   const targets = String(opt.to || "").split(",").map((s) => marketCode(s.trim())).filter(Boolean);
   if (!targets.length) die("Thiếu --to US,TH,…");
   const done = [];
+  const t0 = Date.now();
   for (const mk of targets) {
     if (!MARKETS[mk]) die(`Mã thị trường lạ: ${mk}`);
     const r = await api("POST", "/api/banner-localize", {
@@ -457,7 +607,9 @@ async function cmdLocalize(opt) {
     writeJson(f, { ...src, ...r.copy });
     done.push({ market: mk, file: path.relative(ROOT, f), copy: r.copy });
   }
-  out(done);
+  if (opt.note) await logFeedback({ kind: FEEDBACK.relocalize, app: src.app_name || app.appName, markets: targets.join(", "), reason: String(opt.note) });
+  await logUsage({ action: opt.note ? "Localize lại" : "Localize", app: src.app_name || app.appName, markets: targets.join(", "), duration_sec: (Date.now() - t0) / 1000, note: opt.note || "" });
+  return out(done);
 }
 
 /** Overlay with lib/abRender.ts inside headless Chromium — the web page's exact drawing code. */
@@ -500,7 +652,7 @@ async function cmdCompose(opt) {
       dataUrlToFile(dataUrl, f);
       done.push(path.relative(ROOT, f));
     }
-    out({ set, files: done });
+    return out({ set, files: done });
   } finally {
     await browser.close();
   }
@@ -530,7 +682,7 @@ async function cmdSheet(opt) {
     await page.setContent(html);
     const f = path.join(dir, `preview-${set}.png`);
     await page.screenshot({ path: f, fullPage: true });
-    out({ file: path.relative(ROOT, f) });
+    return out({ file: path.relative(ROOT, f) });
   } finally {
     await browser.close();
   }
@@ -551,7 +703,17 @@ async function cmdMkt(sub, opt) {
     case "push-templates": {
       const t = readJson(path.resolve(opt.file || die("Thiếu --file templates.json")));
       if (!opt.gen) die("Thiếu --gen (lấy từ mkt next-gen).");
-      return out(await mcpTool("mkt_push_ad_templates", { mkt_code: code, gen: Number(opt.gen), app_name: opt.app || "", templates: t.templates || t }));
+      const t0 = Date.now();
+      const tpls = t.templates || t;
+      const res = await mcpTool("mkt_push_ad_templates", { mkt_code: code, gen: Number(opt.gen), app_name: opt.app || "", templates: tpls });
+      const okN = (res?.results || []).filter((r) => r.action !== "error").length;
+      if (res?.pushed !== undefined) {
+        await logUsage({
+          action: "Tạo ad template", app: opt.app || "", markets: tpls.map((x) => x.market).join(", "), templates: okN,
+          duration_sec: (Date.now() - t0) / 1000, result: okN && okN === tpls.length ? "ok" : okN ? "partial" : "error", note: `${res.date || ""} Gen${opt.gen}`,
+        });
+      }
+      return out(res);
     }
     case "push-creatives":
       return pushCreatives(opt);
@@ -572,6 +734,7 @@ async function pushCreatives(opt) {
   const folder = path.join(dir, "final", set);
   if (!fs.existsSync(folder)) die(`Chưa có final/${set}.`);
   const files = fs.readdirSync(folder).filter((f) => f.endsWith(".png")).sort();
+  const t0 = Date.now();
 
   // Same name, tags and thumbnail as the web's push (cbPushAll), so a batch
   // from the chat is indistinguishable from one pushed on the Banner page.
@@ -607,21 +770,204 @@ async function pushCreatives(opt) {
     open: fillMktLink(process.env.MKT_SYSTEM_URL || MKT_CREATIVE_URL, tags[0]),
   };
   writeJson(path.join(dir, `push-${set}.json`), { at: new Date().toISOString(), ...report });
+  await logUsage({
+    action: "Đẩy lên MKT", app: app.appName, markets: market, images: ok.length, duration_sec: (Date.now() - t0) / 1000,
+    result: failed.length || res.errors?.length ? "partial" : "ok", note: tags[0],
+  });
   out(report);
+}
+
+/**
+ * A correction that did not go through gen/localize, e.g. the user changed the
+ * banner text and Claude edited brief.<MK>.json. Logged for the learning loop.
+ */
+async function cmdFeedback(opt) {
+  const dir = runDir(opt);
+  const app = readJson(path.join(dir, "app.json"));
+  const reason = String(opt.reason || "").trim();
+  if (!reason) die('Thiếu --reason "<lời người dùng>".');
+  const slot = typeof opt.slot === "string" ? opt.slot : "";
+  await logFeedback({ app: app.appName, markets: opt.set || app.market, kind: slot ? FEEDBACK.fixOne : FEEDBACK.fixSet, slot, reason });
+  out({ logged: true, kind: slot ? FEEDBACK.fixOne : FEEDBACK.fixSet });
+}
+
+/* ───────────────────────── AI review and auto mode ───────────────────────── */
+
+/** Printed-text limits, as in BRIEF_SCHEMA (app/api/banner-concept) and LIMITS (app/api/banner-localize). */
+const TEXT_LIMITS = { headline: 30, subheadline: 45, cta_text: 12, tagline: 32 };
+/** Price per image by quality, as AB_COST_PER_IMAGE in app/page.tsx. */
+const PRICE = { low: 0.006, medium: 0.053, high: 0.211 };
+
+/**
+ * Review a finished set: fixed checks on the printed text (length, the market's
+ * script) and an AI look at every banner (/api/banner-qa). Failures go to the
+ * Feedback tab as "AI kiểm tra thấy lỗi", so the learning loop learns from them too.
+ */
+async function cmdQa(opt) {
+  const dir = runDir(opt);
+  const app = readJson(path.join(dir, "app.json"));
+  const set = opt.set || app.market;
+  const brief = readJson(path.join(dir, `brief.${set}.json`));
+  const { MARKETS, marketCode } = await lib("adTemplates");
+  const { mostlyLatin, scriptOf } = await lib("adCopyCheck");
+  const language = MARKETS[marketCode(set)]?.language || app.language;
+
+  const textIssues = [];
+  const script = scriptOf(language);
+  for (const [k, max] of Object.entries(TEXT_LIMITS)) {
+    const v = String(brief[k] || "").trim();
+    if (v.length > max) textIssues.push(`${k} dài ${v.length} ký tự (tối đa ${max}): "${v}"`);
+    if (v && script && mostlyLatin(v, script, brief.app_name || app.appName)) textIssues.push(`${k} chưa viết bằng chữ ${language}: "${v}"`);
+  }
+
+  const folder = path.join(dir, "final", set);
+  if (!fs.existsSync(folder)) die(`Chưa có final/${set}. Chạy compose trước.`);
+  let files = fs.readdirSync(folder).filter((f) => f.endsWith(".png")).sort();
+  if (opt.slots) {
+    const want = (await pickSlots(opt.slots)).map((x) => `${x.key}.png`);
+    files = files.filter((f) => want.includes(f));
+  }
+  const sharp = require("sharp");
+  const copy = { headline: brief.headline, subheadline: brief.subheadline, cta_text: brief.cta_text, tagline: brief.tagline || "" };
+  const t0 = Date.now();
+  console.error(`… AI kiểm tra ${files.length} ảnh (${set})`);
+  const res = await pool(files, 3, async (f) => {
+    const slot = f.replace(/\.png$/, "");
+    // 1024px is enough to judge overlaps and hands, and keeps the request small.
+    const buf = await sharp(path.join(folder, f)).resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    const r = await api("POST", "/api/banner-qa", { image: `data:image/jpeg;base64,${buf.toString("base64")}`, language, copy, slot });
+    console.error(`  ${r.pass ? "✓" : "✗"} ${slot}${r.pass ? "" : `: ${r.issues.map((i) => i.type).join(", ")}`}`);
+    return { slot, pass: r.pass, issues: r.issues, fix: r.fix, model: r.model };
+  });
+  // An image the review could not look at counts as failed: a person has to see it.
+  const results = res.map((r, i) => (r.ok ? r.value : {
+    slot: files[i].replace(/\.png$/, ""), pass: false, fix: "", unreviewed: true,
+    issues: [{ type: "other", detail: `Chưa kiểm tra được: ${r.error}` }],
+  }));
+  const failed = results.filter((r) => !r.pass);
+  for (const f of failed.filter((x) => !x.unreviewed)) {
+    await logFeedback({
+      kind: FEEDBACK.aiQa, app: app.appName, markets: set, slot: f.slot,
+      reason: [...f.issues.map((i) => `${i.type}: ${i.detail}`), f.fix && `sửa: ${f.fix}`].filter(Boolean).join(" · "),
+    });
+  }
+  const report = { set, language, checked: results.length, passed: results.length - failed.length, failed, textIssues, ok: !textIssues.length && !failed.length };
+  writeJson(path.join(dir, `qa-${set}.json`), { at: new Date().toISOString(), ...report, results });
+  await logUsage({
+    action: "AI kiểm tra ảnh", app: app.appName, markets: set, images: results.length, duration_sec: (Date.now() - t0) / 1000,
+    result: report.ok ? "ok" : "partial", note: `${report.passed}/${report.checked} qua${textIssues.length ? `, ${textIssues.length} lỗi chữ` : ""}`,
+  });
+  return out(report);
+}
+
+/** Generate some images, compose, review; redo the failures once with the review's fix; review again. */
+async function genReviewed(run, set, keys, quality, prompt, action, steps) {
+  const list = (k) => k.join(",");
+  let gen = await cmdGen({ ...run, slots: list(keys), quality, prompt, byAi: true, action });
+  if (gen.failed.length) gen = await cmdGen({ ...run, slots: list(gen.failed.map((f) => f.key)), quality, prompt, byAi: true, action: "Gen lại ảnh" });
+  if (gen.failed.length) return { ok: false, why: `Không gen được ${gen.failed.length} ảnh: ${gen.failed.map((f) => `${f.key} (${f.error})`).join("; ")}` };
+  await cmdCompose({ ...run, set, slots: list(keys) });
+  let qa = await cmdQa({ ...run, set, slots: list(keys) });
+  steps.push(`${action}: ${keys.length} ảnh, AI kiểm tra ${qa.passed}/${qa.checked} qua`);
+  // Text that breaks the limits or the script is a brief problem: redrawing the artwork will not fix it.
+  if (qa.textIssues.length) return { ok: false, why: "Chữ trên banner sai giới hạn hoặc sai chữ viết", qa };
+  if (!qa.failed.length) return { ok: true, qa };
+  if (qa.failed.some((f) => f.unreviewed)) return { ok: false, why: "AI chưa kiểm tra được một số ảnh", qa };
+  const retry = qa.failed.map((f) => f.slot);
+  const revisions = Object.fromEntries(qa.failed.map((f) => [f.slot, f.fix || f.issues.map((i) => i.detail).join("; ")]));
+  console.error(`… AI tự sửa ${retry.length} ảnh: ${retry.join(", ")}`);
+  await cmdGen({ ...run, slots: list(retry), quality, prompt, byAi: true, action: "Gen lại ảnh", revisions });
+  await cmdCompose({ ...run, set, slots: list(retry) });
+  qa = await cmdQa({ ...run, set, slots: list(retry) });
+  steps.push(`AI tự sửa ${retry.length} ảnh, kiểm tra lại: ${qa.passed}/${qa.checked} qua`);
+  return qa.ok ? { ok: true, qa } : { ok: false, why: "Vẫn lỗi sau một lần AI tự sửa", qa };
+}
+
+/**
+ * Auto mode (@adbanner … auto): banners end to end, with the AI review standing
+ * in for the human draft review. Stops and hands over to a person whenever
+ * something needs one: over budget, an image still failing after one AI fix,
+ * printed text over the limits. Writes auto-report.json. Pushing to MKT is the
+ * skill's last step (ad copy first), and only when this report says ready.
+ */
+async function cmdAuto(url, opt) {
+  if (!url) die("Thiếu link store.");
+  const { MARKETS, marketCode } = await lib("adTemplates");
+  const { APP_CREATIVES } = await lib("adFormats");
+  const main = marketCode(opt.market || "");
+  if (!MARKETS[main]) die("Thiếu --market <thị trường chính>, vd VN.");
+  const others = String(opt.to || "").split(",").map((x) => marketCode(x.trim())).filter((m) => m && m !== main);
+  for (const m of others) if (!MARKETS[m]) die(`Mã thị trường lạ: ${m}`);
+  const quality = ["low", "medium", "high"].includes(opt.quality) ? opt.quality : "medium";
+  const full = !opt["draft-only"];
+  const core = APP_CREATIVES.filter((c) => c.isCore).map((c) => c.key);
+  const rest = APP_CREATIVES.filter((c) => !c.isCore).map((c) => c.key);
+  const planned = full ? APP_CREATIVES.length : core.length;
+  // Worst case: every image redone once by the AI review, plus a newly drawn mascot.
+  const worstUsd = Math.round((planned * 2 + 1) * PRICE[quality] * 100) / 100;
+  const maxUsd = Number(opt["max-usd"] || 3);
+  const steps = [];
+  let dir = null;
+  const finish = (report) => {
+    QUIET = false;
+    const r = { ...report, steps, spentUsd: Math.round(generatedImages * PRICE[quality] * 100) / 100, quality };
+    if (dir) writeJson(path.join(dir, "auto-report.json"), { at: new Date().toISOString(), ...r });
+    return out(r);
+  };
+  if (worstUsd > maxUsd) {
+    return finish({ ready: false, stop: `Chi phí xấu nhất ~$${worstUsd} (${planned} ảnh ${quality}, mỗi ảnh gen lại 1 lần, thêm mascot) vượt mức trần $${maxUsd}. Hỏi người dùng: tăng --max-usd hay giảm chất lượng.` });
+  }
+
+  QUIET = true;
+  try {
+    const info = await cmdStore(url, { market: main });
+    dir = path.resolve(ROOT, info.run);
+    const run = { run: dir };
+    steps.push(`Đọc app: ${info.appName}${info.developer ? ` (${info.developer})` : ""}`);
+    await cmdConcept({ ...run, market: main, prompt: opt.prompt });
+    steps.push("Viết brief");
+
+    const draft = await genReviewed(run, main, core, quality, opt.prompt, "Gen ảnh duyệt", steps);
+    if (!draft.ok) return finish({ ready: false, run: info.run, app: info.appName, stop: `Bản nháp: ${draft.why}.`, qa: draft.qa });
+    if (full) {
+      const set = await genReviewed(run, main, rest, quality, opt.prompt, "Gen bộ ảnh", steps);
+      if (!set.ok) return finish({ ready: false, run: info.run, app: info.appName, stop: `Bộ đầy đủ: ${set.why}.`, qa: set.qa });
+    }
+    if (others.length) {
+      await cmdLocalize({ ...run, from: main, to: others.join(",") });
+      steps.push(`Localize sang ${others.join(", ")}`);
+      for (const m of others) {
+        await cmdCompose({ ...run, set: m });
+        const qa = await cmdQa({ ...run, set: m });
+        steps.push(`${m}: AI kiểm tra ${qa.passed}/${qa.checked} qua`);
+        // The artwork is shared: a market whose text no longer fits needs a person.
+        if (!qa.ok) return finish({ ready: false, run: info.run, app: info.appName, stop: `Bản ${m} có lỗi sau khi vẽ chữ.`, qa });
+      }
+    }
+    const previews = [];
+    for (const m of [main, ...others]) previews.push((await cmdSheet({ ...run, set: m })).file);
+    return finish({ ready: true, run: info.run, app: info.appName, markets: [main, ...others], imagesPerMarket: planned, previews });
+  } finally {
+    QUIET = false;
+  }
 }
 
 /* ───────────────────────── main ───────────────────────── */
 
 const HELP = `node chat/studio.mjs <lệnh>
-  doctor                                   kiểm tra khoá, mã MKT, mạng
+  doctor                                   kiểm tra khoá, mã MKT, link connector (log sử dụng), mạng
   guide                                    luật viết ad copy + đặt tên Google++ (giống @adtemp)
   up | down                                bật / tắt server cục bộ (lệnh khác tự bật)
   store <link store> --market VN [--lang Vietnamese] [--run dir]
   concept --run dir [--market VN] [--lang ..] [--prompt "góc quảng cáo"] [--out brief.VN.json]
-  gen --run dir [--brief brief.VN.json] [--slots core|all|landscape-1,..] [--quality low|medium|high] [--precise] [--prompt ..] [--no-screenshot] [--character ảnh.png | --no-mascot]
+  gen --run dir [--brief brief.VN.json] [--slots core|all|landscape-1,..] [--quality low|medium|high] [--precise] [--prompt ..] [--revision "yêu cầu sửa"] [--no-screenshot] [--character ảnh.png | --no-mascot]
   localize --run dir [--from VN] --to US,TH [--note "ghi chú dịch"]
   compose --run dir --set VN [--brief brief.VN.json] [--slots ..]
   sheet --run dir --set VN                 ảnh xem trước cả bộ
+  feedback --run dir --reason "lời người dùng" [--slot square-2] [--set US]   ghi một lần sửa không qua gen/localize (vd sửa chữ trong brief)
+  qa --run dir --set VN [--slots ..]       AI kiểm tra từng banner + kiểm tra chữ (độ dài, chữ viết)
+  auto <link store> --market VN [--to US,TH] [--prompt "góc"] [--quality medium] [--max-usd 3] [--draft-only]
+                                           chế độ auto: gen → AI kiểm tra → AI tự sửa 1 lần → đủ bộ → localize; dừng khi cần người
   mkt status | next-gen --markets VN,US | check-copy --file t.json | push-templates --file t.json --gen N
   mkt push-creatives --run dir --set VN --gen N [--market VN] [--angle A01] [--product id]`;
 
@@ -639,6 +985,9 @@ try {
     case "localize": await cmdLocalize(opt); break;
     case "compose": await cmdCompose(opt); break;
     case "sheet": await cmdSheet(opt); break;
+    case "feedback": await cmdFeedback(opt); break;
+    case "qa": await cmdQa(opt); break;
+    case "auto": await cmdAuto(pos[0], opt); break;
     case "mkt": await cmdMkt(pos[0], opt); break;
     default: out(HELP);
   }
