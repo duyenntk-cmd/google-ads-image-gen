@@ -32,7 +32,7 @@ const TPL_BASE = "automation-facebook/ad-templates";
 
 /**
  * A key is honoured while its user has an active row in the Users sheet
- * (lib/userAccess.ts: cached 5 min, last good copy on a sheet outage).
+ * (lib/userAccess.ts: cached 1 min, last good copy on a sheet outage).
  * Keys carry the session email, "<username>@ads-gen.internal" for accounts
  * without one; userAccess maps it back to the sheet's username.
  */

@@ -105,40 +105,91 @@ function checkPassword(stored: string, password: string): { ok: boolean; legacy:
   return { ok, legacy: ok };
 }
 
-/** Replaces a plain-text or old-format password in the sheet with its scrypt hash. */
-async function upgradePassword(user: SheetUser, password: string) {
+/**
+ * Short fingerprint of a stored password cell. It changes whenever the
+ * password is changed on the web or reset in the sheet, which is how a
+ * session learns that it was signed in with an old password (lib/authOptions.ts).
+ */
+export function passwordStamp(stored: string): string {
+  return createHash("sha256").update(`pw:${stored}`).digest("base64url").slice(0, 16);
+}
+
+/** Writes a password hash into column B of one Users row. */
+async function writePasswordHash(row: number, hash: string): Promise<boolean> {
   try {
     const token = await getAccessToken();
     const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!B${user.row}?valueInputOption=RAW`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${USERS_SHEET}!B${row}?valueInputOption=RAW`,
       {
         method: "PUT",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ values: [[hashPassword(password)]] }),
+        body: JSON.stringify({ values: [[hash]] }),
       },
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return true;
   } catch (e) {
-    console.error("password upgrade:", e instanceof Error ? e.message : e);
+    console.error("password write:", e instanceof Error ? e.message : e);
+    return false;
   }
 }
 
 export async function verifyCredentials(
   username: string,
   password: string
-): Promise<{ id: string; name: string; email: string; role: Role } | null> {
+): Promise<{ id: string; name: string; email: string; role: Role; pwStamp: string } | null> {
   const users = await getUsersFromSheet();
   const user = users.find(u => u.username === username.toLowerCase().trim() && u.active);
   if (!user) return null;
 
   const { ok, legacy } = checkPassword(user.password, password);
   if (!ok) return null;
-  if (legacy) await upgradePassword(user, password);
+  // Plain text or the old format: store the scrypt hash instead.
+  let stored = user.password;
+  if (legacy) {
+    const hash = hashPassword(password);
+    if (await writePasswordHash(user.row, hash)) stored = hash;
+  }
 
   return {
     id: user.username,
     name: user.name,
     email: user.username.includes("@") ? user.username : `${user.username}${INTERNAL_DOMAIN}`,
     role: user.role,
+    pwStamp: passwordStamp(stored),
   };
+}
+
+/* ───────────────────────── changing a password on the web ───────────────────────── */
+
+export const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 128;
+
+/** Why a new password is refused, or null when it is fine. Checked before the current password. */
+export function newPasswordProblem(username: string, current: string, next: string): string | null {
+  if (next.length < PASSWORD_MIN) return `Mật khẩu mới cần ít nhất ${PASSWORD_MIN} ký tự.`;
+  if (next.length > PASSWORD_MAX) return `Mật khẩu mới dài quá ${PASSWORD_MAX} ký tự.`;
+  if (next === current) return "Mật khẩu mới phải khác mật khẩu hiện tại.";
+  if (next.trim().toLowerCase() === username.trim().toLowerCase()) return "Mật khẩu không được trùng tên đăng nhập.";
+  return null;
+}
+
+export type ChangePasswordResult =
+  | { ok: true }
+  | { ok: false; reason: "invalid" | "not_found" | "wrong_current" | "write_failed"; message: string };
+
+/** The signed-in person changes their own password: checks the current one, stores the new one as a hash. */
+export async function changePassword(username: string, current: string, next: string): Promise<ChangePasswordResult> {
+  const problem = newPasswordProblem(username, current, next);
+  if (problem) return { ok: false, reason: "invalid", message: problem };
+  const users = await getUsersFromSheet();
+  const user = users.find(u => u.username === username.trim().toLowerCase() && u.active);
+  if (!user) {
+    return { ok: false, reason: "not_found", message: "Tài khoản này không có trong sheet Users hoặc đã bị tắt, không đổi mật khẩu trên web được." };
+  }
+  if (!checkPassword(user.password, current).ok) return { ok: false, reason: "wrong_current", message: "Mật khẩu hiện tại không đúng." };
+  if (!(await writePasswordHash(user.row, hashPassword(next)))) {
+    return { ok: false, reason: "write_failed", message: "Chưa lưu được mật khẩu mới vào sheet Users. Thử lại sau ít phút." };
+  }
+  return { ok: true };
 }

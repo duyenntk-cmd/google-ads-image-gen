@@ -20,6 +20,10 @@ declare module "next-auth/jwt" {
     role?: Role;
     /** Last time the Users sheet was consulted for this session (ms). */
     checkedAt?: number;
+    /** When this session signed in (ms). */
+    signedInAt?: number;
+    /** passwordStamp of the password cell at sign-in; a different one in the sheet means the password changed. */
+    pwStamp?: string;
     revoked?: boolean;
   }
 }

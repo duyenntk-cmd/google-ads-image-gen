@@ -7,8 +7,14 @@ import { accessOf } from "@/lib/userAccess";
 import { parseRole } from "@/lib/roles";
 import { headers } from "next/headers";
 
-/** How often a live session is checked against the Users sheet. */
-const RECHECK_MS = 5 * 60_000;
+/**
+ * How often a live session is checked against the Users sheet. Plus the
+ * 1-minute cache in lib/userAccess.ts, a change in the sheet (turned off,
+ * password changed or reset, role) reaches the session within 5 minutes.
+ * Must stay longer than that cache: the password check trusts only a sheet
+ * copy read after the sign-in.
+ */
+const RECHECK_MS = 4 * 60_000;
 
 async function requestInfo() {
   try {
@@ -62,10 +68,14 @@ export const authOptions: NextAuthOptions = {
         token.name = user.name;
         token.email = user.email;
         token.role = parseRole((user as { role?: string }).role);
+        token.pwStamp = (user as { pwStamp?: string }).pwStamp;
+        token.signedInAt = Date.now();
         token.checkedAt = Date.now();
       }
       // Turning someone off in the Users sheet (Active = no, or deleting the row)
       // ends their session within RECHECK_MS instead of when the 30-day cookie expires.
+      // So does a password change on the web or a reset in the sheet: the session
+      // remembers a fingerprint of the password cell it signed in with.
       // Role changes are picked up the same way.
       if (!token.revoked && Date.now() - (token.checkedAt ?? 0) > RECHECK_MS) {
         // Sessions from before v7.2 carry no provider; the login page has offered only
@@ -75,7 +85,9 @@ export const authOptions: NextAuthOptions = {
         if (access) {
           // A Keycloak account need not have a row; only an explicit "no" turns it off.
           const off = access.found ? !access.active : !keycloak;
-          if (off) token.revoked = true;
+          // Only a sheet copy read after this sign-in can say the password changed since.
+          const pwChanged = Boolean(token.pwStamp) && access.found && access.readAt > (token.signedInAt ?? Infinity) && access.pwStamp !== token.pwStamp;
+          if (off || pwChanged) token.revoked = true;
           else if (access.found) token.role = access.role;
         }
         token.checkedAt = Date.now();

@@ -34,6 +34,8 @@ làm bằng tool đều có log, người khác tự dựng lại được.
   nhập thất bại, ghi kiểu RAW.
 - Tắt người (Active = `no` hoặc xoá dòng) thì phiên web đang mở bị đăng xuất trong vòng 5 phút, không phải chờ 30 ngày.
 - Phân quyền bằng cột Role: `creative` không dùng được Launch Camp và Phân tích Camp (API trả 403, sidebar ẩn).
+- Tự đổi mật khẩu trên web (nút **Đổi mật khẩu** ở cuối sidebar). Đổi trên web hoặc admin đặt lại trong sheet thì mọi
+  phiên đăng nhập bằng mật khẩu cũ kết thúc trong vòng 5 phút. Sai mật khẩu hiện tại 5 lần thì chờ 15 phút.
 - Connector Claude: so đúng username với tài khoản không có email; khi đọc tab `Users` lỗi thì dùng bản gần nhất.
 - Log sử dụng thêm Launch Camp, YouTube Upload, Gen Banner. Bộ lệnh chat ghi log đúng tên người qua link connector
   (`GAIC_CONNECTOR_URL`, tool `log_usage` mới của connector); chưa gửi được thì lưu tạm, gửi kèm lần sau.

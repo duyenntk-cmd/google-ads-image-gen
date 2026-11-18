@@ -41,6 +41,7 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `/api/mcp/[key]` | Connector Claude (MCP, JSON-RPC qua HTTP, không giữ phiên): get_guide, app_info, check_ad_copy, mkt_status, mkt_next_gen, mkt_push_ad_templates, log_usage, banner_link. Khoá trong URL (`lib/mcpKey.ts`), proxy bỏ qua đăng nhập web; người bị tắt trong tab `Users` thì khoá ngừng chạy (`lib/userAccess.ts`) |
 | `/api/mcp-key` | Link connector của người đang đăng nhập (hiện ở trang MKT System) |
 | `/api/usage-log` | ghi 1 dòng log sử dụng vào tab `UsageLog` (email lấy từ phiên đăng nhập) |
+| `/api/account/password` | người đang đăng nhập tự đổi mật khẩu (kiểm tra mật khẩu hiện tại, tối đa 5 lần sai / 15 phút, ghi `LoginLog`) |
 
 Mọi route đều gọi `requireSession()` ở dòng đầu. Ngoại lệ duy nhất là callback OAuth,
 vì Google phải redirect vào được — nó nằm dưới `/api/auth/` nên được proxy bỏ qua.
@@ -51,9 +52,12 @@ Route tiêu tiền thật hoặc đọc doanh thu gọi `requireCapability(...)`
 
 - Tab `Users` của sheet hệ thống: `Username | Password | Name | Active | Role`. Mật khẩu là mã băm scrypt
   (`scrypt$<salt>$<hash>`); ô chữ thường được tự thay bằng mã băm ở lần đăng nhập đúng kế tiếp (`lib/sheetsUsers.ts`).
-- Phiên là JWT của NextAuth. Callback `jwt` (`lib/authOptions.ts`) đọc lại tab `Users` mỗi 5 phút
-  (`lib/userAccess.ts`, có cache): người bị tắt thì token mang cờ `revoked`, session không còn `user`, mọi API trả 401,
+- Phiên là JWT của NextAuth. Callback `jwt` (`lib/authOptions.ts`) đọc lại tab `Users` mỗi 4 phút
+  (`lib/userAccess.ts`, cache 1 phút, nên thay đổi trong sheet tới mọi phiên trong vòng 5 phút): người bị tắt thì token mang cờ `revoked`, session không còn `user`, mọi API trả 401,
   `proxy.ts` chuyển về `/login`, trang tự đăng xuất. Role cũng được cập nhật theo cách này.
+- Token giữ `pwStamp` (dấu vân tay ô mật khẩu lúc đăng nhập). Ô mật khẩu đổi (người dùng đổi trên web, admin đặt lại
+  trong sheet) thì lần kiểm tra kế tiếp thu hồi phiên. Chỉ tin bản sheet đọc sau lúc đăng nhập (`readAt > signedInAt`),
+  để cache cũ trên server khác không đăng xuất nhầm phiên vừa đăng nhập bằng mật khẩu mới.
 - Phân loại dữ liệu, quy trình khi có người nghỉ, lịch sử siết quyền: `docs/du-lieu-va-bao-mat.md`.
 
 ## File quan trọng

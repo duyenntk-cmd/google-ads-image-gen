@@ -123,7 +123,8 @@ Tất cả làm trong tab `Users` của sheet hệ thống, có hiệu lực tro
 |---|---|
 | Thêm người | Thêm dòng: Username, mật khẩu chữ thường (tự mã hoá ở lần đăng nhập đầu), Name, Role |
 | Tắt người (nghỉ việc, chuyển bộ phận) | Ghi `no` vào cột Active. Phiên đang mở và link connector của người đó ngừng chạy |
-| Đặt lại mật khẩu | Gõ đè mật khẩu mới (chữ thường) vào ô Password |
+| Tự đổi mật khẩu | Mỗi người tự đổi trên web: nút **Đổi mật khẩu** dưới tên ở cuối sidebar. Đổi xong thì bị đăng xuất ở mọi nơi |
+| Quên mật khẩu | Admin gõ đè mật khẩu mới (chữ thường) vào ô Password, báo cho người đó. Mọi phiên đang mở của người đó bị đăng xuất trong vòng 5 phút |
 | Đổi quyền | Cột Role: để trống hoặc `ua` = mọi công cụ; `creative` = không có Launch Camp và Phân tích Camp |
 
 Quy trình đầy đủ khi có người nghỉ: [docs/du-lieu-va-bao-mat.md](docs/du-lieu-va-bao-mat.md).

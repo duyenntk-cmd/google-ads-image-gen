@@ -48,7 +48,14 @@ Luật nằm ở `lib/roles.ts`.
 **Quản trị viên** là người có quyền sửa sheet hệ thống. Giữ danh sách này ít nhất có thể, vì sheet chứa danh sách
 tài khoản. Service account của web cũng có quyền sửa (để ghi log và mã hoá mật khẩu).
 
-## 4. Khi có người nghỉ việc hoặc chuyển bộ phận
+## 4. Mật khẩu, nghỉ việc, chuyển bộ phận
+
+Mỗi người tự đổi mật khẩu trên web (nút **Đổi mật khẩu** ở cuối sidebar): phải nhập đúng mật khẩu hiện tại, mật khẩu
+mới tối thiểu 8 ký tự. Đổi xong, mọi phiên đăng nhập bằng mật khẩu cũ kết thúc (phiên đang dùng: ngay; máy khác: trong
+vòng 5 phút). Admin đặt lại mật khẩu trong sheet cũng đăng xuất mọi phiên của người đó như vậy. Nhập sai mật khẩu hiện
+tại 5 lần thì phải chờ 15 phút. Mọi lần đổi (thành công hoặc sai mật khẩu hiện tại) đều ghi ở `LoginLog`.
+
+### Khi có người nghỉ việc hoặc chuyển bộ phận
 
 Làm trong ngày làm việc cuối của người đó, theo thứ tự:
 
@@ -67,7 +74,8 @@ Làm trong ngày làm việc cuối của người đó, theo thứ tự:
 ## 5. Kiểm tra hằng tháng
 
 - [ ] Đối chiếu tab `Users` với danh sách team hiện tại; ai đã nghỉ mà Active chưa là `no` thì tắt.
-- [ ] Tab `LoginLog`: một tên đăng nhập thất bại nhiều lần liên tiếp thì hỏi người đó, cân nhắc đổi mật khẩu.
+- [ ] Tab `LoginLog`: một tên đăng nhập thất bại nhiều lần liên tiếp, hoặc nhiều lần "đổi mật khẩu thất bại", thì hỏi
+      người đó và cân nhắc đặt lại mật khẩu.
 - [ ] Cột Password không còn ô chữ thường (mọi ô bắt đầu bằng `scrypt$`). Ô còn chữ thường là người chưa đăng nhập
       lại từ v7.2: nhắc họ đăng nhập, hoặc đặt mật khẩu mới.
 - [ ] Danh sách người có quyền sửa sheet hệ thống vẫn đúng.
@@ -81,11 +89,12 @@ Mỗi lần phát hiện rủi ro và sửa, ghi một dòng.
 | 2026-11-18 | Mật khẩu trong tab `Users` được chấp nhận ở dạng chữ thường, hoặc SHA-256 với một salt chung viết trong code | Ai mở được sheet là đọc được mật khẩu | Mã băm scrypt, salt riêng từng người; mật khẩu cũ tự chuyển sang mã băm ở lần đăng nhập kế tiếp | v7.2 |
 | 2026-11-18 | Log đăng nhập ghi vào tab `Sheet1` đã không còn, lỗi bị bỏ qua | Không có lịch sử ai đăng nhập | Ghi vào tab `LoginLog` (tự tạo), ghi cả lần thất bại, lỗi ghi log hiện trong log server | v7.2 |
 | 2026-11-18 | Log đăng nhập ghi kiểu `USER_ENTERED` | Tên đăng nhập hoặc user agent bắt đầu bằng `=` thành công thức trong sheet | Ghi kiểu `RAW` | v7.2 |
-| 2026-11-18 | Tắt người trong tab `Users` chỉ chặn lần đăng nhập mới | Phiên web đang mở vẫn dùng được tới 30 ngày | Kiểm tra lại tab `Users` mỗi 5 phút trong phiên, tắt là bị đăng xuất | v7.2 |
+| 2026-11-18 | Tắt người trong tab `Users` chỉ chặn lần đăng nhập mới | Phiên web đang mở vẫn dùng được tới 30 ngày | Kiểm tra lại tab `Users` trong phiên, tắt là bị đăng xuất trong vòng 5 phút | v7.2 |
 | 2026-11-18 | Không có phân quyền | Ai đăng nhập cũng tạo được campaign thật và xem được doanh thu | Cột Role, chặn Launch Camp và Phân tích Camp với role `creative` | v7.2 |
 | 2026-11-18 | Connector Claude cho qua mọi link khi đọc tab `Users` bị lỗi | Người đã bị tắt vẫn dùng được connector lúc Google Sheets gặp sự cố | Dùng bản tab `Users` đọc được gần nhất | v7.2 |
 | 2026-11-18 | Connector Claude so tên `x@ads-gen.internal` với username `x` | Chặn nhầm tài khoản không có email | Đổi về đúng username trước khi so | v7.2 |
 | 2026-11-18 | Lượt chạy từ chat Claude Code ký tên `chat@localhost`, không ghi log | Không biết ai đã đẩy gì lên MKT | Ghi đúng tên người qua link connector, ghi vào `UsageLog` | v7.2 |
+| 2026-11-18 | Người dùng không tự đổi được mật khẩu; đổi mật khẩu không đăng xuất các phiên cũ | Lộ mật khẩu thì phải nhờ admin, phiên của kẻ lạ vẫn chạy tiếp | Nút Đổi mật khẩu trên web; đổi hoặc đặt lại mật khẩu thì mọi phiên cũ kết thúc trong 5 phút; giới hạn 5 lần sai mật khẩu hiện tại / 15 phút | v7.2 |
 
 ## 7. Rủi ro còn lại
 

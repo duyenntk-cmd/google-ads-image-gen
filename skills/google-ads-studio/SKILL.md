@@ -82,6 +82,8 @@ trước khi gửi. Đừng bỏ lớp kiểm tra này.
 Tài khoản nằm ở tab `Users` của sheet hệ thống (`Username | Password | Name | Active | Role`), đổi là có hiệu lực
 trong 5 phút. Active = `no` thì phiên web và link connector của người đó ngừng chạy. Role `creative` không dùng được
 Launch Camp và Phân tích Camp; để trống hoặc `ua` là đủ quyền. Mật khẩu tự chuyển sang mã băm ở lần đăng nhập đầu.
+Mỗi người tự đổi mật khẩu bằng nút **Đổi mật khẩu** ở cuối sidebar; quên mật khẩu thì admin gõ đè mật khẩu mới (chữ
+thường) vào ô Password. Đổi hoặc đặt lại mật khẩu thì mọi phiên cũ của người đó bị đăng xuất trong 5 phút.
 Người dùng báo "không thấy Launch Camp / Phân tích Camp" hoặc lỗi 403 "không có quyền": kiểm tra cột Role.
 Chi tiết: `docs/du-lieu-va-bao-mat.md`. Quy trình và các điểm duyệt: `docs/quy-trinh.md`.
 

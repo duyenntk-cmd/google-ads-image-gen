@@ -7,6 +7,7 @@ import { AD_SIZES } from "@/lib/adSizes";
 import { APP_CREATIVES, RATIO_SPECS } from "@/lib/adFormats";
 import { generateAllBanners } from "@/lib/canvasGen";
 import CampDoctor from "@/components/CampDoctor";
+import ChangePasswordModal from "@/components/ChangePasswordModal";
 import { abSaveRun, abListRuns, abLoadArt, abDeleteRun, AbRunMeta } from "@/lib/abHistory";
 import { fillMktLink } from "@/lib/mktLink";
 import { abRenderBanner, abLoadImg } from "@/lib/abRender";
@@ -310,6 +311,7 @@ const locLabel = (key: string) => {
 
 export default function Home() {
   const { data: session } = useSession();
+  const [pwOpen, setPwOpen] = useState(false);
   // Account turned off in the Users sheet after signing in: leave right away.
   useEffect(() => {
     if (session?.revoked) void signOut({ callbackUrl: "/login" });
@@ -2833,11 +2835,18 @@ export default function Home() {
                   <div className="text-[10px] truncate" style={{color: t.textMuted}}>{session.user.email}</div>
                 </div>
               </div>
-              <button onClick={() => signOut({ callbackUrl: "/login" })}
-                className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
-                style={{borderColor: t.border, color: t.textMuted}}>
-                Đăng xuất
-              </button>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button onClick={() => setPwOpen(true)}
+                  className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
+                  style={{borderColor: t.border, color: t.textMuted}}>
+                  Đổi mật khẩu
+                </button>
+                <button onClick={() => signOut({ callbackUrl: "/login" })}
+                  className="w-full text-[10px] px-2 py-1 rounded-md border transition-colors text-center"
+                  style={{borderColor: t.border, color: t.textMuted}}>
+                  Đăng xuất
+                </button>
+              </div>
             </div>
           )}
           <button onClick={() => setDarkMode(d => !d)}
@@ -4893,6 +4902,8 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {pwOpen && <ChangePasswordModal t={t} onClose={() => setPwOpen(false)} />}
 
       {/* Lightbox */}
       {selectedPreview && (
