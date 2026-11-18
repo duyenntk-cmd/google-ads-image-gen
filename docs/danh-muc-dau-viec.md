@@ -24,9 +24,9 @@ không bằng lời. Mọi con số "đã dùng" lấy từ tab `UsageLog` của
 | 6 | Upload bộ banner lên MKT kèm tag | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Banner + Ad Copy, `@adbanner` | `… / Đẩy lên MKT`, `MKT System / Upload creative` |
 | 7 | Ghép creative với ad template trên MKT | Mỗi đợt | ⟨điền⟩ | 0 | **100% (đã bỏ hẳn, v5.2)** | Đặt tên chuẩn Google++ | Không cần log: bước không còn tồn tại |
 | 8 | Đọc report, quyết budget/tROAS cho từng camp | Hằng ngày | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Phân tích Camp | `Phân tích Camp` / `Phân tích camp` |
-| 9 | Tạo App campaign mới | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Launch Camp | `Launch Camp` / `Tạo campaign` (có log từ v7.2) |
-| 10 | Up video YouTube unlisted lấy link chạy ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | YouTube Upload | `YouTube Upload` / `Up video unlisted` (có log từ v7.2) |
-| 11 | Ra ảnh tĩnh nhiều kích thước từ video ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Gen Banner | `Gen Banner` / `Gen ảnh từ video` (có log từ v7.2) |
+| 9 | Tạo App campaign mới | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Launch Camp | `Launch Camp` / `Tạo campaign` (có log từ v8.0) |
+| 10 | Up video YouTube unlisted lấy link chạy ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | YouTube Upload | `YouTube Upload` / `Up video unlisted` (có log từ v8.0) |
+| 11 | Ra ảnh tĩnh nhiều kích thước từ video ads | ⟨điền⟩ | ⟨điền⟩ | ⟨điền⟩ | ⟨tính⟩ | Gen Banner | `Gen Banner` / `Gen ảnh từ video` (có log từ v8.0) |
 | 12 | ⟨đầu việc lặp lại khác chưa có tool⟩ | | | | 0% | chưa có | |
 
 Dòng 12 trở đi: ghi cả những việc lặp lại **chưa** tự động. Tỉ lệ chung chỉ đúng khi danh mục đủ, kể cả việc chưa làm được.

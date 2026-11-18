@@ -90,7 +90,7 @@ export function hashPassword(password: string): string {
 
 const sha = (s: string) => createHash("sha256").update(s).digest();
 const sameText = (a: string, b: string) => timingSafeEqual(sha(a), sha(b));
-/** The hash format used before v7.2 (one fixed salt for everyone). Only read, never written. */
+/** The hash format used before v8.0 (one fixed salt for everyone). Only read, never written. */
 const legacySha = (password: string) => createHash("sha256").update(password + "ads-gen-salt-2024").digest("hex");
 
 function checkPassword(stored: string, password: string): { ok: boolean; legacy: boolean } {

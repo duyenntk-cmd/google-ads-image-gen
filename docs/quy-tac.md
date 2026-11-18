@@ -52,6 +52,7 @@ Quyền truy cập (ai dùng được công cụ nào) không nằm ở đây m�
 | 7 góc creative | hero, feature, benefit, lifestyle, social, bold, discovery | `ANGLES` trong `lib/adFormats.ts` | Web, chat | Mỗi slot trong bộ 20 ảnh |
 | Chất lượng và giá ảnh | low ~$0,006 · medium ~$0,053 · high ~$0,211 / ảnh | `AB_COST_PER_IMAGE` trong `app/page.tsx` | Web (hiện giá trên nút), skill `ads-chat` | Trước khi gen |
 | Khung budget / tROAS | Target ROAS D0 = 100%; tiêu hết budget = ≥90%; scale khi ≥120% target; siết khi <80%; cắt khi <50%; mỗi lần chỉnh tối đa 20%; đủ dữ liệu khi cost ≥ max($5, 10% budget) hoặc ≥30 conversion; đang learning thì không chỉnh | `RULES` trong `lib/campDoctor.ts` (target D0 chỉnh được trên trang cho từng lần phân tích) | Phân tích Camp | Mỗi lần phân tích report |
+| Cổng AI kiểm tra (chế độ auto) | Trượt khi: chữ đè mặt/đầu/tay/màn hình điện thoại, chữ bị cắt, >1 nhân vật, tay/mặt dị dạng, chữ lạ trong tranh, sai ngôn ngữ; không chắc thì cho qua; AI tự gen lại 1 lần; mức trần mặc định $3 | Prompt trong `app/api/banner-qa/route.ts`; số lần sửa và mức trần trong `cmdAuto`, `genReviewed` (`chat/studio.mjs`) | Chat | Lệnh `auto`, `qa` |
 | Cắt đoạn hướng dẫn quay điện thoại | Đoạn chạm cuối video: tự cắt; đoạn giữa: để người tick; gần như cả video giống màn hình điện thoại: không tự cắt | `public/outro-studio/index.html` | Outro Studio | Khi quét video |
 
 ## Tầng 4. Bài học đã duyệt
@@ -95,8 +96,9 @@ xuất, người duyệt, ngày duyệt). Các dòng trước 18/11/2026 đượ
 
 | Ngày | Tầng | Quy tắc | Đổi gì | Vì sao | Version / commit |
 |---|---|---|---|---|---|
+| 2026-11-18 | 3 | Chế độ auto | AI kiểm tra thay người duyệt nháp; tự đẩy khi mọi cổng qua; dừng hỏi người khi có ngoại lệ | Bỏ bước chờ người khi kết quả đã đạt | v8.0 |
 | 2026-11-18 | 3 | Học từ lần sửa | Lỗi lặp lại thành bài học, người duyệt mới vào prompt | Bớt lặp lỗi đã sửa nhiều lần | v8.0 |
-| 2026-11-18 | 3 | Quyền | Role `creative` không dùng Launch Camp, Phân tích Camp, không duyệt bài học | Tách việc tiêu tiền / xem doanh thu khỏi việc làm creative | v7.2 |
+| 2026-11-18 | 3 | Quyền | Role `creative` không dùng Launch Camp, Phân tích Camp, không duyệt bài học | Tách việc tiêu tiền / xem doanh thu khỏi việc làm creative | v8.0 |
 | 2026-11-13 | 3 | Cắt đoạn hướng dẫn quay điện thoại | Đoạn cuối tự cắt, đoạn giữa để người tick | Đoạn đó là giao diện TikTok/CapCut, khác app mình | v6.4 |
 | 2026-11-03 | 2 | Tag creative | Một tag main `<ngày> Gen<n>` + một tag thị trường | MKT System ghép creative với template theo tag | v5.2, `6f233ee` |
 | 2026-11-03 | 2 | Tên ad template | `Ad Template <ngày> Gen<n> <thị trường>`; trùng tên thì cập nhật | Google++ tự ghép, bỏ bước map tay; tránh lỗi "Ambiguous" | v5.2, `b964335` |

@@ -78,7 +78,7 @@ export const authOptions: NextAuthOptions = {
       // remembers a fingerprint of the password cell it signed in with.
       // Role changes are picked up the same way.
       if (!token.revoked && Date.now() - (token.checkedAt ?? 0) > RECHECK_MS) {
-        // Sessions from before v7.2 carry no provider; the login page has offered only
+        // Sessions from before v8.0 carry no provider; the login page has offered only
         // username/password since 2026-08, so treat those as credentials.
         const keycloak = token.provider === "keycloak";
         const access = await accessOf(keycloak ? token.email : token.sub || token.email);

@@ -20,6 +20,7 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `NEXT_PUBLIC_BASE_URL` | URL gốc cho OAuth YouTube |
 | `SENSORTOWER_API_KEY` | (tuỳ chọn) Competitor Ads |
 | `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` / `KEYCLOAK_ISSUER` | (tuỳ chọn) SSO Keycloak; trang đăng nhập hiện chỉ dùng tài khoản trong sheet |
+| `QA_MODEL` | (tuỳ chọn) model cho `/api/banner-qa`, mặc định `gpt-4o` |
 | `MKT_SYSTEM_URL` | (tuỳ chọn) thay mẫu link nút "Mở MKT System" (mặc định: trang Creative của `mktpro.aperogroup.ai` lọc theo tag, xem `lib/mktLink.ts`); được chứa `{tag}`, `{from}`, `{to}` |
 
 ## API route
@@ -41,6 +42,7 @@ deploy Vercel · đăng nhập NextAuth (Google).
 | `/api/mcp/[key]` | Connector Claude (MCP, JSON-RPC qua HTTP, không giữ phiên): get_guide, app_info, check_ad_copy, mkt_status, mkt_next_gen, mkt_push_ad_templates, log_usage, log_feedback, get_lessons, banner_link. Khoá trong URL (`lib/mcpKey.ts`), proxy bỏ qua đăng nhập web; người bị tắt trong tab `Users` thì khoá ngừng chạy (`lib/userAccess.ts`) |
 | `/api/mcp-key` | Link connector của người đang đăng nhập (hiện ở trang MKT System) |
 | `/api/usage-log` | ghi 1 dòng log sử dụng vào tab `UsageLog` (email lấy từ phiên đăng nhập) |
+| `/api/banner-qa` | AI kiểm tra 1 banner đã vẽ chữ (chữ đè, chữ cắt, 2 nhân vật, tay, chữ lạ, sai ngôn ngữ), trả lệnh sửa. Model `QA_MODEL` (mặc định gpt-4o). Cổng của chế độ auto |
 | `/api/feedback` | ghi 1 lần người sửa / duyệt vào tab `Feedback` (vòng học) |
 | `/api/lessons` | GET: tỉ lệ sửa theo version, lần sửa gần đây, bài học. POST (`manage_lessons`): `propose` (AI đề xuất bài học), `review` (áp dụng / sửa / bỏ) |
 | `/api/account/password` | người đang đăng nhập tự đổi mật khẩu (kiểm tra mật khẩu hiện tại, tối đa 5 lần sai / 15 phút, ghi `LoginLog`) |

@@ -12,7 +12,7 @@ Version hiện tại nằm trong `package.json` và ở cuối sidebar của web
 |---|---|---|
 | Web | Mọi người trong team | https://google-ads-image-gen.vercel.app, tài khoản do admin cấp |
 | Connector trong Claude (`@adtemp`) | Tạo ad template bằng chat trên claude.ai | Web → **MKT System** → "Lấy link connector của tôi" → Claude → Settings → Connectors |
-| Claude Code (`@adbanner`) | Gen banner và đẩy MKT ngay trong chat, không mở web | `node chat/studio.mjs doctor`, xem [.claude/skills/ads-chat/SKILL.md](.claude/skills/ads-chat/SKILL.md) |
+| Claude Code (`@adbanner`, thêm chữ `auto` để AI tự kiểm tra và tự đẩy) | Gen banner và đẩy MKT ngay trong chat, không mở web | `node chat/studio.mjs doctor`, xem [.claude/skills/ads-chat/SKILL.md](.claude/skills/ads-chat/SKILL.md) |
 
 ## Tài liệu
 
@@ -109,6 +109,7 @@ Mở http://localhost:3000/login, đăng nhập bằng tài khoản ở bước 
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `NEXT_PUBLIC_BASE_URL` | khi dùng YouTube Upload | OAuth YouTube |
 | `MKT_SYSTEM_URL` | không | Mẫu link nút "Mở MKT System", được chứa `{tag}`, `{from}`, `{to}` |
 | `SENSORTOWER_API_KEY` | không | Competitor Ads |
+| `QA_MODEL` | không | Model AI kiểm tra banner ở chế độ auto, mặc định `gpt-4o` |
 | `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_ISSUER` | không | SSO Keycloak (trang đăng nhập hiện chỉ dùng tài khoản trong sheet) |
 
 Bộ lệnh chat (`chat/studio.mjs`) đọc thêm `MKT_CONNECT_CODE` và `GAIC_CONNECTOR_URL` từ Environment của Claude Code,

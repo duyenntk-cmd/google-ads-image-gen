@@ -87,6 +87,12 @@ thường) vào ô Password. Đổi hoặc đặt lại mật khẩu thì mọi 
 Người dùng báo "không thấy Launch Camp / Phân tích Camp" hoặc lỗi 403 "không có quyền": kiểm tra cột Role.
 Chi tiết: `docs/du-lieu-va-bao-mat.md`. Quy trình và các điểm duyệt: `docs/quy-trinh.md`.
 
+## Chế độ auto (chat Claude Code)
+
+`@adbanner <link> <thị trường…> auto [tối đa $X]`: AI tự kiểm tra từng banner (`/api/banner-qa`), tự gen lại ảnh trượt
+1 lần, và tự đẩy lên MKT khi mọi cổng qua; dừng hỏi người khi có ngoại lệ (ảnh vẫn lỗi, chữ sai giới hạn, vượt mức
+trần, ad copy còn lỗi). Quy trình: `.claude/skills/ads-chat/SKILL.md`, `docs/quy-trinh.md` mục 6.
+
 ## Vòng học (trang 🧠 Bài học)
 
 Mỗi lần người sửa ảnh / gen lại / localize lại / duyệt nháp được ghi vào tab `Feedback` kèm lời người sửa. Nút

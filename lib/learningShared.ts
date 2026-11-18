@@ -11,13 +11,17 @@ export const FEEDBACK_KIND = {
   redoSet: "Gen lại cả bộ (không ghi lý do)",
   relocalize: "Localize lại",
   approve: "Duyệt bản nháp",
+  /** Found by the AI review in the chat's auto mode (app/api/banner-qa), not by a person. */
+  aiQa: "AI kiểm tra thấy lỗi",
 } as const;
 export type FeedbackKind = (typeof FEEDBACK_KIND)[keyof typeof FEEDBACK_KIND];
 
 /** Kinds that mean the AI got an image wrong (counted in the correction rate). */
 export const IMAGE_FIX_KINDS: string[] = [FEEDBACK_KIND.fixOne, FEEDBACK_KIND.fixSet, FEEDBACK_KIND.redoOne, FEEDBACK_KIND.redoSet];
-/** Every kind that is a correction (approvals are not). */
+/** Every kind that is a correction by a person (approvals are not). */
 export const CORRECTION_KINDS: string[] = [...IMAGE_FIX_KINDS, FEEDBACK_KIND.relocalize];
+/** What lessons are learned from: people's corrections and the AI review's findings. */
+export const LESSON_SOURCE_KINDS: string[] = [...CORRECTION_KINDS, FEEDBACK_KIND.aiQa];
 
 /** Which prompt an approved lesson is added to. Stored by key in the BaiHoc tab. */
 export const LESSON_TARGETS = {
@@ -55,6 +59,8 @@ export interface QualityRow {
   per100: number | null;
   relocalize: number;
   approvals: number;
+  /** Times the AI review (auto mode, qa command) failed a banner. */
+  aiQaFails: number;
 }
 
 export interface FeedbackRow {

@@ -86,6 +86,9 @@ tự kiểm tra và tự chặn.
 | Rate limit OpenAI: chờ đúng thời gian server báo rồi thử lại; chỉ gen lại ảnh lỗi | `/api/banner-generate`, nút "Gen lại N ảnh lỗi" |
 | Push lại sau lỗi: không upload lại, không tạo trùng | Outro Studio, `idempotencyKey` của `/api/mkt/creatives` |
 | Mã MKT hết hạn: dừng và báo lấy mã mới, không thử lại bằng mã cũ | `ConnectCodeExpiredError` |
+| Banner có chữ đè mặt/tay/điện thoại, chữ bị cắt, hai nhân vật, tay dị dạng, chữ lạ trong tranh, sai ngôn ngữ (chế độ auto, lệnh `qa`) | `/api/banner-qa`, `cmdQa` trong `chat/studio.mjs` |
+| Chữ trên banner quá giới hạn ký tự hoặc sai chữ viết của thị trường (chế độ auto, lệnh `qa`) | `cmdQa` trong `chat/studio.mjs` |
+| Chi phí xấu nhất của một lượt auto vượt mức trần | `cmdAuto` trong `chat/studio.mjs` |
 | Tài khoản bị tắt hoặc không đủ quyền: chặn ở mọi API route | `requireSession`, `requireCapability` (`lib/apiAuth.ts`) |
 
 ## 5. Vòng học: tool tự tốt lên từ các lần người sửa
@@ -103,8 +106,26 @@ Mỗi điểm duyệt ở trên vừa chặn lỗi, vừa là dữ liệu để 
 AI không tự đổi prompt: mọi thay đổi đi qua bước 3. Lời yêu cầu sửa riêng của một lần (ô "Muốn sửa gì") vẫn được ưu
 tiên hơn bài học chung. Các bài học viết tay từ trước nằm ở `skills/google-ads-studio/references/troubleshooting.md`.
 
-## 6. Bước tiếp theo
+## 6. Chế độ auto: người đặt mục tiêu, máy chạy, chỉ hỏi người khi có ngoại lệ
 
-- **Chạy theo mục tiêu:** một lệnh như `@adbanner <link> VN auto` tự đi hết các bước. Các điểm duyệt 1–4 thay bằng
-  kiểm tra tự động (đúng app, chữ không đè nhân vật, đúng ngôn ngữ, ad copy qua kiểm tra), chỉ dừng hỏi người khi có
-  ngoại lệ, như cách Outro Studio đang làm với đoạn hướng dẫn.
+Lệnh `@adbanner <link> <thị trường…> auto [tối đa $X]` trong chat. Người đặt mục tiêu (app, thị trường, góc, mức chi
+tối đa); các điểm duyệt 1–4 ở mục 4 được thay bằng cổng kiểm tra tự động:
+
+| Điểm duyệt ở chế độ thường | Ở chế độ auto |
+|---|---|
+| 1. Xác nhận đúng app | Báo tên app trong báo cáo cuối; link store do người dán |
+| 2. Xem chi phí | Mức trần `--max-usd`: tính chi phí xấu nhất (mọi ảnh gen lại 1 lần) trước khi gen, vượt thì dừng hỏi |
+| 3. Duyệt bản nháp | AI kiểm tra từng banner (`/api/banner-qa`) + kiểm tra chữ cố định; ảnh trượt được AI gen lại 1 lần với lệnh sửa của chính nó |
+| 4. Gõ "ok" trước khi đẩy | Đẩy tự động khi: mọi ảnh qua kiểm tra, ad copy qua `check-copy`, mã MKT còn hạn |
+
+**Vẫn dừng hỏi người** khi: ảnh vẫn trượt sau 1 lần AI tự sửa, chữ trên banner sai giới hạn hoặc sai chữ viết, AI
+không kiểm tra được ảnh, bản localize của thị trường nào có lỗi, ad copy còn lỗi sau 3 vòng tự sửa, vượt mức trần, mã
+MKT thiếu hoặc hết hạn. Điểm duyệt 5 (bật campaign) và 6 (quyết budget/tROAS) không đổi: luôn là việc của người.
+
+Mỗi lỗi AI tự bắt được ghi vào tab `Feedback`, nên vòng học ở mục 5 học được cả từ những lỗi không cần người sửa.
+
+## 7. Bước tiếp theo
+
+- Đưa cổng AI kiểm tra lên web: nút "AI kiểm tra" trên trang Banner + Ad Copy trước khi đẩy.
+- Sau vài tuần dùng auto: so số lần sửa trên 100 ảnh giữa lượt auto và lượt thường (trang 🧠 Bài học) để quyết có để
+  auto làm mặc định hay không.

@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { getAccessToken, ensureTab, SPREADSHEET_ID } from "@/lib/sheetsLogger";
 import {
-  CORRECTION_KINDS, FEEDBACK_KIND, IMAGE_FIX_KINDS, LESSON_STATUS, LESSON_TARGETS,
+  FEEDBACK_KIND, IMAGE_FIX_KINDS, LESSON_SOURCE_KINDS, LESSON_STATUS, LESSON_TARGETS,
   isLessonStatus, isLessonTarget,
   type FeedbackRow, type Lesson, type LessonStatus, type LessonTarget, type QualityRow,
 } from "@/lib/learningShared";
@@ -115,7 +115,7 @@ export async function readLessons(): Promise<StoredLesson[]> {
 export async function proposeLessons(): Promise<{ added: Lesson[]; considered: number }> {
   const since = Date.now() - 60 * 864e5;
   const feedback = (await readRows(FEEDBACK_TAB, "A:J")).filter(r =>
-    CORRECTION_KINDS.includes(r[4]) && (r[8] || "").trim() && Date.parse(r[1] || "") >= since);
+    LESSON_SOURCE_KINDS.includes(r[4]) && (r[8] || "").trim() && Date.parse(r[1] || "") >= since);
   if (feedback.length < 2) return { added: [], considered: feedback.length };
   const existing = await readLessons();
 
@@ -131,7 +131,7 @@ export async function proposeLessons(): Promise<{ added: Lesson[]; considered: n
         role: "system",
         content:
           "Bạn giúp một team UA cải thiện công cụ AI làm banner quảng cáo app (Google App campaign). " +
-          "Đầu vào là các lần người duyệt phải sửa kết quả AI, kèm lý do họ viết. " +
+          "Đầu vào là các lần người duyệt phải sửa kết quả AI, kèm lý do họ viết, và các lỗi mà bước AI tự kiểm tra ảnh bắt được (loai = \"AI kiểm tra thấy lỗi\"). " +
           "Tìm các vấn đề LẶP LẠI (ít nhất 2 lần) và viết mỗi vấn đề thành MỘT bài học: một câu lệnh ngắn, cụ thể, " +
           "bằng tiếng Việt, đủ để thêm thẳng vào prompt của bước tương ứng và làm AI không mắc lại lỗi đó.\n" +
           "Bước (target): anh = prompt vẽ ảnh nền (bố cục, nhân vật, tay, đạo cụ, màu, điện thoại, vùng chừa chữ); " +
@@ -253,7 +253,7 @@ export async function qualityStats(days = 90): Promise<QualityRow[]> {
   const by = new Map<string, QualityRow>();
   const row = (v: string) => {
     const key = v || "?";
-    if (!by.has(key)) by.set(key, { version: key, images: 0, imageFixes: 0, per100: null, relocalize: 0, approvals: 0 });
+    if (!by.has(key)) by.set(key, { version: key, images: 0, imageFixes: 0, per100: null, relocalize: 0, approvals: 0, aiQaFails: 0 });
     return by.get(key)!;
   };
   for (const u of usage) {
@@ -265,6 +265,7 @@ export async function qualityStats(days = 90): Promise<QualityRow[]> {
     if (IMAGE_FIX_KINDS.includes(f[4])) row(f[9]).imageFixes++;
     else if (f[4] === FEEDBACK_KIND.relocalize) row(f[9]).relocalize++;
     else if (f[4] === FEEDBACK_KIND.approve) row(f[9]).approvals++;
+    else if (f[4] === FEEDBACK_KIND.aiQa) row(f[9]).aiQaFails++;
   }
   const cmp = (a: string, b: string) => b.localeCompare(a, undefined, { numeric: true });
   return [...by.values()]

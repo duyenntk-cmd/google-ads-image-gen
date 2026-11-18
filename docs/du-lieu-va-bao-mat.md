@@ -16,12 +16,12 @@ Ba câu hỏi file này trả lời: dữ liệu nào được đưa ra công c�
 | Dữ liệu | Mức | Gửi ra ngoài | Nằm ở đâu |
 |---|---|---|---|
 | Tên app, mô tả, screenshot, icon trên store | Công khai | OpenAI (brief, gen ảnh, mascot), Anthropic (ad copy) | Không lưu trên server |
-| Creative direction, brief, ảnh banner | Nội bộ | OpenAI (để gen ảnh); MKT System khi đẩy | IndexedDB của trình duyệt người dùng; thư mục `chat/runs/` (không commit) |
+| Creative direction, brief, ảnh banner | Nội bộ | OpenAI (để gen ảnh, và để AI kiểm tra ảnh ở chế độ auto); MKT System khi đẩy | IndexedDB của trình duyệt người dùng; thư mục `chat/runs/` (không commit) |
 | Video ads | Nội bộ | Khung ảnh nhỏ 288px gửi OpenAI để tìm đoạn hướng dẫn; video lên S3 của MKT System | Dựng trong trình duyệt, không qua server |
 | Ad copy | Nội bộ | Anthropic / Claude (viết, localize); MKT System | MKT System |
 | Lời người sửa (vòng học) và bài học đã duyệt | Nội bộ | Lời sửa gửi OpenAI (gpt-4o-mini) khi bấm "Tìm bài học mới"; bài học đã duyệt đi vào prompt gen ảnh, brief, localize, ad copy | Tab `Feedback`, `BaiHoc` của sheet hệ thống |
 | Report Google Ads, est ROAS, doanh thu (Phân tích Camp) | Nhạy cảm | **Không gửi cho AI.** Đọc bằng service account, xử lý bằng luật trong `lib/campDoctor.ts` | Google Sheet của người dùng; lịch sử 14 ngày trong trình duyệt |
-| Danh sách tài khoản, mật khẩu | Bí mật | Không | Tab `Users` của sheet hệ thống. Mật khẩu là mã băm scrypt từ v7.2 |
+| Danh sách tài khoản, mật khẩu | Bí mật | Không | Tab `Users` của sheet hệ thống. Mật khẩu là mã băm scrypt từ v8.0 |
 | Log đăng nhập (email, IP, user agent), log sử dụng | Nội bộ | Không | Tab `LoginLog`, `UsageLog` của sheet hệ thống |
 | Khoá API (OpenAI, Anthropic, Google Ads, service account), `NEXTAUTH_SECRET` | Bí mật | Không | Chỉ biến môi trường Vercel; với chat là Network secrets / biến môi trường của Environment Claude Code |
 | Mã kết nối MKT `mktmcp_…` (của từng người, hết hạn sau ~24 giờ) | Bí mật | Chỉ tới MKT System | Cookie httpOnly trên web; biến `MKT_CONNECT_CODE` trong Claude Code |
@@ -78,7 +78,7 @@ Làm trong ngày làm việc cuối của người đó, theo thứ tự:
 - [ ] Tab `LoginLog`: một tên đăng nhập thất bại nhiều lần liên tiếp, hoặc nhiều lần "đổi mật khẩu thất bại", thì hỏi
       người đó và cân nhắc đặt lại mật khẩu.
 - [ ] Cột Password không còn ô chữ thường (mọi ô bắt đầu bằng `scrypt$`). Ô còn chữ thường là người chưa đăng nhập
-      lại từ v7.2: nhắc họ đăng nhập, hoặc đặt mật khẩu mới.
+      lại từ v8.0: nhắc họ đăng nhập, hoặc đặt mật khẩu mới.
 - [ ] Danh sách người có quyền sửa sheet hệ thống vẫn đúng.
 
 ## 6. Lịch sử siết quyền
@@ -87,15 +87,15 @@ Mỗi lần phát hiện rủi ro và sửa, ghi một dòng.
 
 | Ngày | Phát hiện | Rủi ro | Đã làm | Version |
 |---|---|---|---|---|
-| 2026-11-18 | Mật khẩu trong tab `Users` được chấp nhận ở dạng chữ thường, hoặc SHA-256 với một salt chung viết trong code | Ai mở được sheet là đọc được mật khẩu | Mã băm scrypt, salt riêng từng người; mật khẩu cũ tự chuyển sang mã băm ở lần đăng nhập kế tiếp | v7.2 |
-| 2026-11-18 | Log đăng nhập ghi vào tab `Sheet1` đã không còn, lỗi bị bỏ qua | Không có lịch sử ai đăng nhập | Ghi vào tab `LoginLog` (tự tạo), ghi cả lần thất bại, lỗi ghi log hiện trong log server | v7.2 |
-| 2026-11-18 | Log đăng nhập ghi kiểu `USER_ENTERED` | Tên đăng nhập hoặc user agent bắt đầu bằng `=` thành công thức trong sheet | Ghi kiểu `RAW` | v7.2 |
-| 2026-11-18 | Tắt người trong tab `Users` chỉ chặn lần đăng nhập mới | Phiên web đang mở vẫn dùng được tới 30 ngày | Kiểm tra lại tab `Users` trong phiên, tắt là bị đăng xuất trong vòng 5 phút | v7.2 |
-| 2026-11-18 | Không có phân quyền | Ai đăng nhập cũng tạo được campaign thật và xem được doanh thu | Cột Role, chặn Launch Camp và Phân tích Camp với role `creative` | v7.2 |
-| 2026-11-18 | Connector Claude cho qua mọi link khi đọc tab `Users` bị lỗi | Người đã bị tắt vẫn dùng được connector lúc Google Sheets gặp sự cố | Dùng bản tab `Users` đọc được gần nhất | v7.2 |
-| 2026-11-18 | Connector Claude so tên `x@ads-gen.internal` với username `x` | Chặn nhầm tài khoản không có email | Đổi về đúng username trước khi so | v7.2 |
-| 2026-11-18 | Lượt chạy từ chat Claude Code ký tên `chat@localhost`, không ghi log | Không biết ai đã đẩy gì lên MKT | Ghi đúng tên người qua link connector, ghi vào `UsageLog` | v7.2 |
-| 2026-11-18 | Người dùng không tự đổi được mật khẩu; đổi mật khẩu không đăng xuất các phiên cũ | Lộ mật khẩu thì phải nhờ admin, phiên của kẻ lạ vẫn chạy tiếp | Nút Đổi mật khẩu trên web; đổi hoặc đặt lại mật khẩu thì mọi phiên cũ kết thúc trong 5 phút; giới hạn 5 lần sai mật khẩu hiện tại / 15 phút | v7.2 |
+| 2026-11-18 | Mật khẩu trong tab `Users` được chấp nhận ở dạng chữ thường, hoặc SHA-256 với một salt chung viết trong code | Ai mở được sheet là đọc được mật khẩu | Mã băm scrypt, salt riêng từng người; mật khẩu cũ tự chuyển sang mã băm ở lần đăng nhập kế tiếp | v8.0 |
+| 2026-11-18 | Log đăng nhập ghi vào tab `Sheet1` đã không còn, lỗi bị bỏ qua | Không có lịch sử ai đăng nhập | Ghi vào tab `LoginLog` (tự tạo), ghi cả lần thất bại, lỗi ghi log hiện trong log server | v8.0 |
+| 2026-11-18 | Log đăng nhập ghi kiểu `USER_ENTERED` | Tên đăng nhập hoặc user agent bắt đầu bằng `=` thành công thức trong sheet | Ghi kiểu `RAW` | v8.0 |
+| 2026-11-18 | Tắt người trong tab `Users` chỉ chặn lần đăng nhập mới | Phiên web đang mở vẫn dùng được tới 30 ngày | Kiểm tra lại tab `Users` trong phiên, tắt là bị đăng xuất trong vòng 5 phút | v8.0 |
+| 2026-11-18 | Không có phân quyền | Ai đăng nhập cũng tạo được campaign thật và xem được doanh thu | Cột Role, chặn Launch Camp và Phân tích Camp với role `creative` | v8.0 |
+| 2026-11-18 | Connector Claude cho qua mọi link khi đọc tab `Users` bị lỗi | Người đã bị tắt vẫn dùng được connector lúc Google Sheets gặp sự cố | Dùng bản tab `Users` đọc được gần nhất | v8.0 |
+| 2026-11-18 | Connector Claude so tên `x@ads-gen.internal` với username `x` | Chặn nhầm tài khoản không có email | Đổi về đúng username trước khi so | v8.0 |
+| 2026-11-18 | Lượt chạy từ chat Claude Code ký tên `chat@localhost`, không ghi log | Không biết ai đã đẩy gì lên MKT | Ghi đúng tên người qua link connector, ghi vào `UsageLog` | v8.0 |
+| 2026-11-18 | Người dùng không tự đổi được mật khẩu; đổi mật khẩu không đăng xuất các phiên cũ | Lộ mật khẩu thì phải nhờ admin, phiên của kẻ lạ vẫn chạy tiếp | Nút Đổi mật khẩu trên web; đổi hoặc đặt lại mật khẩu thì mọi phiên cũ kết thúc trong 5 phút; giới hạn 5 lần sai mật khẩu hiện tại / 15 phút | v8.0 |
 
 ## 7. Rủi ro còn lại
 

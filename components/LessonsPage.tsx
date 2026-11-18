@@ -129,7 +129,8 @@ export default function LessonsPage({ t, canManage }: { t: LessonsTheme; canMana
                   <th className="py-1.5 pr-3 font-semibold text-right">Lần sửa ảnh</th>
                   <th className="py-1.5 pr-3 font-semibold">Sửa / 100 ảnh</th>
                   <th className="py-1.5 pr-3 font-semibold text-right">Localize lại</th>
-                  <th className="py-1.5 font-semibold text-right">Lần duyệt nháp</th>
+                  <th className="py-1.5 pr-3 font-semibold text-right">Lần duyệt nháp</th>
+                  <th className="py-1.5 font-semibold text-right" title="Số lần bước AI tự kiểm tra (chế độ auto, lệnh qa) đánh trượt một ảnh">AI tự bắt lỗi</th>
                 </tr>
               </thead>
               <tbody>
@@ -147,7 +148,8 @@ export default function LessonsPage({ t, canManage }: { t: LessonsTheme; canMana
                       )}
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums">{s.relocalize}</td>
-                    <td className="py-1.5 text-right tabular-nums">{s.approvals}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{s.approvals}</td>
+                    <td className="py-1.5 text-right tabular-nums">{s.aiQaFails}</td>
                   </tr>
                 ))}
               </tbody>
@@ -155,7 +157,7 @@ export default function LessonsPage({ t, canManage }: { t: LessonsTheme; canMana
           </div>
         )}
         <p className="text-[11px]" style={{ color: t.textMuted }}>
-          Lần sửa ảnh = sửa 1 ảnh, sửa cả bộ, hoặc gen lại không ghi lý do (không tính gen lại ảnh lỗi kỹ thuật). Số càng thấp càng tốt.
+          Lần sửa ảnh = người sửa 1 ảnh, sửa cả bộ, hoặc gen lại không ghi lý do (không tính gen lại ảnh lỗi kỹ thuật và lỗi AI tự bắt). Số càng thấp càng tốt.
         </p>
       </section>
 
