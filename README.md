@@ -139,7 +139,7 @@ Quy trình đầy đủ khi có người nghỉ: [docs/du-lieu-va-bao-mat.md](do
   ```
 
 - Đổi version: tăng `version` trong `package.json`, viết mục mới trong `CHANGELOG.md`; sau khi merge vào `main`,
-  gắn tag cùng tên lên commit đã merge rồi push tag (cách làm ở đầu CHANGELOG).
+  thêm dòng version vào `scripts/tag-versions.sh` và chạy script để gắn tag (cách làm ở đầu CHANGELOG).
 
 ## Đã có ai dựng lại chưa
 

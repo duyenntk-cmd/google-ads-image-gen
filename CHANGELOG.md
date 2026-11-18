@@ -5,20 +5,19 @@ Mỗi version ghi **mục tiêu**, **thời gian** và **thay đổi chính**. V
 - **Số lớn** (v4 → v5): đổi cách làm việc của cả quy trình, thêm một công cụ mới, hoặc gộp công cụ.
 - **Số nhỏ** (v5.1 → v5.2): sửa, cải tiến trong cùng quy trình.
 
-Mỗi version có một git tag cùng tên (`v1.0` … `v7.1`), gắn lên commit cuối của version đó trên `main`.
-Từ v1.0 tới v5.2, tag được gắn lại sau (ngày 18/11/2026) theo ngày trong log commit, vì lúc đó chưa có quy ước version.
+Mỗi version có một git tag cùng tên, gắn lên commit cuối của version đó trên `main`. Bảng version → commit và lệnh
+gắn tag nằm ở [`scripts/tag-versions.sh`](scripts/tag-versions.sh): chạy `bash scripts/tag-versions.sh` trên máy có
+quyền push repo, tag nào đã có thì bỏ qua. Từ v1.0 tới v5.2, commit được chọn lại sau (ngày 18/11/2026) theo ngày
+trong log commit, vì lúc đó chưa có quy ước version.
 
 Muốn mở lại một version cũ, có 2 cách:
 
 - **Xem code:** `git fetch --tags` rồi `git checkout v4.0`. Danh sách tag: `git tag --list 'v*'`.
 - **Chạy lại trên web:** vào Vercel → Deployments, chọn bản deploy của commit có tag đó, bấm **Promote to Production**.
 
-Ra version mới: tăng `version` trong `package.json`, viết mục ở đầu file này, merge vào `main`, rồi gắn tag lên đúng
-commit đã merge (PR được squash nên commit trên nhánh làm việc không phải commit trên `main`):
-
-```bash
-git fetch origin main && git tag v7.2 origin/main && git push origin v7.2
-```
+Ra version mới: tăng `version` trong `package.json`, viết mục ở đầu file này, merge vào `main`, rồi thêm một dòng vào
+`scripts/tag-versions.sh` với commit đã merge (PR được squash nên commit trên nhánh làm việc không phải commit trên
+`main`) và chạy lại script.
 
 Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log sử dụng (Google Sheet, tab `UsageLog`) cũng ghi version.
 
@@ -41,7 +40,7 @@ làm bằng tool đều có log, người khác tự dựng lại được.
 - ID sheet hệ thống đọc từ biến `SYSTEM_SHEET_ID` (mặc định vẫn là sheet hiện tại). README viết lại thành hướng dẫn
   dựng lại từ đầu, thêm `.env.example`.
 - Tài liệu mới trong `docs/`: quy trình trước/sau và các điểm duyệt, danh mục đầu việc lặp lại, dữ liệu và bảo mật.
-- Gắn git tag `v1.0` … `v7.1` cho các version cũ.
+- `scripts/tag-versions.sh`: bảng version → commit cho v1.0 … v7.1 và lệnh gắn tag, để mở lại được mọi version cũ.
 
 ---
 
