@@ -43,3 +43,6 @@ next-env.d.ts
 # chat toolkit (chat/studio.mjs): run outputs and local server state
 /chat/runs/
 /chat/.state/
+
+# MKT report (scripts/mkt-report): local snapshot history
+/.mkt-report-state/

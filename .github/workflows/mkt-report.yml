@@ -1,0 +1,63 @@
+# Report MKT System (Spend, ROAS, CPI US, LTV US theo từng sản phẩm, so với cùng giờ hôm qua)
+# gửi về Discord lúc 7:00, 14:00 và 20:00 giờ Việt Nam. Hướng dẫn: scripts/mkt-report/README.md
+#
+# Repo public: log của Actions ai cũng xem được. Script không in số liệu ra log; số liệu chỉ
+# gửi qua webhook Discord, và bản lưu để so sánh hôm sau được mã hoá trước khi vào cache.
+name: MKT report → Discord
+
+on:
+  schedule:
+    # Giờ UTC. 00:00, 07:00, 13:00 UTC = 7:00, 14:00, 20:00 giờ Việt Nam (UTC+7).
+    # GitHub có thể chạy trễ vài phút so với lịch khi đông máy.
+    - cron: "0 0,7,13 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "send = gửi report; debug = gửi cấu trúc dữ liệu MKT lên Discord để kiểm tra"
+        type: choice
+        options: [send, debug]
+        default: send
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mkt-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Mã sản phẩm trên MKT System, cách nhau bằng dấu phẩy.
+      PRODUCTS: AAP861,APL789,AAP887,AIP016,AAP883
+      STATE_FILE: .mkt-report-state/snapshots.enc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/mkt-report
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Số liệu các lần chạy trước (đã mã hoá), để so với cùng giờ hôm qua.
+      - uses: actions/cache/restore@v4
+        with:
+          path: .mkt-report-state
+          key: mkt-report-${{ github.run_id }}
+          restore-keys: mkt-report-
+
+      - name: Gửi report
+        run: node scripts/mkt-report/report.mjs
+        env:
+          MODE: ${{ inputs.mode || 'send' }}
+          MKT_CONNECT_CODE: ${{ secrets.MKT_CONNECT_CODE }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      - if: always() && hashFiles('.mkt-report-state/snapshots.enc') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .mkt-report-state
+          key: mkt-report-${{ github.run_id }}-${{ github.run_attempt }}

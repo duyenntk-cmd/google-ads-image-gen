@@ -14,6 +14,18 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v7.2 — 2026-11-18 · Report MKT về Discord 3 lần/ngày
+
+**Mục tiêu:** không phải mở MKT System vẫn biết Spend, ROAS, CPI US, LTV US từng sản phẩm, so với cùng giờ hôm qua.
+
+- `scripts/mkt-report/report.mjs` lấy số từ API Intraday của MKT System (cùng nguồn với trang Intraday) cho các mã
+  `AAP861, APL789, AAP887, AIP016, AAP883`, gửi một khối cho mỗi sản phẩm về webhook Discord.
+- Workflow `.github/workflows/mkt-report.yml` chạy lúc 7:00, 14:00, 20:00 giờ Việt Nam, chạy tay được với mode `debug`.
+- So sánh với lần chạy gần 24 giờ trước nhất; số các lần chạy lưu trong Actions cache, mã hoá vì repo public.
+  Script không in số liệu ra log.
+- Mã kết nối MKT sống 24 giờ: report cảnh báo trước khi mã hết hạn và báo lỗi về Discord khi đã hết hạn.
+  Hướng dẫn cài đặt: `scripts/mkt-report/README.md`.
+
 ## v7.1 — 2026-11-17 · Gen banner và đẩy MKT ngay trong chat Claude Code
 
 **Mục tiêu:** chat trong Claude Code là có banner và ad template trên MKT, không phải mở trang web.
