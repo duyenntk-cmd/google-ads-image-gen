@@ -14,6 +14,21 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v7.2 — 2026-11-23 · Outro Studio: lịch sử push lên MKT gọn hơn, lọc theo ngày
+
+**Mục tiêu:** xem nhanh đã push gì trong một ngày, một tuần hay một tháng mà không phải cuộn cả danh sách dài.
+
+- Thanh lọc trên đầu khung "Lịch sử push lên MKT": nút nhanh **Hôm nay · 7 ngày · Tháng này · Tháng trước · Tất cả**,
+  hoặc tự chọn **Từ ngày → Đến ngày** (hiện dd/mm/yyyy, bấm vào mở lịch). Chọn ngược thứ tự thì tự đảo lại.
+  Khoảng ngày đã chọn được nhớ trong trình duyệt, mặc định 7 ngày.
+- Ô tìm theo tag, angle code, tên video hoặc tài khoản MKT, gõ không dấu cũng được (`doi nen` ra `Đổi nền`).
+- Số đếm cạnh tiêu đề tính theo bộ lọc (ví dụ `6/12 lần push · 28 video`). Không có kết quả thì báo lần push gần nhất
+  và có nút "Xem tất cả".
+- Danh sách nằm trong khung cuộn riêng, tiêu đề ngày (kèm thứ, số lần push, số video) dính trên đầu khi cuộn.
+  Mỗi lần push là một dòng thấp hơn: giờ · số video · tag · angle · link `MKT ↗` · xoá. Bấm dòng để xem từng video như cũ.
+
+---
+
 ## v7.1 — 2026-11-17 · Gen banner và đẩy MKT ngay trong chat Claude Code
 
 **Mục tiêu:** chat trong Claude Code là có banner và ad template trên MKT, không phải mở trang web.
