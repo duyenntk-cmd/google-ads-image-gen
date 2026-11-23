@@ -2394,11 +2394,8 @@ async function pushAdd(rec){
   while(pushes.length>PUSH_MAX){const old=pushes.pop();try{await DB.del("pushes",old.id);}catch(e){}}
 }
 // bộ lọc: nút khoảng ngày nhanh hoặc tự chọn Từ/Đến (theo giờ của máy), cộng ô tìm tag / angle / tên video / tài khoản.
-// Khoảng ngày nhớ trong trình duyệt. Ngày của nút nhanh tính lại mỗi lần vẽ, nên để trang mở qua đêm vẫn đúng.
-const PF={range:"7",from:"",to:"",q:""},PF_KEY="outro-studio-pushfilter";
-try{const s=JSON.parse(localStorage.getItem(PF_KEY)||"null");
-  if(s&&["today","7","month","lastmonth","all","custom"].includes(s.range)){PF.range=s.range;PF.from=String(s.from||"");PF.to=String(s.to||"");}}catch(e){}
-const pfSave=()=>{try{localStorage.setItem(PF_KEY,JSON.stringify({range:PF.range,from:PF.from,to:PF.to}));}catch(e){}};
+// Mỗi lần mở trang luôn bắt đầu ở "Hôm nay". Ngày của nút nhanh tính lại mỗi lần vẽ, nên để trang mở qua đêm vẫn đúng.
+const PF={range:"today",from:"",to:"",q:""};
 const pp=x=>String(x).padStart(2,"0"),WD=["CN","T2","T3","T4","T5","T6","T7"];
 const ymd=d=>`${d.getFullYear()}-${pp(d.getMonth()+1)}-${pp(d.getDate())}`,dmy=d=>`${pp(d.getDate())}/${pp(d.getMonth()+1)}/${d.getFullYear()}`;
 // "2026-11-23" -> mốc 00:00 của ngày đó (cộng thêm add ngày), theo giờ của máy
@@ -2430,7 +2427,7 @@ function renderPushes(){
     e.innerHTML=`<span></span><button class="btn sm" type="button">Xem tất cả</button>`;
     const q=PF.q.trim();
     e.firstChild.textContent=`Không có lần push nào${q?` khớp “${q}”`:""}${f||t?" trong khoảng ngày này":""}. Lần gần nhất: ${dmy(new Date(pushes[0].created))}.`;
-    e.querySelector("button").onclick=()=>{PF.range="all";PF.q="";$("pushQ").value="";pfSave();renderPushes();};
+    e.querySelector("button").onclick=()=>{PF.range="all";PF.q="";$("pushQ").value="";renderPushes();};
     box.appendChild(e);return;
   }
   const days=new Map();
@@ -2464,9 +2461,9 @@ function pushRow(r){
   foot.textContent=`${dmy(d)} ${time}${r.email?" · tài khoản MKT "+r.email:""}${r.failed?` · ${r.failed} video lỗi, không có trong bộ này`:""}`;
   body.appendChild(foot);return el;
 }
-$("pushRange").onclick=e=>{const b=e.target.closest("button[data-r]");if(!b)return;PF.range=b.dataset.r;pfSave();renderPushes();};
+$("pushRange").onclick=e=>{const b=e.target.closest("button[data-r]");if(!b)return;PF.range=b.dataset.r;renderPushes();};
 const pushDates=()=>{let f=$("pushFrom").value,t=$("pushTo").value;if(f&&t&&f>t)[f,t]=[t,f];
-  Object.assign(PF,{range:f||t?"custom":"all",from:f,to:t});pfSave();renderPushes();};
+  Object.assign(PF,{range:f||t?"custom":"all",from:f,to:t});renderPushes();};
 for(const id of ["pushFrom","pushTo"]){const i=$(id),open=()=>{try{i.showPicker();}catch(e){}}; // trình duyệt cũ không có showPicker: vẫn gõ được ngày
   i.onchange=pushDates;i.onclick=open;i.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();open();}};}
 $("pushQ").oninput=()=>{PF.q=$("pushQ").value;renderPushes();};

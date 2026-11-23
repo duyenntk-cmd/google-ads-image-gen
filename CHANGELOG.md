@@ -20,7 +20,7 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 - Thanh lọc trên đầu khung "Lịch sử push lên MKT": nút nhanh **Hôm nay · 7 ngày · Tháng này · Tháng trước · Tất cả**,
   hoặc tự chọn **Từ ngày → Đến ngày** (hiện dd/mm/yyyy, bấm vào mở lịch). Chọn ngược thứ tự thì tự đảo lại.
-  Khoảng ngày đã chọn được nhớ trong trình duyệt, mặc định 7 ngày.
+  Mở trang luôn hiện **Hôm nay**.
 - Ô tìm theo tag, angle code, tên video hoặc tài khoản MKT, gõ không dấu cũng được (`doi nen` ra `Đổi nền`).
 - Số đếm cạnh tiêu đề tính theo bộ lọc (ví dụ `6/12 lần push · 28 video`). Không có kết quả thì báo lần push gần nhất
   và có nút "Xem tất cả".
