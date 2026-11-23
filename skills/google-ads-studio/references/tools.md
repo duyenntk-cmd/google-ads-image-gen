@@ -85,6 +85,8 @@ tạm dừng. Video realtime chờ các video dựng nhanh xong rồi chạy l�
 
 **Lịch sử push lên MKT:** mỗi lần push thành công lưu 1 dòng (ngày giờ, video, tag, angle code, tài khoản MKT)
 trong IndexedDB của trình duyệt (kho `pushes`), nhóm theo ngày, mở đúng bộ trên MKT bằng link lọc tag + ngày push.
+Lọc theo khoảng ngày (Hôm nay, 7 ngày, Tháng này, Tháng trước, Tất cả, hoặc tự chọn Từ → Đến) và tìm theo tag,
+angle code, tên video (gõ không dấu được). Mở trang luôn hiện Hôm nay.
 Đổi máy hoặc xoá dữ liệu trang là mất; bản ghi chung cho cả team nằm ở tab `UsageLog` của Google Sheet.
 
 ## ▶️ YouTube Upload

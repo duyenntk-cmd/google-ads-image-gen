@@ -46,7 +46,7 @@ header.top p{margin:0;color:var(--muted);max-width:60ch}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);min-width:0}
 label.f .v{font-family:var(--f-mono);color:var(--fg);font-size:11.5px}
 label.f .lh{display:flex;justify-content:space-between;gap:6px}
-input[type=text],input[type=password],input[type=number],select,textarea{font:inherit;color:var(--fg);background:var(--sunk);border:1px solid var(--line);border-radius:7px;padding:7px 9px;width:100%;min-width:0}
+input[type=text],input[type=password],input[type=number],input[type=date],input[type=search],select,textarea{font:inherit;color:var(--fg);background:var(--sunk);border:1px solid var(--line);border-radius:7px;padding:7px 9px;width:100%;min-width:0}
 textarea{font-family:var(--f-mono);font-size:12px;min-height:58px;resize:vertical}
 input[type=color]{width:100%;height:34px;border:1px solid var(--line);border-radius:7px;background:var(--sunk);padding:2px}
 input[type=range]{width:100%;accent-color:var(--accent)}
@@ -149,21 +149,42 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .hrow:first-child{border-top:0}
 .hrow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hrow .meta{font-family:var(--f-mono);font-size:11px;color:var(--muted);white-space:nowrap}
-.pday{font-size:12px;font-weight:600;color:var(--muted);margin:12px 0 2px}
-.pday:first-child{margin-top:4px}
+/* lịch sử push: thanh lọc theo ngày + danh sách cuộn trong khung, tiêu đề ngày dính trên cùng khi cuộn */
+.phead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.phead .sp{flex:1}
+.pfilter{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.seg.sm{padding:2px}
+.seg.sm button{padding:4px 10px;font-size:12.5px}
+.pdates{display:flex;align-items:center;gap:4px;color:var(--muted)}
+/* ô ngày: hiện chữ dd/mm/yyyy cho khớp danh sách (ô date gốc hiện theo ngôn ngữ trình duyệt, có thể là mm/dd);
+   ô date thật nằm trong suốt phủ lên trên để bấm vẫn mở lịch của trình duyệt */
+.pdate{position:relative;display:inline-flex;align-items:center;gap:6px;background:var(--sunk);border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:12.5px;color:var(--fg);cursor:pointer;white-space:nowrap;font-variant-numeric:tabular-nums}
+.pdate:hover{border-color:var(--muted)}
+.pdate:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+.pdate svg{color:var(--muted);flex:none}
+.pdate .ph{color:var(--muted)}
+.pdate input{position:absolute;inset:0;width:100%;height:100%;opacity:0;padding:0;border:0;cursor:pointer}
+.pfilter input[type=search]{flex:1 1 170px;width:auto;padding:5px 9px;font-size:12.5px}
+.plist{max-height:min(380px,60vh);overflow-y:auto;border:1px solid var(--line);border-radius:8px;overscroll-behavior:contain}
+.pday{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;gap:10px;padding:5px 10px;background:var(--sunk);border-bottom:1px solid var(--line);font-size:12px;font-weight:600}
+.pday .meta{font-family:var(--f-mono);font-size:11px;font-weight:500;color:var(--muted);white-space:nowrap}
 .prow{border-top:1px solid var(--line)}
 .pday+.prow{border-top:0}
-.prow summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:7px 0;cursor:pointer;list-style:none}
+.prow summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:5px 4px 5px 10px;cursor:pointer;list-style:none}
+.prow summary:hover{background:var(--sunk)}
 .prow summary::-webkit-details-marker{display:none}
-.prow .ptime{font-family:var(--f-mono);font-size:12px;font-weight:600}
-.prow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prow .ptime{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.prow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
 .prow .nm::before{content:"▸ ";color:var(--muted)}
 .prow[open] .nm::before{content:"▾ "}
-.prow .pbody{padding:0 0 10px 18px;display:flex;flex-direction:column;gap:4px}
+.prow .plink{font-size:12px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;padding:2px 4px;border-radius:5px}
+.prow .plink:hover{text-decoration:underline}
+.prow .pbody{padding:2px 10px 10px 58px;display:flex;flex-direction:column;gap:4px}
 .prow .pvid{display:flex;gap:8px;font-size:12.5px;min-width:0}
 .prow .pvid a,.prow .pvid span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit}
 .prow .pvid .meta{font-family:var(--f-mono);font-size:11px;color:var(--muted);white-space:nowrap;margin-left:auto}
-@media (max-width:520px){.prow summary{grid-template-columns:auto minmax(0,1fr) auto}.prow summary .btn{grid-column:1/-1;grid-row:2;justify-self:start}}
+.pempty{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;padding:18px 12px;color:var(--muted);font-size:12.5px;text-align:center}
+@media (max-width:520px){.prow .pbody{padding-left:18px}.pdates{flex:1 1 100%}.pdate{flex:1 1 0;min-width:0}}
 @media (max-width:520px){.hrow{grid-template-columns:minmax(0,1fr) auto auto}.hrow .meta{grid-column:1/-1;grid-row:2}}
 .export video{grid-column:1/-1;width:160px;max-width:100%;aspect-ratio:9/16;border-radius:6px;background:#000}
 .note{font-size:12.5px;border-left:3px solid var(--warn);padding:6px 10px;background:var(--sunk);border-radius:0 6px 6px 0;margin:0}
@@ -410,9 +431,19 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
         </div>
         <div id="exportList"></div>
         <div class="sub hist" id="pushBox" hidden>
-          <div class="row" style="justify-content:space-between"><div><h3>Lịch sử push lên MKT</h3><p class="hint">Mỗi lần push thành công lưu 1 dòng trong trình duyệt này. Bấm vào dòng để xem video. <span id="pushCount"></span></p></div>
-          <button class="btn sm ghost" id="pushClear" type="button">Xoá hết</button></div>
-          <div id="pushList"></div>
+          <div class="phead"><h3>Lịch sử push lên MKT</h3><span class="count" id="pushCount"></span><span class="sp"></span>
+            <button class="btn sm ghost" id="pushClear" type="button" title="Xoá toàn bộ lịch sử push trong trình duyệt này (không xoá trên MKT)">Xoá hết</button></div>
+          <div class="pfilter">
+            <div class="seg sm" id="pushRange" role="group" aria-label="Khoảng ngày">
+              <button type="button" data-r="today">Hôm nay</button><button type="button" data-r="7">7 ngày</button><button type="button" data-r="month">Tháng này</button><button type="button" data-r="lastmonth">Tháng trước</button><button type="button" data-r="all">Tất cả</button></div>
+            <div class="pdates">
+              <label class="pdate" title="Từ ngày"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg><span id="pushFromTxt"></span><input type="date" id="pushFrom" aria-label="Từ ngày"></label>
+              <span aria-hidden="true">→</span>
+              <label class="pdate" title="Đến ngày"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg><span id="pushToTxt"></span><input type="date" id="pushTo" aria-label="Đến ngày"></label></div>
+            <input type="search" id="pushQ" autocomplete="off" placeholder="Tìm tag, angle, tên video" aria-label="Tìm theo tag, angle code hoặc tên video">
+          </div>
+          <div class="plist" id="pushList"></div>
+          <p class="hint">Lưu trong trình duyệt này, giữ 300 lần push gần nhất. Bấm vào dòng để xem từng video.</p>
         </div>
         <div class="sub hist" id="histBox" hidden>
           <div class="row" style="justify-content:space-between"><div><h3>Video đã xuất gần đây</h3><p class="hint">Lưu trong trình duyệt này, tải lại được kể cả sau khi đóng hoặc tải lại trang. Giữ tối đa 40 file mới nhất. <span id="histCount"></span></p></div>
@@ -2362,39 +2393,80 @@ async function pushAdd(rec){
   try{await DB.put("pushes",rec);}catch(e){} // trình duyệt chặn lưu (ẩn danh): vẫn hiện tới khi tải lại trang
   while(pushes.length>PUSH_MAX){const old=pushes.pop();try{await DB.del("pushes",old.id);}catch(e){}}
 }
-function renderPushes(){
-  const box=$("pushList");$("pushBox").hidden=!pushes.length;box.innerHTML="";
-  const p=x=>String(x).padStart(2,"0"),dayKey=t=>{const d=new Date(t);return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()}`;};
-  const today=dayKey(Date.now()),yest=dayKey(Date.now()-864e5);
-  let lastDay="";
-  for(const r of pushes){
-    const day=dayKey(r.created);
-    if(day!==lastDay){lastDay=day;const h=document.createElement("div");h.className="pday";
-      const n=pushes.filter(x=>dayKey(x.created)===day).reduce((a,x)=>a+x.videos.length,0);
-      h.textContent=`${day===today?"Hôm nay · ":day===yest?"Hôm qua · ":""}${day} · ${n} video`;box.appendChild(h);}
-    const d=new Date(r.created),el=document.createElement("details");el.className="prow";
-    const tags=r.tags.length?"tag "+r.tags.join(", "):"không tag";
-    el.innerHTML=`<summary><span class="ptime"></span><span class="nm"></span><a class="btn sm" target="_blank" rel="noopener">Mở trên MKT ↗</a><button class="x" type="button" title="Xoá dòng này khỏi lịch sử (không xoá trên MKT)" aria-label="Xoá dòng này khỏi lịch sử">×</button></summary><div class="pbody"></div>`;
-    el.querySelector(".ptime").textContent=`${p(d.getHours())}:${p(d.getMinutes())}`;
-    const sum=`${r.videos.length} video · ${tags}${r.angle?" · angle "+r.angle:""}`;
-    el.querySelector(".nm").textContent=sum;el.querySelector(".nm").title=sum;
-    const a=el.querySelector("a"),href=mktDayLink(r.tpl,r.tags[0],r.created);
-    if(href)a.href=href;else a.remove();
-    el.querySelector(".x").onclick=async e=>{e.preventDefault();pushes=pushes.filter(x=>x!==r);try{await DB.del("pushes",r.id);}catch(_){}renderPushes();};
-    const body=el.querySelector(".pbody");
-    for(const v of r.videos){const row=document.createElement("div");row.className="pvid";
-      const nm=document.createElement(v.url?"a":"span");nm.textContent=v.name;nm.title=v.name;
-      if(v.url){nm.href=v.url;nm.target="_blank";nm.rel="noopener";}
-      const m=document.createElement("span");m.className="meta";
-      m.textContent=[v.size?(v.size/1048576).toFixed(1)+" MB":"",v.duration?v.duration+" giây":""].filter(Boolean).join(" · ");
-      row.append(nm,m);body.appendChild(row);}
-    const foot=document.createElement("p");foot.className="hint";
-    foot.textContent=`${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}${r.email?" · tài khoản MKT "+r.email:""}${r.failed?` · ${r.failed} video lỗi, không có trong bộ này`:""}`;
-    body.appendChild(foot);box.appendChild(el);
-  }
-  const total=pushes.reduce((a,x)=>a+x.videos.length,0);
-  $("pushCount").textContent=pushes.length?`${pushes.length} lần push · ${total} video`:"";
+// bộ lọc: nút khoảng ngày nhanh hoặc tự chọn Từ/Đến (theo giờ của máy), cộng ô tìm tag / angle / tên video / tài khoản.
+// Mỗi lần mở trang luôn bắt đầu ở "Hôm nay". Ngày của nút nhanh tính lại mỗi lần vẽ, nên để trang mở qua đêm vẫn đúng.
+const PF={range:"today",from:"",to:"",q:""};
+const pp=x=>String(x).padStart(2,"0"),WD=["CN","T2","T3","T4","T5","T6","T7"];
+const ymd=d=>`${d.getFullYear()}-${pp(d.getMonth()+1)}-${pp(d.getDate())}`,dmy=d=>`${pp(d.getDate())}/${pp(d.getMonth()+1)}/${d.getFullYear()}`;
+// "2026-11-23" -> mốc 00:00 của ngày đó (cộng thêm add ngày), theo giờ của máy
+const ymdTime=(s,add=0)=>{const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s||"");return m?new Date(+m[1],m[2]-1,+m[3]+add).getTime():null;};
+const fold=s=>String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[đĐ]/g,"d").toLowerCase(); // tìm không cần gõ dấu
+function pushRange(){ // [từ, đến] dạng YYYY-MM-DD, "" là không giới hạn
+  if(PF.range==="custom")return [PF.from,PF.to];
+  const n=new Date(),y=n.getFullYear(),m=n.getMonth(),d=n.getDate();
+  return PF.range==="today"?[ymd(n),ymd(n)]:PF.range==="7"?[ymd(new Date(y,m,d-6)),ymd(n)]
+    :PF.range==="month"?[ymd(new Date(y,m,1)),ymd(n)]:PF.range==="lastmonth"?[ymd(new Date(y,m-1,1)),ymd(new Date(y,m,0))]:["",""];
 }
+function pushFiltered(){
+  const [f,t]=pushRange(),lo=ymdTime(f),hi=ymdTime(t,1),words=fold(PF.q).split(/\s+/).filter(Boolean);
+  const hay=r=>fold([...r.tags,r.angle,r.email,...r.videos.map(v=>v.name)].join(" "));
+  return pushes.filter(r=>(lo==null||r.created>=lo)&&(hi==null||r.created<hi)&&(!words.length||(s=>words.every(w=>s.includes(w)))(hay(r))));
+}
+function renderPushes(){
+  $("pushBox").hidden=!pushes.length;
+  const [f,t]=pushRange(),now=new Date(),today=ymd(now),yest=ymd(new Date(now.getFullYear(),now.getMonth(),now.getDate()-1));
+  $("pushFrom").value=f;$("pushTo").value=t;$("pushFrom").max=$("pushTo").max=today;
+  for(const [id,s,ph] of [["pushFromTxt",f,"Từ ngày"],["pushToTxt",t,"Đến ngày"]]){
+    const el=$(id),ms=ymdTime(s);el.textContent=ms==null?ph:dmy(new Date(ms));el.classList.toggle("ph",ms==null);}
+  for(const b of $("pushRange").querySelectorAll("button"))b.setAttribute("aria-pressed",String(b.dataset.r===PF.range));
+  const list=pushFiltered(),vids=list.reduce((a,x)=>a+x.videos.length,0),box=$("pushList");box.innerHTML="";
+  $("pushCount").textContent=pushes.length?`${list.length<pushes.length?list.length+"/"+pushes.length:list.length} lần push · ${vids} video`:"";
+  if(!list.length){
+    if(!pushes.length)return;
+    const e=document.createElement("div");e.className="pempty";
+    e.innerHTML=`<span></span><button class="btn sm" type="button">Xem tất cả</button>`;
+    const q=PF.q.trim();
+    e.firstChild.textContent=`Không có lần push nào${q?` khớp “${q}”`:""}${f||t?" trong khoảng ngày này":""}. Lần gần nhất: ${dmy(new Date(pushes[0].created))}.`;
+    e.querySelector("button").onclick=()=>{PF.range="all";PF.q="";$("pushQ").value="";renderPushes();};
+    box.appendChild(e);return;
+  }
+  const days=new Map();
+  for(const r of list){const k=ymd(new Date(r.created));if(!days.has(k))days.set(k,[]);days.get(k).push(r);}
+  for(const [k,rs] of days){
+    const d=new Date(rs[0].created),h=document.createElement("div");h.className="pday";
+    h.innerHTML=`<span></span><span class="meta"></span>`;
+    h.firstChild.textContent=`${k===today?"Hôm nay · ":k===yest?"Hôm qua · ":""}${WD[d.getDay()]}, ${dmy(d)}`;
+    h.lastChild.textContent=`${rs.length} lần · ${rs.reduce((a,x)=>a+x.videos.length,0)} video`;
+    box.appendChild(h);for(const r of rs)box.appendChild(pushRow(r));
+  }
+}
+// 1 lần push = 1 dòng gọn: giờ · số video · tag · angle · link MKT · xoá. Bấm dòng để xem từng video.
+function pushRow(r){
+  const d=new Date(r.created),time=`${pp(d.getHours())}:${pp(d.getMinutes())}`,el=document.createElement("details");el.className="prow";
+  el.innerHTML=`<summary><span class="ptime"></span><span class="nm"><b></b><span></span></span><a class="plink" target="_blank" rel="noopener" title="Mở đúng bộ này trên MKT System (lọc theo tag và ngày push)">MKT ↗</a><button class="x" type="button" title="Xoá dòng này khỏi lịch sử (không xoá trên MKT)" aria-label="Xoá dòng này khỏi lịch sử">×</button></summary><div class="pbody"></div>`;
+  el.querySelector(".ptime").textContent=time;
+  const rest=[r.tags.length?r.tags.join(", "):"không tag",r.angle&&"angle "+r.angle,r.failed&&`${r.failed} lỗi`].filter(Boolean).join(" · ");
+  const nm=el.querySelector(".nm");nm.firstChild.textContent=`${r.videos.length} video`;nm.lastChild.textContent=" · "+rest;nm.title=`${r.videos.length} video · ${rest}`;
+  const a=el.querySelector("a"),href=mktDayLink(r.tpl,r.tags[0],r.created);
+  if(href)a.href=href;else a.replaceWith(document.createElement("span")); // giữ cột để nút × thẳng hàng
+  el.querySelector(".x").onclick=async e=>{e.preventDefault();pushes=pushes.filter(x=>x!==r);try{await DB.del("pushes",r.id);}catch(_){}renderPushes();};
+  const body=el.querySelector(".pbody");
+  for(const v of r.videos){const row=document.createElement("div");row.className="pvid";
+    const vn=document.createElement(v.url?"a":"span");vn.textContent=v.name;vn.title=v.name;
+    if(v.url){vn.href=v.url;vn.target="_blank";vn.rel="noopener";}
+    const m=document.createElement("span");m.className="meta";
+    m.textContent=[v.size?(v.size/1048576).toFixed(1)+" MB":"",v.duration?v.duration+" giây":""].filter(Boolean).join(" · ");
+    row.append(vn,m);body.appendChild(row);}
+  const foot=document.createElement("p");foot.className="hint";
+  foot.textContent=`${dmy(d)} ${time}${r.email?" · tài khoản MKT "+r.email:""}${r.failed?` · ${r.failed} video lỗi, không có trong bộ này`:""}`;
+  body.appendChild(foot);return el;
+}
+$("pushRange").onclick=e=>{const b=e.target.closest("button[data-r]");if(!b)return;PF.range=b.dataset.r;renderPushes();};
+const pushDates=()=>{let f=$("pushFrom").value,t=$("pushTo").value;if(f&&t&&f>t)[f,t]=[t,f];
+  Object.assign(PF,{range:f||t?"custom":"all",from:f,to:t});renderPushes();};
+for(const id of ["pushFrom","pushTo"]){const i=$(id),open=()=>{try{i.showPicker();}catch(e){}}; // trình duyệt cũ không có showPicker: vẫn gõ được ngày
+  i.onchange=pushDates;i.onclick=open;i.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();open();}};}
+$("pushQ").oninput=()=>{PF.q=$("pushQ").value;renderPushes();};
 let pushArm=null;$("pushClear").onclick=async()=>{const b=$("pushClear");
   if(!pushArm){b.textContent="Bấm lần nữa để xoá hết";b.classList.add("danger");pushArm=setTimeout(()=>{pushArm=null;b.textContent="Xoá hết";b.classList.remove("danger");},3000);return;}
   clearTimeout(pushArm);pushArm=null;b.textContent="Xoá hết";b.classList.remove("danger");
