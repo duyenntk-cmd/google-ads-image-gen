@@ -533,7 +533,7 @@ function trimAlpha(im){
   const d=x.getImageData(0,0,c.width,c.height).data;let x0=c.width,y0=c.height,x1=-1,y1=-1,minA=255;
   for(let y=0;y<c.height;y++)for(let i=0;i<c.width;i++){const a=d[(y*c.width+i)*4+3];if(a<minA)minA=a;if(a>0){if(i<x0)x0=i;if(i>x1)x1=i;if(y<y0)y0=y;if(y>y1)y1=y;}}
   if(x1<0)return {canvas:c,opaque:false,square:false};
-  const o=document.createElement("canvas");o.width=x1-x0+1;o.height=y1-y0+1;o.getContext("2d").drawImage(c,-x0,-y0);
+  const o=document.createElement("canvas");o.width=x1-x0+1;o.height=y1-y0+1;o.getContext("2d",{willReadFrequently:true}).drawImage(c,-x0,-y0);
   return {canvas:o,opaque:minA===255,square:Math.abs(o.width-o.height)<0.05*o.width};
 }
 
@@ -898,30 +898,30 @@ async function runTimeline({it,ctx,W,H,record,onProgress,stop,from=0,onFrame=nul
    nén đúng 1 khung (chậm thì lặp khung đang có), tiếng trộn offline như dựng nhanh: thời lượng luôn bằng bản gốc. */
 const TIMED=!!(window.VideoEncoder&&window.AudioEncoder&&window.OfflineAudioContext&&window.Mp4Muxer);
 async function timedRealtimeExport({it,W,H,stop,onProgress}){
-  const [vcfg,vmux]=await pickVideoCfg(W,H,false);const [acfg,amux]=await pickAudioCfg();
+  // dựng nhanh đã thấy bộ nén của card đồ hoạ treo thì ở đây cũng không dùng lại nó
+  const safe=fastFloor>=2;
+  const [vcfg,vmux]=await pickVideoCfg(W,H,fastFloor>0);const [acfg,amux]=await pickAudioCfg();
   if(!acfg)throw new Error("không có bộ nén âm thanh");
   const R=keepRanges(it),mainEnd=lenOf(R),oD=outroDur(),xf=oD>0?Math.min(+S.outro.xf||0,mainEnd*0.5,oD*0.5):0,total=mainEnd+oD-xf;
   const N=Math.max(1,Math.round(total*30));
   const muxer=new Mp4Muxer.Muxer({target:new Mp4Muxer.ArrayBufferTarget(),video:{codec:vmux,width:W,height:H,frameRate:30},
     audio:{codec:amux,numberOfChannels:2,sampleRate:48000},fastStart:"in-memory"});
   let encErr=null;const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});venc.configure(vcfg);
-  const canvas=document.createElement("canvas");canvas.width=W;canvas.height=H;const ctx=canvas.getContext("2d",{alpha:false});
+  const canvas=document.createElement("canvas");canvas.width=W;canvas.height=H;const ctx=canvas.getContext("2d",safe?{alpha:false,willReadFrequently:true}:{alpha:false});
   let i=0,held=0;
   const emitUpTo=async pos=>{
     const upto=Math.min(N,Math.floor(pos*30+1e-6)+1);
     if(upto-i>1)held+=upto-i-1;
-    while(i<upto){const vf=new VideoFrame(canvas,{timestamp:Math.round(i*1e6/30),duration:Math.round(1e6/30)});
+    while(i<upto){const vf=frameOf(canvas,ctx,W,H,i,safe);
       venc.encode(vf,{keyFrame:i%60===0});vf.close();i++;}
-    const t0=performance.now();
-    while(venc.encodeQueueSize>10&&!encErr&&!stop.v){if(performance.now()-t0>15000)throw new Error("Bộ nén video không phản hồi (quá 15 giây)");
-      await new Promise(r=>{const to=setTimeout(r,100);venc.addEventListener("dequeue",()=>{clearTimeout(to);r();},{once:true});});}
+    await waitEnc(venc,()=>encErr||stop.v);
     if(encErr)throw encErr;};
   try{
     await runTimeline({it,ctx,W,H,record:false,mute:true,stop,onProgress:p=>onProgress&&onProgress(0.95*p),onFrame:emitUpTo});
     if(stop.err)throw stop.err;
     if(stop.v){venc.close();return null;}
     await emitUpTo(total+1); // đủ khung tới hết dòng thời gian
-    {let to;await Promise.race([venc.flush(),new Promise((_,j)=>{to=setTimeout(()=>j(new Error("Bộ nén video không phản hồi khi kết thúc")),20000);})]).finally(()=>clearTimeout(to));}venc.close();
+    await flushEnc(venc);venc.close();
     const ab=await mixAudio(it,mainEnd,oD,xf,total,R);
     const aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{encErr=e;}});aenc.configure(acfg);
     const n=ab.length,L=ab.getChannelData(0),Rc=ab.numberOfChannels>1?ab.getChannelData(1):L;
@@ -952,6 +952,25 @@ const FAST=!!(window.VideoEncoder&&window.VideoDecoder&&window.AudioEncoder&&win
 const FAST_WHY="nowebcodecs "+(!window.isSecureContext?"trang không chạy qua https.":!window.VideoEncoder?"trình duyệt chưa hỗ trợ WebCodecs, dùng Chrome hoặc Edge bản mới.":(!window.MP4Box||!window.Mp4Muxer)?"không tải được thư viện xử lý MP4 từ cdn.jsdelivr.net (mạng hoặc tiện ích chặn quảng cáo đang chặn).":"trình duyệt thiếu một số tính năng xử lý video.");
 const needFallback=msg=>Object.assign(new Error(msg),{fallback:true});
 const yieldNow=()=>new Promise(r=>{const c=new MessageChannel();c.port1.onmessage=()=>r();c.port2.postMessage(0);});
+/* ---- canh chừng bộ nén / bộ giải mã bị treo ----
+   Chỉ tính thời gian trang thật sự đang chạy: máy ngủ hoặc tab bị trình duyệt đóng băng rồi chạy lại thì đồng hồ nhảy
+   một quãng dài, không được coi đó là treo (mỗi nhịp chỉ cộng tối đa 1 giây).
+   Lỗi treo mang cờ stall ("enc" bộ nén, "dec" bộ giải mã, "worker" luồng dựng) để fastExport biết mà bỏ hẳn mức đó. */
+const stallErr=(msg,where)=>Object.assign(new Error(msg),{stall:where});
+const awaitAwake=(p,ms,mkErr)=>new Promise((res,rej)=>{let idle=0,prev=performance.now();
+  const iv=setInterval(()=>{const now=performance.now();idle+=Math.min(now-prev,1000);prev=now;if(idle>ms){clearInterval(iv);rej(mkErr());}},500);
+  p.then(v=>{clearInterval(iv);res(v);},e=>{clearInterval(iv);rej(e);});});
+// chờ bộ nén rút bớt hàng đợi; hàng đợi đứng yên quá 8 giây là treo (bộ nén chậm nhất cũng xong một khung trong chưa tới 1 giây)
+const waitEnc=async(venc,isOff)=>{let idle=0,prev=performance.now(),q=venc.encodeQueueSize;
+  while(venc.encodeQueueSize>10&&!isOff()){
+    await new Promise(r=>{const to=setTimeout(r,100);venc.addEventListener("dequeue",()=>{clearTimeout(to);r();},{once:true});});
+    const now=performance.now(),nq=venc.encodeQueueSize;if(nq<q)idle=0;else idle+=Math.min(now-prev,1000);q=nq;prev=now;
+    if(idle>8000&&nq>10)throw stallErr("Bộ nén video không phản hồi (quá 8 giây)","enc");}};
+const flushEnc=venc=>awaitAwake(venc.flush(),20000,()=>stallErr("Bộ nén video không phản hồi khi kết thúc","enc"));
+// khung hình đưa vào bộ nén. Mức an toàn lấy thẳng điểm ảnh trong bộ nhớ, bộ nén không phải nhờ card đồ hoạ đọc lại ảnh
+const frameOf=(canvas,ctx,W,H,i,safe)=>{const o={timestamp:Math.round(i*1e6/30),duration:Math.round(1e6/30)};
+  if(!safe)return new VideoFrame(canvas,o);
+  const d=ctx.getImageData(0,0,W,H).data;return new VideoFrame(d,{...o,format:"RGBX",codedWidth:W,codedHeight:H,transfer:[d.buffer]});};
 function demuxFile(file){
   if(file._demux)return file._demux;
   file._demux=(async()=>{
@@ -980,8 +999,8 @@ function demuxFile(file){
   return file._demux;
 }
 class FrameSource{
-  constructor(d){
-    this.samples=d.samples;this.idx=0;this.q=[];this.done=false;this.err=null;this.rot=d.rot;this.wake=null;
+  constructor(d,soft){
+    this.samples=d.samples;this.idx=0;this.q=[];this.done=false;this.err=null;this.rot=d.rot;this.wake=null;this.soft=!!soft;
     this.t0=Math.min(...d.samples.slice(0,30).map(s=>s.cts/s.timescale));
     this.dec=new VideoDecoder({output:f=>{this.q.push(f);this.q.sort((a,b)=>a.timestamp-b.timestamp);this._w();},error:e=>{this.err=e;this._w();}});
     this.dec.ondequeue=()=>this._w();this.dec.configure(d.cfg);
@@ -989,7 +1008,7 @@ class FrameSource{
   _w(){const w=this.wake;this.wake=null;if(w)w();}
   seekKey(t){const tu=t+this.t0;let k=0;for(let i=0;i<this.samples.length;i++){const s=this.samples[i];if(s.cts/s.timescale>tu)break;if(s.is_sync)k=i;}this.idx=k;}
   // chờ bộ giải mã trả khung; quá 8 giây không phản hồi thì báo lỗi để quay về cách khác thay vì treo
-  _wait(ms=8000){return new Promise((res,rej)=>{const to=setTimeout(()=>{this.wake=null;rej(new Error("Bộ giải mã video không phản hồi"));},ms);this.wake=()=>{clearTimeout(to);res();};});}
+  _wait(ms=8000){return awaitAwake(new Promise(res=>{this.wake=res;}),ms,()=>{this.wake=null;return stallErr("Bộ giải mã video không phản hồi","dec");});}
   async frameAt(t){
     const tu=(t+this.t0)*1e6+500;
     // trả khung cũ về ngay: bộ giải mã phần cứng chỉ có vài khung trống, giữ lại là nó đứng chờ mãi
@@ -1001,7 +1020,7 @@ class FrameSource{
         if(this.dec.decodeQueueSize<4){const s=this.samples[this.idx++];
           this.dec.decode(new EncodedVideoChunk({type:s.is_sync?"key":"delta",timestamp:1e6*s.cts/s.timescale,duration:1e6*s.duration/s.timescale,data:s.data}));continue;}
         await this._wait();
-      }else{let to;await Promise.race([this.dec.flush(),new Promise((_,rej)=>{to=setTimeout(()=>rej(new Error("Bộ giải mã video không phản hồi")),15000);})]).finally(()=>clearTimeout(to));this.done=true;}
+      }else{await awaitAwake(this.dec.flush(),15000,()=>stallErr("Bộ giải mã video không phản hồi","dec"));this.done=true;}
     }
     if(this.err)throw this.err;
     prune();
@@ -1010,11 +1029,18 @@ class FrameSource{
     const [w,h]=[f.displayWidth,f.displayHeight];const sw=this.rot%180?h:w,sh=this.rot%180?w:h;
     if(!this.rc){this.rc=document.createElement("canvas");}
     if(this.rc.width!==sw||this.rc.height!==sh){this.rc.width=sw;this.rc.height=sh;}
-    const x=this.rc.getContext("2d");x.setTransform(1,0,0,1,0,0);
+    const x=this.rc.getContext("2d",this.soft?{willReadFrequently:true}:undefined);x.setTransform(1,0,0,1,0,0);
     if(this.rot===90){x.translate(sw,0);x.rotate(Math.PI/2);}else if(this.rot===180){x.translate(sw,sh);x.rotate(Math.PI);}else if(this.rot===270){x.translate(0,sh);x.rotate(-Math.PI/2);}
     x.drawImage(f,0,0);return this.rc;
   }
   close(){try{this.dec.close();}catch(e){}this.q.forEach(f=>f.close());this.q=[];}
+}
+// mức an toàn giải mã bằng CPU để khung hình nằm sẵn trong bộ nhớ; codec không có bộ giải mã CPU (HEVC) thì giữ nguyên
+async function softDemux(d,soft){
+  if(!soft)return d;
+  if(d.softCfg===undefined){const c={...d.cfg,hardwareAcceleration:"prefer-software"};
+    const s=await VideoDecoder.isConfigSupported(c).catch(()=>({supported:false}));d.softCfg=s.supported?c:null;}
+  return d.softCfg?{...d,cfg:d.softCfg}:d;
 }
 async function pickVideoCfg(W,H,noHw){
   // ưu tiên H.264 (mọi nền tảng ads đều nhận); máy không có bộ mã hoá H.264 thì dùng VP9
@@ -1055,18 +1081,14 @@ const document={createElement:()=>new OffscreenCanvas(1,1)};
 const blurC=new OffscreenCanvas(27,48),blurX=blurC.getContext("2d");
 let S=null,A={logo:null},stopped=false;const waiting=new Map();let reqId=0;
 const outroFrame=te=>new Promise(r=>{const id=++reqId;waiting.set(id,r);postMessage({type:"outro",id,te});});
-const waitEnc=async(venc,errOf)=>{const t0=performance.now();
-  while(venc.encodeQueueSize>10&&!errOf()){if(performance.now()-t0>15000)throw new Error("Bộ nén video không phản hồi (quá 15 giây)");
-    await new Promise(r=>{const to=setTimeout(r,100);venc.addEventListener("dequeue",()=>{clearTimeout(to);r();},{once:true});});}};
-const flushEnc=venc=>{let to;return Promise.race([venc.flush(),new Promise((_,j)=>{to=setTimeout(()=>j(new Error("Bộ nén video không phản hồi khi kết thúc")),20000);})]).finally(()=>clearTimeout(to));};
 onmessage=async e=>{const m=e.data;
   if(m.type==="stop"){stopped=true;return;}
   if(m.type==="outroFrame"){const r=waiting.get(m.id);waiting.delete(m.id);r&&r(m.bmp);return;}
   if(m.type!=="start")return;
   try{
     S=m.S;A.logo=m.logo?{canvas:m.logo}:null;
-    const {W,H,vcfg,mainEnd,oD,xf,N,R}=m;const main=new FrameSource(m.demux);
-    const canvas=new OffscreenCanvas(W,H);const ctx=canvas.getContext("2d",{alpha:false});let err=null;
+    const {W,H,vcfg,mainEnd,oD,xf,N,R,safe}=m;const main=new FrameSource(m.demux,safe);
+    const canvas=new OffscreenCanvas(W,H);const ctx=canvas.getContext("2d",safe?{alpha:false,willReadFrequently:true}:{alpha:false});let err=null;
     const venc=new VideoEncoder({output:(c,meta)=>{const buf=new ArrayBuffer(c.byteLength);c.copyTo(buf);
       postMessage({type:"chunk",data:buf,key:c.type,ts:c.timestamp,dur:c.duration||Math.round(1e6/30),meta},[buf]);},error:x=>{err=x;}});
     venc.configure(vcfg);
@@ -1076,33 +1098,47 @@ onmessage=async e=>{const m=e.data;
       if(t<mainEnd)drawMainFrame(ctx,W,H,await main.frameAt(srcAt(R,t)),t,mainEnd);
       if(oD>0&&t>=mainEnd-xf){const te=t-(mainEnd-xf);const bmp=await outroFrame(te);
         ctx.globalAlpha=t<mainEnd&&xf>0?clamp((t-(mainEnd-xf))/xf,0,1):1;ctx.drawImage(bmp,0,0,W,H);ctx.globalAlpha=1;bmp.close();}
-      const vf=new VideoFrame(canvas,{timestamp:Math.round(i*1e6/30),duration:Math.round(1e6/30)});
+      const vf=frameOf(canvas,ctx,W,H,i,safe);
       venc.encode(vf,{keyFrame:i%60===0});vf.close();
-      await waitEnc(venc,()=>err);
+      await waitEnc(venc,()=>err||stopped);
       if(err)throw err;
       if(i%10===0){postMessage({type:"progress",p:(i+1)/N});await yieldNow();}
     }
     await flushEnc(venc);venc.close();main.close();postMessage({type:"done"});
-  }catch(x){postMessage({type:"error",msg:String(x&&x.message||x)});}
+  }catch(x){postMessage({type:"error",msg:String(x&&x.message||x),stall:x&&x.stall||null});}
 };`;
 let workerUrl=null;
 function getWorkerUrl(){
   if(workerUrl)return workerUrl;
   const src=["const clamp="+clamp,"const xy="+xy,easeF,tri,"const catmull="+catmull,parsePoints,logoPos,logoSpan,drawLogo,
-    "const dims="+dims,drawFit,drawMainFrame,srcAt,"const yieldNow="+yieldNow,FrameSource,WORKER_MAIN].map(String).join("\n");
+    "const dims="+dims,drawFit,drawMainFrame,srcAt,"const yieldNow="+yieldNow,"const stallErr="+stallErr,"const awaitAwake="+awaitAwake,
+    "const waitEnc="+waitEnc,"const flushEnc="+flushEnc,"const frameOf="+frameOf,FrameSource,WORKER_MAIN].map(String).join("\n");
   workerUrl=URL.createObjectURL(new Blob([src],{type:"text/javascript"}));return workerUrl;
 }
+/* Ba mức dựng nhanh, thử từ nhanh nhất:
+     0  nén bằng card đồ hoạ
+     1  nén bằng CPU, khung hình vẫn giải mã và vẽ bằng card đồ hoạ
+     2  an toàn: giải mã, vẽ và nén đều bằng CPU, không khâu nào phải chờ card đồ hoạ
+   Mức 1 vẫn phải nhờ card đồ hoạ đọc lại từng khung, nên khi card hoặc driver trục trặc thì cả mức 0 lẫn mức 1 đều treo.
+   Mức 2 thoát được tình huống đó mà vẫn nhanh hơn nhiều so với dựng theo thời gian thực. */
+// mức thấp nhất còn dùng trong phiên này: mức nào đã treo thì các video sau bỏ qua, không mất thời gian thử lại
+let fastFloor=0;
 async function fastExport(opts){
   if(!FAST)throw needFallback(FAST_WHY);
-  // thử lần lượt: luồng riêng + card đồ hoạ -> luồng riêng + CPU -> luồng chính + CPU; file/codec không đọc được thì thôi
   const tries=[];
-  if(window.Worker&&window.OffscreenCanvas){if(!opts.noHwFirst)tries.push(()=>fastExportWorker(opts));tries.push(()=>fastExportWorker({...opts,noHw:true}));}
-  tries.push(()=>fastExportMain({...opts,noHw:true}));
-  let last,i=0;
-  for(const t of tries){
-    if(i++>0&&opts.onStage)opts.onStage(i);
-    try{return await t();}
-    catch(e){if(e&&e.fallback)throw e;if(opts.stop.v)return null;last=e;console.warn("Dựng nhanh lỗi, thử cách khác:",e);}
+  if(window.Worker&&window.OffscreenCanvas)for(let m=0;m<=2;m++)tries.push([m,()=>fastExportWorker({...opts,mode:m})]);
+  tries.push([2,()=>fastExportMain({...opts,mode:2}),true]); // luồng chính: phòng khi trình duyệt không tạo được luồng riêng
+  let last,n=0;
+  for(const [mode,run,onMain] of tries){
+    if(mode<Math.max(fastFloor,opts.minMode||0))continue;
+    if(onMain&&last&&last.stall)continue; // mức 2 ở luồng riêng đã treo thì chạy lại y hệt ở luồng chính cũng treo
+    if(n++>0&&opts.onStage)opts.onStage(mode);
+    const t0=performance.now();
+    try{const b=await run();if(b)b.fastMode=mode;return b;}
+    catch(e){if(e&&e.fallback)throw e;if(opts.stop.v)return null;last=e;
+      // treo, hoặc chạy được một lúc rồi mới lỗi: nhớ lại để video sau khỏi thử. Bộ giải mã treo thì chỉ mức 2 mới tránh được.
+      if(e&&(e.stall||e.inVideo&&performance.now()-t0>5000))fastFloor=Math.max(fastFloor,e.stall==="dec"?2:Math.min(2,mode+1));
+      console.warn(`Dựng nhanh mức ${mode} lỗi, thử cách khác:`,e);}
   }
   throw last;
 }
@@ -1115,34 +1151,38 @@ function whyText(e){
   if(/^nowebcodecs/.test(m))return m.slice(12);
   return "dựng nhanh bị lỗi: "+m;
 }
-async function fastExportWorker({it,W,H,stop,onProgress,noHw}){
-  const demux=await demuxFile(it.file);
+async function fastExportWorker({it,W,H,stop,onProgress,mode=0}){
+  const safe=mode>=2;
+  const demux=await softDemux(await demuxFile(it.file),safe);
   let outro=null;let w=null,poll=null;
   try{
-    if(outroDur()>0&&S.outro.mode==="upload"&&A.outroKind==="video")outro=new FrameSource(await demuxFile(A.outroFileObj));
-    const [vcfg,vmux]=await pickVideoCfg(W,H,noHw);const [acfg,amux]=await pickAudioCfg();
+    if(outroDur()>0&&S.outro.mode==="upload"&&A.outroKind==="video")outro=new FrameSource(await softDemux(await demuxFile(A.outroFileObj),safe),safe);
+    const [vcfg,vmux]=await pickVideoCfg(W,H,mode>0);const [acfg,amux]=await pickAudioCfg();
     await document.fonts.ready;
     const R=keepRanges(it),mainEnd=lenOf(R),oD=outroDur(),xf=oD>0?Math.min(+S.outro.xf||0,mainEnd*0.5,oD*0.5):0,total=mainEnd+oD-xf;
     const N=Math.max(1,Math.round(total*30));
     const muxer=new Mp4Muxer.Muxer({target:new Mp4Muxer.ArrayBufferTarget(),video:{codec:vmux,width:W,height:H,frameRate:30},
       audio:acfg?{codec:amux,numberOfChannels:2,sampleRate:48000}:undefined,fastStart:"in-memory"});
     const logo=S.logo.on&&A.logo?await createImageBitmap(A.logo.canvas):null;
-    const oc=document.createElement("canvas");oc.width=W;oc.height=H;const octx=oc.getContext("2d");
+    const oc=document.createElement("canvas");oc.width=W;oc.height=H;const octx=oc.getContext("2d",safe?{willReadFrequently:true}:undefined);
     w=new Worker(getWorkerUrl());
-    let last=performance.now(),rejF=null,finishStop=()=>{};
+    let idle=0,prevTick=performance.now(),rejF=null,finishStop=()=>{};
     const finished=new Promise((res,rej)=>{rejF=rej;finishStop=()=>res(false);
-      w.onmessage=async e=>{const m=e.data;last=performance.now();
+      w.onmessage=async e=>{const m=e.data;idle=0;
         if(m.type==="chunk")muxer.addVideoChunkRaw(new Uint8Array(m.data),m.key,m.ts,m.dur,m.meta);
         else if(m.type==="outro"){try{octx.globalAlpha=1;octx.fillStyle="#000";octx.fillRect(0,0,W,H);
             drawOutroFrame(octx,W,H,m.te,outro?await outro.frameAt(Math.min(m.te,oD-0.02)):null);
             const bmp=await createImageBitmap(oc);w.postMessage({type:"outroFrame",id:m.id,bmp},[bmp]);}catch(x){rej(x);}}
         else if(m.type==="progress")onProgress&&onProgress(0.95*m.p);
-        else if(m.type==="done")res(true);else if(m.type==="stopped")res(false);else if(m.type==="error")rej(new Error(m.msg));};
+        else if(m.type==="done")res(true);else if(m.type==="stopped")res(false);
+        else if(m.type==="error")rej(Object.assign(new Error(m.msg),{stall:m.stall||undefined,inVideo:true}));};
       w.onerror=e=>{e.preventDefault();rej(new Error(e.message||"Worker lỗi"));};});
-    poll=setInterval(()=>{if(stop.v){w.postMessage({type:"stop"});rejF=null;finishStop();}
-      else if(performance.now()-last>20000&&rejF)rejF(new Error("Dựng bị treo quá 20 giây"));},250);
+    // luồng dựng im lặng quá 20 giây là treo; chỉ tính thời gian trang đang chạy (máy ngủ dậy không bị tính)
+    poll=setInterval(()=>{const now=performance.now();idle+=Math.min(now-prevTick,1500);prevTick=now;
+      if(stop.v){w.postMessage({type:"stop"});rejF=null;finishStop();}
+      else if(idle>20000&&rejF)rejF(stallErr("Dựng bị treo quá 20 giây","worker"));},250);
     const d={cfg:demux.cfg,rot:demux.rot,samples:demux.samples.map(s=>({cts:s.cts,timescale:s.timescale,duration:s.duration,is_sync:s.is_sync,data:s.data}))};
-    w.postMessage({type:"start",S:JSON.parse(JSON.stringify(S)),logo,demux:d,W,H,vcfg,mainEnd,oD,xf,N,R},logo?[logo]:[]);
+    w.postMessage({type:"start",S:JSON.parse(JSON.stringify(S)),logo,demux:d,W,H,vcfg,mainEnd,oD,xf,N,R,safe},logo?[logo]:[]);
     if(!await finished)return null;
     if(acfg){
       let encErr=null;const ab=await mixAudio(it,mainEnd,oD,xf,total,R);
@@ -1158,36 +1198,35 @@ async function fastExportWorker({it,W,H,stop,onProgress,noHw}){
     return new Blob([muxer.target.buffer],{type:"video/mp4"});
   }finally{if(poll)clearInterval(poll);if(w)w.terminate();if(outro)outro.close();}
 }
-async function fastExportMain({it,W,H,stop,onProgress,noHw}){
+async function fastExportMain({it,W,H,stop,onProgress,mode=2}){
   if(!FAST)throw needFallback("no webcodecs");
-  const main=new FrameSource(await demuxFile(it.file));
-  let outro=null;
+  const safe=mode>=2;
+  const main=new FrameSource(await softDemux(await demuxFile(it.file),safe),safe);
+  let outro=null,venc=null;
   try{
-    if(outroDur()>0&&S.outro.mode==="upload"&&A.outroKind==="video")outro=new FrameSource(await demuxFile(A.outroFileObj));
-    const [vcfg,vmux]=await pickVideoCfg(W,H,noHw);const [acfg,amux]=await pickAudioCfg();
+    if(outroDur()>0&&S.outro.mode==="upload"&&A.outroKind==="video")outro=new FrameSource(await softDemux(await demuxFile(A.outroFileObj),safe),safe);
+    const [vcfg,vmux]=await pickVideoCfg(W,H,mode>0);const [acfg,amux]=await pickAudioCfg();
     await document.fonts.ready;
     const R=keepRanges(it),mainEnd=lenOf(R),oD=outroDur(),xf=oD>0?Math.min(+S.outro.xf||0,mainEnd*0.5,oD*0.5):0,total=mainEnd+oD-xf;
     const muxer=new Mp4Muxer.Muxer({target:new Mp4Muxer.ArrayBufferTarget(),video:{codec:vmux,width:W,height:H,frameRate:30},
       audio:acfg?{codec:amux,numberOfChannels:2,sampleRate:48000}:undefined,fastStart:"in-memory"});
     let encErr=null;
-    const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});venc.configure(vcfg);
-    const canvas=document.createElement("canvas");canvas.width=W;canvas.height=H;const ctx=canvas.getContext("2d",{alpha:false});
+    venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});venc.configure(vcfg);
+    const canvas=document.createElement("canvas");canvas.width=W;canvas.height=H;const ctx=canvas.getContext("2d",safe?{alpha:false,willReadFrequently:true}:{alpha:false});
     const N=Math.max(1,Math.round(total*30));
     for(let i=0;i<N;i++){
-      if(stop.v){venc.close();return null;}
+      if(stop.v)return null;
       const t=i/30;ctx.globalAlpha=1;if(t>=mainEnd){ctx.fillStyle="#000";ctx.fillRect(0,0,W,H);}
       if(t<mainEnd)drawMainFrame(ctx,W,H,await main.frameAt(srcAt(R,t)),t,mainEnd);
       if(oD>0&&t>=mainEnd-xf){const te=t-(mainEnd-xf);ctx.save();
         ctx.globalAlpha=t<mainEnd&&xf>0?clamp((t-(mainEnd-xf))/xf,0,1):1;
         drawOutroFrame(ctx,W,H,te,outro?await outro.frameAt(Math.min(te,oD-0.02)):null);ctx.restore();}
-      const vf=new VideoFrame(canvas,{timestamp:Math.round(i*1e6/30),duration:Math.round(1e6/30)});
+      const vf=frameOf(canvas,ctx,W,H,i,safe);
       venc.encode(vf,{keyFrame:i%60===0});vf.close();
-      {const t0=performance.now();while(venc.encodeQueueSize>10&&!encErr&&!stop.v){if(performance.now()-t0>15000)throw new Error("Bộ nén video không phản hồi (quá 15 giây)");
-        await new Promise(r=>{const to=setTimeout(r,100);venc.addEventListener("dequeue",()=>{clearTimeout(to);r();},{once:true});});}}
-      if(encErr)throw encErr;
+      try{await waitEnc(venc,()=>encErr||stop.v);if(encErr)throw encErr;}catch(e){throw Object.assign(e,{inVideo:true});}
       if(i%10===0){onProgress&&onProgress(0.95*(i+1)/N);await yieldNow();}
     }
-    {let to;await Promise.race([venc.flush(),new Promise((_,j)=>{to=setTimeout(()=>j(new Error("Bộ nén video không phản hồi khi kết thúc")),20000);})]).finally(()=>clearTimeout(to));}venc.close();
+    await flushEnc(venc);venc.close();
     if(acfg){
       const ab=await mixAudio(it,mainEnd,oD,xf,total,R);
       const aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{encErr=e;}});aenc.configure(acfg);
@@ -1200,7 +1239,7 @@ async function fastExportMain({it,W,H,stop,onProgress,noHw}){
     }
     muxer.finalize();onProgress&&onProgress(1);
     return new Blob([muxer.target.buffer],{type:"video/mp4"});
-  }finally{main.close();if(outro)outro.close();}
+  }finally{main.close();if(outro)outro.close();if(venc&&venc.state!=="closed")try{venc.close();}catch(e){}}
 }
 
 /* ---------------- danh sách video ---------------- */
@@ -1815,12 +1854,13 @@ async function runExport(list,rows){
   exporting={v:false};updateExport();$("cancelBtn").hidden=false;
   const W=+S.resize.size,H=Math.round(W*16/9);
   list.forEach((it,i)=>{results.delete(it.id);mktForget(it.id);resetRow(rows[i]);});updateZip();
-  const prog=new Array(list.length).fill(0);const t0=performance.now();let ok=0;
+  const prog=new Array(list.length).fill(0);const t0=performance.now();let ok=0,onCpu=false;
   const showTotal=()=>{const p=prog.reduce((a,b)=>a+b,0)/list.length;document.title=`(${Math.round(p*100)}%) Outro Studio`;};
   let next=0;
   const exportOne=async i=>{
     const it=list[i],r=rows[i],act=r.querySelector(".act"),chip=act.querySelector(".chip"),bar=r.querySelector(".prog i");
-    // mỗi video có cờ dừng riêng: bấm "Xuất lại" khi đang dựng thì huỷ lần này và dựng lại ngay (bỏ qua card đồ hoạ)
+    // mỗi video có cờ dừng riêng: bấm "Xuất lại" khi đang dựng thì huỷ lần này và dựng lại ngay
+    // (lần đầu bỏ bộ nén của card đồ hoạ, bấm lần nữa thì dựng hoàn toàn bằng CPU)
     for(let attempt=0;;attempt++){
       const mine={v:false},stop={get v(){return !!(exporting&&exporting.v)||mine.v;}};
       chip.className="chip warn";chip.textContent=attempt?"Đang dựng lại":"Đang dựng";bar.style.width="0";
@@ -1835,7 +1875,7 @@ async function runExport(list,rows){
       let blob=null,failed=null;
       try{
         let fastErr=null;fastActive++;
-        try{blob=await fastExport({it,W,H,stop,onProgress:onP,noHwFirst:attempt>0,onStage:k=>{chip.textContent=k===2?"Thử lại bằng CPU":"Thử lại cách khác";bar.style.width="0";lastT=performance.now();}});}
+        try{blob=await fastExport({it,W,H,stop,onProgress:onP,minMode:Math.min(2,attempt),onStage:m=>{chip.textContent=m>=2?"Dựng lại bằng CPU, không dùng card đồ hoạ":"Dựng lại bằng CPU";bar.style.width="0";lastT=performance.now();}});}
         catch(e){fastErr=e;}finally{fastActive--;}
         if(fastErr){console.warn("Chuyển sang dựng realtime:",fastErr);if(stop.v)throw fastErr;
           const why=document.createElement("p");why.className="why";why.textContent="Không dựng nhanh được vì "+whyText(fastErr).replace(/\.?\s*$/,". ")+"Video này dựng theo thời gian thực sau khi các video khác xong; chuyển tab thì việc dựng tạm dừng.";r.appendChild(why);
@@ -1855,7 +1895,7 @@ async function runExport(list,rows){
       const dl=document.createElement("button");dl.className="btn sm primary";dl.textContent="Tải "+ext.toUpperCase();
       dl.onclick=()=>saveBlob(blob,fname,dl);act.appendChild(dl);addRedo(it,r);
       const vid=document.createElement("video");vid.controls=true;vid.playsInline=true;vid.preload="metadata";vid.src=URL.createObjectURL(blob);r.appendChild(vid);
-      results.set(it.id,{blob,fname});ok++;updateZip();histAdd(fname,blob);
+      results.set(it.id,{blob,fname});ok++;if(blob.fastMode)onCpu=true;updateZip();histAdd(fname,blob);
       return;
     }
   };
@@ -1863,7 +1903,9 @@ async function runExport(list,rows){
   await Promise.all(Array.from({length:lanes},async()=>{while(next<list.length&&!exporting.v){await exportOne(next++);}}));
   for(let i=next;i<list.length;i++){const c=rows[i].querySelector(".chip");c.className="chip idle";c.textContent="Đã dừng";addRedo(list[i],rows[i]);}
   exporting=null;$("cancelBtn").hidden=true;updateExport();updateZip();
-  if(ok)$("exportMsg").textContent=`Xong ${ok} video trong ${Math.round((performance.now()-t0)/1000)} giây.`;
+  if(ok)$("exportMsg").textContent=`Xong ${ok} video trong ${Math.round((performance.now()-t0)/1000)} giây.`+
+    (!onCpu?"":fastFloor>=2?" Card đồ hoạ của máy không phản hồi khi dựng video, nên video được dựng hoàn toàn bằng CPU. Tải lại trang nếu muốn thử lại bằng card đồ hoạ.":
+     fastFloor===1?" Bộ nén video của card đồ hoạ không phản hồi, nên video được nén bằng CPU. Tải lại trang nếu muốn thử lại bằng card đồ hoạ.":"");
   document.title=ok===list.length?"✓ Xong · Outro Studio":"Outro Studio";
 }
 function addRedo(it,r){

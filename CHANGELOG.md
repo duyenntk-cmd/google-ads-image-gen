@@ -14,6 +14,25 @@ Version đang chạy hiện ở cuối sidebar của web. Mỗi dòng trong log 
 
 ---
 
+## v7.3 — 2026-11-27 · Outro Studio: dựng nhanh không còn rơi về realtime khi bộ nén của máy bị treo
+
+**Mục tiêu:** máy có card đồ hoạ hoặc driver trục trặc vẫn xuất video nhanh, không phải chờ dựng theo thời gian thực
+với thông báo "Bộ nén video không phản hồi (quá 15 giây)".
+
+- Thêm mức dựng nhanh thứ ba, **hoàn toàn bằng CPU**: giải mã, vẽ khung và nén đều nằm trong bộ nhớ thường, không khâu
+  nào phải chờ card đồ hoạ. Trước đây cả hai cách dự phòng vẫn phải nhờ card đồ hoạ đọc lại từng khung hình, nên card
+  trục trặc là cả ba cách cùng treo và video rơi về dựng realtime. Thứ tự thử giờ là: nén bằng card đồ hoạ → nén bằng
+  CPU → hoàn toàn bằng CPU → (cuối cùng mới) realtime.
+- Phát hiện treo sau **8 giây** thay vì 15 giây, và **nhớ mức đã treo** cho tới khi tải lại trang: các video sau đi thẳng
+  vào mức chạy được, không thử lại từ đầu. Trước đây video nào cũng mất ít nhất 45 giây thử rồi mới dựng realtime.
+- Bộ canh treo chỉ tính thời gian trang thật sự chạy, nên máy ngủ rồi thức dậy không bị tính nhầm là treo.
+- Nút "Xuất lại" khi đang dựng: bấm lần đầu bỏ bộ nén của card đồ hoạ, bấm lần nữa thì dựng hoàn toàn bằng CPU.
+- Khi phải chuyển sang CPU, dòng kết quả ghi rõ lý do và nhắc tải lại trang nếu muốn thử lại card đồ hoạ.
+- Đo thử bằng cách giả lập bộ nén treo (2 video 23 giây, máy 4 nhân không có card đồ hoạ): 173 giây → khoảng 40 giây, video ra
+  giống bản dựng bình thường (cùng số khung, cùng thời lượng, PSNR 48 dB giữa hai bản). Máy không gặp lỗi thì tốc độ như cũ.
+
+---
+
 ## v7.2 — 2026-11-23 · Outro Studio: lịch sử push lên MKT gọn hơn, lọc theo ngày
 
 **Mục tiêu:** xem nhanh đã push gì trong một ngày, một tuần hay một tháng mà không phải cuộn cả danh sách dài.

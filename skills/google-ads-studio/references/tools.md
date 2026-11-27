@@ -79,9 +79,13 @@ TikTok/CapCut, tay/bút bấm màn hình. Đoạn chạm cuối video được t
 loại `kind:"tut"`), đoạn giữa video để người dùng tick. Công tắc `S.tut.on`.
 
 **Dựng nhanh / dựng realtime:** mặc định dựng nhanh bằng WebCodecs (đọc MP4/MOV bằng MP4Box, khung gắn thời gian
-chính xác). File không đọc được (WebM, codec lạ) hoặc máy quá tải thì dựng realtime: vẫn phát video để lấy hình nhưng
-nén khung theo thời gian video (không theo đồng hồ thật) và trộn tiếng offline, nên thời lượng luôn đúng; chuyển tab thì
-tạm dừng. Video realtime chờ các video dựng nhanh xong rồi chạy lần lượt.
+chính xác). Dựng nhanh có 3 mức, thử từ nhanh nhất (`fastExport`): (0) nén bằng card đồ hoạ, (1) nén bằng CPU nhưng khung
+vẫn giải mã và vẽ bằng card đồ hoạ, (2) hoàn toàn bằng CPU (giải mã `prefer-software`, canvas `willReadFrequently`, khung
+đưa vào bộ nén lấy từ `getImageData`). Bộ nén hoặc bộ giải mã đứng yên quá 8 giây thì chuyển mức, và mức đã treo được
+nhớ trong `fastFloor` tới khi tải lại trang để các video sau không thử lại. Nút "Xuất lại" khi đang dựng ép lên mức 1,
+bấm lần nữa lên mức 2. File không đọc được (WebM, codec lạ) hoặc cả 3 mức đều lỗi thì dựng realtime: vẫn phát video để
+lấy hình nhưng nén khung theo thời gian video (không theo đồng hồ thật) và trộn tiếng offline, nên thời lượng luôn đúng;
+chuyển tab thì tạm dừng. Video realtime chờ các video dựng nhanh xong rồi chạy lần lượt.
 
 **Lịch sử push lên MKT:** mỗi lần push thành công lưu 1 dòng (ngày giờ, video, tag, angle code, tài khoản MKT)
 trong IndexedDB của trình duyệt (kho `pushes`), nhóm theo ngày, mở đúng bộ trên MKT bằng link lọc tag + ngày push.
